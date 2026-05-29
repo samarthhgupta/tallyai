@@ -197,7 +197,7 @@ def detect_bill_discount_from_total(inv: dict) -> dict:
     return inv
 
 
-
+def compute_confidence(inv: dict) -> float:
     score = inv.get("confidence", 0.5)
     # Penalize missing fields
     if not inv.get("vendor_gstin"):
