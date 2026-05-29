@@ -99,6 +99,22 @@ When a bill-level discount is present:
   - GST is calculated on (subtotal - bill_discount_amount), NOT on the full subtotal
   - The invoice flow is: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total
 
+TOTAL IN WORDS RULE:
+On computer-generated Indian invoices, the total amount is almost always printed in words (e.g. "Rupees One Hundred Eighteen Only", "Rs. One Thousand Two Hundred and Fifty Only"). This appears near the bottom of the invoice, often labelled "Amount in Words", "Total in Words", or just written out with "Only" as a suffix.
+
+Use this when:
+  - The numeric total is not visible (cut off, poorly scanned, obscured)
+  - The numeric total field reads 0 or is missing
+  - You can compute a total from line items + GST but want to cross-verify
+
+How to parse:
+  - Convert the words to a number (e.g. "One Hundred Eighteen" → 118)
+  - Use that number as the "total" field
+  - Set confidence slightly lower (subtract 0.05) since you derived total from words rather than reading it directly
+  - The "Only" suffix is just a convention — ignore it when parsing
+
+If both numeric total and words total are present and they disagree by more than ₹1, prefer the words total (it is harder to OCR-misread words than digits) and flag the discrepancy by lowering confidence.
+
 SELF-CORRECTION STEP — always do this before finalising each invoice:
   1. Compute: expected_total = sum_of_line_amounts - bill_discount_amount + cgst + sgst + igst + round_off
   2. Compare expected_total with the printed total on the invoice.
