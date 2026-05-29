@@ -134,6 +134,15 @@ Other rules:
 - If multiple invoices exist in the document, return all of them."""
 
 
+def normalize_hsn_codes(inv: dict) -> dict:
+    """Strip dots and spaces from HSN/SAC codes (e.g. '1234.56.78' → '12345678')."""
+    for item in inv.get("line_items", []):
+        hsn = item.get("hsn", "")
+        if hsn and hsn != "UNKNOWN":
+            item["hsn"] = hsn.replace(".", "").replace(" ", "")
+    return inv
+
+
 def correct_line_item_rates(inv: dict) -> dict:
     """
     Self-correct extracted rates using the printed amount as ground truth.
@@ -426,8 +435,9 @@ async def _extract_invoices_from_file(
         else:
             return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
-    # Correct rates, then detect any missed bill discount, then score
+    # Normalise HSN codes, correct rates, detect missed discounts, then score
     for inv in invoices:
+        inv = normalize_hsn_codes(inv)
         inv = correct_line_item_rates(inv)
         inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)

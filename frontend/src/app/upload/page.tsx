@@ -235,7 +235,7 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
                 {inv.line_items.map((item: LineItem, i: number) => (
                   <tr key={i} className="hover:bg-gray-50">
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
-                      {item.hsn} @ {item.gst_percent}%
+                      {item.hsn.replace(/[\s.]/g, '') || '—'} @ {item.gst_percent}%
                     </td>
                     <td className="px-2 py-1.5 border border-gray-200 text-xs">{item.uom || '—'}</td>
                     <td className="px-2 py-1.5 border border-gray-200 text-right">{item.qty}</td>
