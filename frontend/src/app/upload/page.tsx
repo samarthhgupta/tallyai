@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import axios from 'axios';
+import { extractInvoices } from '@/lib/extract';
 import type {
   ExtractedInvoice,
   FileResult,
@@ -255,18 +255,10 @@ export default function UploadPage() {
     setExtractError('');
     setResult(null);
     try {
-      const form = new FormData();
-      files.forEach((f) => form.append('files', f));
-      form.append('company_id', 'demo');
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-      const res = await axios.post<ExtractionResponse>(`${backendUrl}/invoices/upload`, form);
-      setResult(res.data);
+      const data = await extractInvoices(files);
+      setResult(data);
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        setExtractError(err.response?.data?.detail || err.message || 'Extraction failed.');
-      } else {
-        setExtractError('Extraction failed. Please try again.');
-      }
+      setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
       setExtracting(false);
     }

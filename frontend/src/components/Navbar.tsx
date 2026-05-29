@@ -1,8 +1,6 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 
 interface Company {
   id: string;
@@ -17,13 +15,6 @@ interface NavbarProps {
 
 export default function Navbar({ companies = [], selectedCompanyId, onCompanyChange }: NavbarProps) {
   const router = useRouter();
-  const [signingOut, setSigningOut] = useState(false);
-
-  const handleSignOut = async () => {
-    setSigningOut(true);
-    await supabase.auth.signOut();
-    router.replace('/login');
-  };
 
   return (
     <nav className="bg-white border-b border-gray-200 shadow-sm">
@@ -53,11 +44,10 @@ export default function Navbar({ companies = [], selectedCompanyId, onCompanyCha
             )}
 
             <button
-              onClick={handleSignOut}
-              disabled={signingOut}
-              className="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50"
+              onClick={() => router.replace('/dashboard')}
+              className="text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors"
             >
-              {signingOut ? 'Signing out…' : 'Sign out'}
+              Dashboard
             </button>
           </div>
         </div>
