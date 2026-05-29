@@ -38,6 +38,8 @@ export interface ExtractedInvoice {
   vendor_address: string | null;
   line_items: LineItem[];
   subtotal: number;
+  bill_discount_amount: number;       // 0 if none; deducted from subtotal before GST
+  bill_discount_percent: number | null; // % if percentage-based, null if fixed amount
   cgst: number;
   sgst: number;
   igst: number;

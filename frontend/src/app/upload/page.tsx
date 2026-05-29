@@ -83,8 +83,10 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
   const taxType = inv.tax_type;
   const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType);
   const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
+  const billDiscount = inv.bill_discount_amount ?? 0;
+  const taxableValue = computedSubtotal - billDiscount;
   const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
-  const computedTotal = computedSubtotal + computedTax + (inv.round_off || 0);
+  const computedTotal = taxableValue + computedTax + (inv.round_off || 0);
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
@@ -212,6 +214,18 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
       {/* Totals */}
       <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex flex-wrap items-center gap-4 text-sm">
         <span className="text-gray-600">Subtotal: <strong>{formatINR(computedSubtotal)}</strong></span>
+        {billDiscount > 0 && (
+          <span className="text-orange-600">
+            Discount: <strong>−{formatINR(billDiscount)}</strong>
+            {inv.bill_discount_percent != null && (
+              <span className="text-xs ml-1">({inv.bill_discount_percent}%)</span>
+            )}
+            <span className="text-xs ml-1 text-gray-400">→ Discount Ledger</span>
+          </span>
+        )}
+        {billDiscount > 0 && (
+          <span className="text-gray-600">Taxable: <strong>{formatINR(taxableValue)}</strong></span>
+        )}
         {taxType === 'cgst_sgst' ? (
           <>
             <span className="text-gray-600">CGST: <strong>{formatINR(computedTax / 2)}</strong></span>

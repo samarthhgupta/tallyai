@@ -45,6 +45,8 @@ For each invoice found, return a JSON object with:
     }
   ],
   "subtotal": number,
+  "bill_discount_amount": number (0 if no bill-level discount),
+  "bill_discount_percent": number or null (% if percentage-based, null if fixed rupee amount or no discount),
   "cgst": number,
   "sgst": number,
   "igst": number,
@@ -82,6 +84,22 @@ EXAMPLE (standard invoice):
   rate = 1000, disc_percent = 0, amount = 5000
 
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+BILL-LEVEL DISCOUNT RULE:
+Some Indian invoices show a discount on the overall invoice value (not per line item). This appears as:
+  - A "Discount" or "Trade Discount" row below the line items subtotal, before GST is calculated
+  - The discount may be a fixed rupee amount (e.g. "Discount: ₹500") or a percentage (e.g. "Discount: 5%")
+
+When a bill-level discount is present:
+  - Set "bill_discount_amount" to the rupee value of the discount
+  - Set "bill_discount_percent" to the percentage if it was stated as a %, or null if it was a fixed amount
+  - All line items should have disc_percent = 0 (the discount is NOT per-line)
+  - GST is calculated on (subtotal - bill_discount_amount), NOT on the full subtotal
+  - The invoice flow is: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total
+
+When NO bill-level discount is present:
+  - Set "bill_discount_amount": 0
+  - Set "bill_discount_percent": null
 
 Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
@@ -133,8 +151,9 @@ def compute_confidence(inv: dict) -> float:
         item["qty"] * item["rate"] * (1 - item.get("disc_percent", 0) / 100)
         for item in inv.get("line_items", [])
     )
+    bill_discount = inv.get("bill_discount_amount", 0)
     tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
-    expected_total = computed + tax + inv.get("round_off", 0)
+    expected_total = computed - bill_discount + tax + inv.get("round_off", 0)
     actual_total = inv.get("total", 0)
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
         score -= 0.15
