@@ -5,91 +5,365 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { supabase } from '@/lib/supabase';
 import AuthGuard from '@/components/AuthGuard';
-import Navbar from '@/components/Navbar';
 import type { Session } from '@supabase/supabase-js';
+import type {
+  Company,
+  ExtractedInvoice,
+  FileResult,
+  ExtractionResponse,
+  LineItem,
+  HsnRow,
+} from '@/types/invoice';
+import {
+  formatINR,
+  getStateFromGstin,
+  calcLineAmount,
+  buildHsnSummary,
+} from '@/types/invoice';
 
-interface Company {
-  id: string;
-  name: string;
-}
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-interface RecentInvoice {
-  id: string;
-  file_name: string;
-  created_at: string;
-  status: string;
-  batch_id: string;
-}
-
-function UploadContent({ session }: { session: Session }) {
+function Sidebar({
+  companies,
+  selectedCompanyId,
+  onCompanyChange,
+}: {
+  companies: Company[];
+  selectedCompanyId: string;
+  onCompanyChange: (id: string) => void;
+}) {
   const router = useRouter();
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    await supabase.auth.signOut();
+    router.replace('/login');
+  };
+
+  return (
+    <aside className="fixed top-0 left-0 h-full w-64 bg-white border-r border-gray-200 flex flex-col z-20">
+      {/* Logo */}
+      <div className="flex items-center gap-2 px-5 py-5 border-b border-gray-100">
+        <div className="w-8 h-8 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
+          <span className="text-white font-bold text-sm">T</span>
+        </div>
+        <span className="text-lg font-semibold text-gray-900">TallyAI</span>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        <NavItem label="Dashboard" active href="/dashboard" />
+        <NavItem label="History" href="/review" />
+        <NavItem label="Settings" href="#" />
+      </nav>
+
+      {/* Company selector */}
+      <div className="px-4 pb-3 border-t border-gray-100 pt-3">
+        <p className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1.5">Company</p>
+        {companies.length === 0 ? (
+          <p className="text-xs text-gray-500 italic">No companies</p>
+        ) : (
+          <select
+            value={selectedCompanyId}
+            onChange={(e) => onCompanyChange(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="" disabled>Select a company</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* Sign out */}
+      <div className="px-4 pb-5">
+        <button
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="w-full text-sm text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-left"
+        >
+          {signingOut ? 'Signing out…' : 'Sign out'}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function NavItem({ label, active, href }: { label: string; active?: boolean; href: string }) {
+  const router = useRouter();
+  return (
+    <button
+      onClick={() => router.push(href)}
+      className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+        active
+          ? 'bg-indigo-50 text-indigo-700'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ─── Confidence badge ─────────────────────────────────────────────────────────
+
+function ConfidenceBadge({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  if (pct >= 80) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+        High Confidence {pct}%
+      </span>
+    );
+  }
+  if (pct >= 60) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
+        Medium Confidence {pct}%
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+      Low Confidence {pct}%
+    </span>
+  );
+}
+
+function ConfidenceBar({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const color = pct >= 80 ? 'bg-green-500' : pct >= 60 ? 'bg-amber-400' : 'bg-red-500';
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-gray-500">{pct}%</span>
+    </div>
+  );
+}
+
+// ─── Invoice Card ─────────────────────────────────────────────────────────────
+
+function InvoiceCard({
+  inv,
+  companyGstin,
+}: {
+  inv: ExtractedInvoice;
+  companyGstin?: string;
+}) {
+  const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
+  const companyState = companyGstin ? getStateFromGstin(companyGstin) : null;
+  const taxType = inv.tax_type;
+
+  const sameState = companyState && vendorState && vendorState === companyState;
+  const gstMismatch = sameState
+    ? taxType === 'igst'
+    : companyState && vendorState && taxType === 'cgst_sgst';
+
+  const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType);
+
+  const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
+  const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
+  const computedTotal = computedSubtotal + computedTax + (inv.round_off || 0);
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="font-semibold text-gray-900">{inv.vendor_name || '—'}</span>
+              <ConfidenceBadge score={inv.confidence} />
+            </div>
+            <div className="mt-1 flex items-center gap-2 flex-wrap text-sm text-gray-500">
+              {inv.invoice_number && <span>Invoice #{inv.invoice_number}</span>}
+              {inv.invoice_date && <span>· {inv.invoice_date}</span>}
+              {inv.vendor_gstin && (
+                <span>· GSTIN: <span className="font-mono">{inv.vendor_gstin}</span></span>
+              )}
+              {vendorState && vendorState !== 'Unknown' && (
+                <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{vendorState}</span>
+              )}
+            </div>
+          </div>
+          <div className="shrink-0">
+            <ConfidenceBar score={inv.confidence} />
+          </div>
+        </div>
+      </div>
+
+      {/* GST mismatch warning */}
+      {gstMismatch && companyState && vendorState && (
+        <div className="mx-5 mb-3 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-sm text-amber-800">
+          ⚠ Tax type mismatch: vendor is in <strong>{vendorState}</strong>, expected CGST+SGST but found{' '}
+          {taxType === 'igst' ? 'IGST' : 'CGST+SGST'}
+        </div>
+      )}
+
+      {/* Line items */}
+      {inv.line_items.length > 0 && (
+        <div className="px-5 pb-3 border-t border-gray-100 pt-4">
+          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Line Items</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  {['HSN @ Rate%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {inv.line_items.map((item: LineItem, i: number) => {
+                  const amt = calcLineAmount(item);
+                  return (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
+                        {item.hsn} @ {item.gst_percent}%
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200">{item.uom}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{item.qty}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(item.rate)}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{item.disc_percent}%</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
+                        {formatINR(amt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* HSN Summary */}
+      {hsnRows.length > 0 && (
+        <div className="px-5 pb-3 pt-3 border-t border-gray-100">
+          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">HSN Summary</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  {['HSN', 'GST%', 'Taxable', 'CGST', 'SGST', 'IGST', 'Status'].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {hsnRows.map((row: HsnRow, i: number) => {
+                  const calcTax = row.cgst + row.sgst + row.igst;
+                  const vendorTax = inv.line_items
+                    .filter((it) => it.hsn === row.hsn && it.gst_percent === row.gst_percent)
+                    .reduce((s, it) => s + calcLineAmount(it) * it.gst_percent / 100, 0);
+                  const match = Math.abs(calcTax - vendorTax) <= 1;
+                  return (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                      <td className="px-2 py-1.5 border border-gray-200">
+                        <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${match ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {match ? '✓ Match' : '✗ Mismatch'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Totals footer */}
+      <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex flex-wrap items-center gap-4 text-sm">
+        <span className="text-gray-600">Subtotal: <strong>{formatINR(computedSubtotal)}</strong></span>
+        {taxType === 'cgst_sgst' ? (
+          <>
+            <span className="text-gray-600">CGST: <strong>{formatINR(computedTax / 2)}</strong></span>
+            <span className="text-gray-600">SGST: <strong>{formatINR(computedTax / 2)}</strong></span>
+          </>
+        ) : (
+          <span className="text-gray-600">IGST: <strong>{formatINR(computedTax)}</strong></span>
+        )}
+        {(inv.round_off ?? 0) !== 0 && (
+          <span className="text-gray-400 text-xs">Round off: {formatINR(inv.round_off)}</span>
+        )}
+        <span className="ml-auto font-semibold text-gray-900 text-base">Total: ₹{formatINR(computedTotal)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Dashboard Content ───────────────────────────────────────────────────
+
+function DashboardContent({ session }: { session: Session }) {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState('');
-  const [recentInvoices, setRecentInvoices] = useState<RecentInvoice[]>([]);
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState('');
+  const [result, setResult] = useState<ExtractionResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    async function fetchCompanies() {
-      const { data } = await supabase
-        .from('companies')
-        .select('id, name')
-        .eq('user_id', session.user.id)
-        .order('name');
-      if (data) setCompanies(data);
-    }
-
-    async function fetchRecentInvoices() {
-      const { data } = await supabase
-        .from('invoices')
-        .select('id, file_name, created_at, status, batch_id')
-        .eq('user_id', session.user.id)
-        .order('created_at', { ascending: false })
-        .limit(5);
-      if (data) setRecentInvoices(data);
-    }
-
-    fetchCompanies();
-    fetchRecentInvoices();
+    supabase
+      .from('companies')
+      .select('id, name, gstin')
+      .eq('user_id', session.user.id)
+      .order('name')
+      .then(({ data }) => { if (data) setCompanies(data as Company[]); });
   }, [session.user.id]);
+
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+
+  const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
+
+  const isValidFile = (f: File) => {
+    const ext = f.name.toLowerCase();
+    return (
+      ext.endsWith('.pdf') || ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
+      ext.endsWith('.png') || ext.endsWith('.doc') || ext.endsWith('.docx')
+    );
+  };
+
+  const addFiles = useCallback((incoming: FileList | File[]) => {
+    const valid = Array.from(incoming).filter(isValidFile);
+    if (valid.length === 0) return;
+    setFiles((prev) => {
+      const names = new Set(prev.map((f) => f.name));
+      return [...prev, ...valid.filter((f) => !names.has(f.name))];
+    });
+    setExtractError('');
+  }, []);
+
+  const removeFile = (name: string) => {
+    setFiles((prev) => prev.filter((f) => f.name !== name));
+  };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(true);
   }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setDragging(false);
-  }, []);
-
+  const handleDragLeave = useCallback(() => setDragging(false), []);
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped && isValidFile(dropped)) {
-      setFile(dropped);
-      setUploadError('');
-    } else {
-      setUploadError('Please upload a PDF, JPG, JPEG, or PNG file.');
-    }
-  }, []);
+    addFiles(e.dataTransfer.files);
+  }, [addFiles]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (selected && isValidFile(selected)) {
-      setFile(selected);
-      setUploadError('');
-    } else if (selected) {
-      setUploadError('Please upload a PDF, JPG, JPEG, or PNG file.');
-    }
-  };
-
-  const isValidFile = (f: File) => {
-    const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-    return allowed.includes(f.type);
+    if (e.target.files) addFiles(e.target.files);
+    e.target.value = '';
   };
 
   const formatBytes = (bytes: number) => {
@@ -98,212 +372,193 @@ function UploadContent({ session }: { session: Session }) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const canExtract = files.length > 0 && selectedCompanyId !== '';
+
   const handleExtract = async () => {
-    if (!file || !selectedCompanyId) return;
-    setUploading(true);
-    setUploadError('');
+    if (!canExtract) return;
+    setExtracting(true);
+    setExtractError('');
+    setResult(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('company_id', selectedCompanyId);
+      const form = new FormData();
+      files.forEach((f) => form.append('files', f));
+      form.append('company_id', selectedCompanyId);
 
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       const { data: { session: currentSession } } = await supabase.auth.getSession();
-      const response = await axios.post(`${backendUrl}/invoices/upload`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          Authorization: `Bearer ${currentSession?.access_token}`,
-        },
-      });
 
-      const batchId = response.data?.batch_id;
-      if (batchId) {
-        router.push(`/review?batch_id=${batchId}`);
-      } else {
-        setUploadError('Upload succeeded but no batch ID was returned.');
-      }
+      const res = await axios.post<ExtractionResponse>(
+        `${backendUrl}/invoices/upload`,
+        form,
+        { headers: { Authorization: `Bearer ${currentSession?.access_token}` } }
+      );
+      setResult(res.data);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
-        setUploadError(err.response?.data?.detail || err.message || 'Upload failed.');
+        setExtractError(err.response?.data?.detail || err.message || 'Extraction failed.');
       } else {
-        setUploadError('Upload failed. Please try again.');
+        setExtractError('Extraction failed. Please try again.');
       }
     } finally {
-      setUploading(false);
+      setExtracting(false);
     }
   };
 
-  const canExtract = file !== null && selectedCompanyId !== '';
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar
+    <div className="flex min-h-screen bg-gray-50">
+      {/* Sidebar */}
+      <Sidebar
         companies={companies}
         selectedCompanyId={selectedCompanyId}
         onCompanyChange={setSelectedCompanyId}
       />
 
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <h2 className="text-xl font-semibold text-gray-900 mb-6">Upload Invoice</h2>
+      {/* Main */}
+      <main className="ml-64 flex-1 px-6 py-8 max-w-5xl">
+        {/* Upload Card */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload Invoices</h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Company selector */}
-          <div className="md:col-span-1">
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">Company</h3>
-              {companies.length === 0 ? (
-                <div className="text-sm text-gray-500 italic">
-                  No companies — Add one in settings
-                </div>
-              ) : (
-                <select
-                  value={selectedCompanyId}
-                  onChange={(e) => setSelectedCompanyId(e.target.value)}
-                  className="w-full text-sm border border-gray-300 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="" disabled>Select a company</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              )}
-            </div>
+          {/* Drop zone */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+              dragging
+                ? 'border-indigo-400 bg-indigo-50'
+                : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ACCEPT}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <p className="text-sm text-gray-600">
+              <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
+            </p>
+            <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX • Multiple files supported</p>
           </div>
 
-          {/* Upload zone */}
-          <div className="md:col-span-2">
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">Invoice File</h3>
-
-              {/* Drop zone */}
-              <div
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-                  dragging
-                    ? 'border-indigo-400 bg-indigo-50'
-                    : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-
-                {file ? (
-                  <div className="flex items-center justify-center gap-3">
-                    <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                      <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </div>
-                    <div className="text-left">
-                      <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                      <p className="text-xs text-gray-500">{formatBytes(file.size)}</p>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                      className="ml-2 text-gray-400 hover:text-red-500"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          {/* File list */}
+          {files.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {files.map((f) => (
+                <li key={f.name} className="flex items-center justify-between bg-gray-50 rounded-md px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <svg className="w-4 h-4 text-indigo-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
-                    <p className="text-sm text-gray-600">
-                      <span className="text-indigo-600 font-medium">Click to upload</span> or drag & drop
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">PDF, JPG, JPEG, PNG</p>
+                    <span className="text-sm text-gray-700 truncate">{f.name}</span>
+                    <span className="text-xs text-gray-400 shrink-0">{formatBytes(f.size)}</span>
                   </div>
-                )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeFile(f.name); }}
+                    className="ml-2 text-gray-400 hover:text-red-500 shrink-0"
+                    aria-label="Remove file"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Progress bar */}
+          {extracting && (
+            <div className="mt-4">
+              <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-full bg-indigo-500 rounded-full animate-pulse w-full" />
               </div>
-
-              {uploadError && (
-                <p className="mt-2 text-sm text-red-600">{uploadError}</p>
-              )}
-
-              <button
-                onClick={handleExtract}
-                disabled={!canExtract || uploading}
-                className="mt-4 w-full py-2.5 px-4 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-              >
-                {uploading ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Extracting data…
-                  </>
-                ) : (
-                  'Extract Data'
-                )}
-              </button>
-
-              {!selectedCompanyId && companies.length > 0 && (
-                <p className="mt-2 text-xs text-amber-600 text-center">Select a company to enable extraction</p>
-              )}
+              <p className="text-xs text-gray-500 mt-1 text-center">Extracting invoice data…</p>
             </div>
+          )}
+
+          {/* Error */}
+          {extractError && (
+            <div className="mt-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm text-red-700">
+              {extractError}
+            </div>
+          )}
+
+          {/* Action row */}
+          <div className="mt-4 flex items-center gap-4">
+            <button
+              onClick={handleExtract}
+              disabled={!canExtract || extracting}
+              className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            >
+              {extracting ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Extracting…
+                </>
+              ) : (
+                'Extract All'
+              )}
+            </button>
+            {!selectedCompanyId && companies.length > 0 && (
+              <p className="text-xs text-amber-600">Select a company in the sidebar to enable extraction</p>
+            )}
+            {companies.length === 0 && (
+              <p className="text-xs text-gray-500">Add a company in Settings to get started</p>
+            )}
           </div>
         </div>
 
-        {/* Recent uploads */}
-        {recentInvoices.length > 0 && (
-          <div className="mt-8">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">Recent Uploads</h3>
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide">File</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide">Date</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
-                    <th className="px-4 py-2.5" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {recentInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-gray-900 font-medium truncate max-w-xs">{inv.file_name || inv.id}</td>
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {new Date(inv.created_at).toLocaleDateString('en-IN')}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                          inv.status === 'approved'
-                            ? 'bg-green-100 text-green-700'
-                            : inv.status === 'pending'
-                            ? 'bg-amber-100 text-amber-700'
-                            : 'bg-gray-100 text-gray-600'
-                        }`}>
-                          {inv.status || 'processed'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {inv.batch_id && (
-                          <button
-                            onClick={() => router.push(`/review?batch_id=${inv.batch_id}`)}
-                            className="text-indigo-600 hover:underline text-xs"
-                          >
-                            Review
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Results */}
+        {result && (
+          <div className="space-y-8">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-gray-900">
+                Extraction Results
+                <span className="ml-2 text-sm font-normal text-gray-500">
+                  {result.total_invoices} invoice{result.total_invoices !== 1 ? 's' : ''} found
+                </span>
+              </h3>
+              <span className="text-xs text-gray-400 font-mono">Batch: {result.batch_id}</span>
             </div>
+
+            {result.file_results.map((fr: FileResult) => (
+              <div key={fr.filename}>
+                {/* File header */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="font-medium text-gray-800 text-sm">{fr.filename}</span>
+                  <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                    {fr.invoices.length} invoice{fr.invoices.length !== 1 ? 's' : ''} found
+                  </span>
+                </div>
+
+                {/* File-level error */}
+                {fr.error && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+                    Error processing file: {fr.error}
+                  </div>
+                )}
+
+                {/* Invoice cards */}
+                <div className="space-y-4">
+                  {fr.invoices.map((inv: ExtractedInvoice, idx: number) => (
+                    <InvoiceCard
+                      key={idx}
+                      inv={inv}
+                      companyGstin={selectedCompany?.gstin}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </main>
@@ -312,5 +567,5 @@ function UploadContent({ session }: { session: Session }) {
 }
 
 export default function UploadPage() {
-  return <AuthGuard>{(session) => <UploadContent session={session} />}</AuthGuard>;
+  return <AuthGuard>{(session) => <DashboardContent session={session} />}</AuthGuard>;
 }
