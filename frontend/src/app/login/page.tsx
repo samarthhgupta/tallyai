@@ -2,11 +2,22 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 type Tab = 'signin' | 'signup';
 
 export default function LoginPage() {
+  if (typeof window !== 'undefined' && !isSupabaseConfigured()) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="max-w-md w-full mx-4 bg-white rounded-lg border border-amber-200 shadow-sm p-8 text-center">
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Setup Required</h2>
+          <p className="text-sm text-gray-600 mb-4">Supabase secrets are not configured. Add <code className="bg-gray-100 px-1 rounded">NEXT_PUBLIC_SUPABASE_URL</code> and <code className="bg-gray-100 px-1 rounded">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> as GitHub Actions secrets, then redeploy.</p>
+        </div>
+      </div>
+    );
+  }
+
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('signin');
   const [loading, setLoading] = useState(false);
