@@ -227,7 +227,7 @@ async def _extract_invoices_from_file(
 @router.post("/upload")
 async def upload_invoices(
     files: list[UploadFile] = File(...),
-    company_id: str = Form(...),
+    company_id: Optional[str] = Form(None),
 ):
     """
     Upload one or more invoice files for extraction.
