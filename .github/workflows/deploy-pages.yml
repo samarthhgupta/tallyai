@@ -34,7 +34,7 @@ jobs:
         run: npm run build
         working-directory: frontend
         env:
-          NEXT_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEXT_PUBLIC_BACKEND_URL: ${{ secrets.NEXT_PUBLIC_BACKEND_URL }}
 
       - name: Add .nojekyll
         run: touch frontend/out/.nojekyll
