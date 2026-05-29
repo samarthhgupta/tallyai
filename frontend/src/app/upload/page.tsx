@@ -78,7 +78,7 @@ function ConfidenceBar({ score }: { score: number }) {
 
 // ─── Invoice Card ─────────────────────────────────────────────────────────────
 
-function InvoiceCard({ inv }: { inv: ExtractedInvoice }) {
+function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: string }) {
   const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
   const taxType = inv.tax_type;
   const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType);
@@ -95,6 +95,19 @@ function InvoiceCard({ inv }: { inv: ExtractedInvoice }) {
             <div className="flex items-center gap-3 flex-wrap">
               <span className="font-semibold text-gray-900">{inv.vendor_name || 'Unknown Vendor'}</span>
               <ConfidenceBadge score={inv.confidence} />
+              {sourceUrl && (
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 hover:underline"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  View original
+                </a>
+              )}
             </div>
             <div className="mt-1 flex items-center gap-2 flex-wrap text-sm text-gray-500">
               {inv.invoice_number && <span>Invoice #{inv.invoice_number}</span>}
@@ -224,6 +237,7 @@ export default function UploadPage() {
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
   const [result, setResult] = useState<ExtractionResponse | null>(null);
+  const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
@@ -263,6 +277,10 @@ export default function UploadPage() {
     setExtracting(true);
     setExtractError('');
     setResult(null);
+    // Build object URLs for previewing original files
+    const urls: Record<string, string> = {};
+    files.forEach((f) => { urls[f.name] = URL.createObjectURL(f); });
+    setFileUrls(urls);
     try {
       const data = await extractInvoices(files);
       setResult(data);
@@ -385,7 +403,7 @@ export default function UploadPage() {
                   )}
                   <div className="space-y-4">
                     {fr.invoices.map((inv: ExtractedInvoice, idx: number) => (
-                      <InvoiceCard key={idx} inv={inv} />
+                      <InvoiceCard key={idx} inv={inv} sourceUrl={fileUrls[fr.filename]} />
                     ))}
                   </div>
                 </div>
