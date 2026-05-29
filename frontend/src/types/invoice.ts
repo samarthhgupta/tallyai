@@ -25,8 +25,9 @@ export interface LineItem {
   gst_percent: number;
   uom: string;
   qty: number;
-  rate: number;        // ex-GST
+  rate: number;        // ex-GST, BEFORE discount
   disc_percent: number;
+  amount?: number;     // printed amount from invoice (after discount, before GST)
 }
 
 export interface ExtractedInvoice {
@@ -37,6 +38,9 @@ export interface ExtractedInvoice {
   vendor_address: string | null;
   line_items: LineItem[];
   subtotal: number;
+  bill_discount_amount: number;            // 0 if none; deducted from subtotal before GST
+  bill_discount_percent: number | null;    // % if percentage-based, null if fixed amount
+  bill_discount_auto_detected?: boolean;   // true when server inferred discount from total mismatch
   cgst: number;
   sgst: number;
   igst: number;

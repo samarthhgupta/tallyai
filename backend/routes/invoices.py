@@ -39,11 +39,14 @@ For each invoice found, return a JSON object with:
       "gst_percent": number,
       "uom": string (unit of measure as printed, e.g. "Nos", "Kg", "Pcs", "Mtr"),
       "qty": number,
-      "rate": number (EXCLUSIVE of GST),
-      "disc_percent": number (0 if no discount)
+      "rate": number,
+      "disc_percent": number,
+      "amount": number
     }
   ],
   "subtotal": number,
+  "bill_discount_amount": number (0 if no bill-level discount),
+  "bill_discount_percent": number or null (% if percentage-based, null if fixed rupee amount or no discount),
   "cgst": number,
   "sgst": number,
   "igst": number,
@@ -55,15 +58,146 @@ For each invoice found, return a JSON object with:
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
-Rules:
+CRITICAL RATE RULE — read this carefully:
+- "rate" must ALWAYS be the rate per unit BEFORE discount, EXCLUDING GST.
+- "disc_percent" is the discount percentage shown on the invoice.
+- "amount" is the line total as printed on the invoice (after discount, before GST).
+
+The correct relationship is: amount = qty × rate × (1 - disc_percent/100)
+
+Many Indian invoices show columns like: Rate | Discount% | Amount
+In this case "Rate" is already the pre-discount rate — use it directly.
+
+Some invoices show a discounted rate in the Rate column. To detect this:
+  If the invoice shows an Amount column, back-calculate the pre-discount rate:
+  rate = amount / (qty × (1 - disc_percent/100))
+
+EXAMPLE (Dream Touch style invoice):
+  Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
+  331.10 is the POST-discount rate. You must back-calculate:
+  rate = 9933 / (30 × (1 - 14/100)) = 9933 / 25.8 = 385.00  ← this is what goes in "rate"
+  disc_percent = 14
+  amount = 9933
+
+EXAMPLE (standard invoice):
+  Printed columns: Rate=1000, Disc=0%, Qty=5, Amount=5000
+  rate = 1000, disc_percent = 0, amount = 5000
+
+Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+BILL-LEVEL DISCOUNT RULE:
+Some Indian invoices show a discount on the overall invoice value (not per line item). This is especially common in handwritten invoices. Look for ANY of these patterns anywhere between the line items subtotal and the GST section:
+  - Words: "Discount", "Trade Discount", "Less", "Less Discount", "(-)", or just a "−" / "-" sign next to an amount
+  - A percentage stated at bill level (e.g. "Less 5%", "Discount 10%")
+  - A fixed rupee amount below the subtotal that is being subtracted (e.g. "Less  500", "- 250.00")
+  - Handwritten invoices often just write "Less" followed by an amount with no label
+
+When a bill-level discount is present:
+  - Set "bill_discount_amount" to the rupee value of the discount
+  - Set "bill_discount_percent" to the percentage if it was stated as a %, or null if it was a fixed rupee amount
+  - All line items should have disc_percent = 0 (the discount is NOT per-line)
+  - GST is calculated on (subtotal - bill_discount_amount), NOT on the full subtotal
+  - The invoice flow is: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total
+
+TOTAL IN WORDS RULE:
+On computer-generated Indian invoices, the total amount is almost always printed in words (e.g. "Rupees One Hundred Eighteen Only", "Rs. One Thousand Two Hundred and Fifty Only"). This appears near the bottom of the invoice, often labelled "Amount in Words", "Total in Words", or just written out with "Only" as a suffix.
+
+Use this when:
+  - The numeric total is not visible (cut off, poorly scanned, obscured)
+  - The numeric total field reads 0 or is missing
+  - You can compute a total from line items + GST but want to cross-verify
+
+How to parse:
+  - Convert the words to a number (e.g. "One Hundred Eighteen" → 118)
+  - Use that number as the "total" field
+  - Set confidence slightly lower (subtract 0.05) since you derived total from words rather than reading it directly
+  - The "Only" suffix is just a convention — ignore it when parsing
+
+If both numeric total and words total are present and they disagree by more than ₹1, prefer the words total (it is harder to OCR-misread words than digits) and flag the discrepancy by lowering confidence.
+
+SELF-CORRECTION STEP — always do this before finalising each invoice:
+  1. Compute: expected_total = sum_of_line_amounts - bill_discount_amount + cgst + sgst + igst + round_off
+  2. Compare expected_total with the printed total on the invoice.
+  3. If the difference is more than ₹1, scan the entire invoice document again for any number that is close to that difference (within ₹2 rounding).
+  4. Check if that number appears next to "Less", "Discount", "−", or any subtraction indicator.
+  5. If yes — that is a missed bill-level discount. Set bill_discount_amount to that value and recalculate.
+  6. Only after this check should you finalise the invoice JSON.
+
+When NO bill-level discount is present:
+  - Set "bill_discount_amount": 0
+  - Set "bill_discount_percent": null
+
+Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
 - If a line item has no explicit HSN, put "UNKNOWN".
-- Rate must always be EX-GST (back-calculate if needed: if invoice shows inclusive rate, divide by (1 + gst_percent/100)).
 - Confidence: 1.0 = all fields clearly visible, 0.5 = some fields unclear/missing, 0.0 = cannot read.
 - If multiple invoices exist in the document, return all of them."""
 
 
-def compute_confidence(inv: dict) -> float:
+def correct_line_item_rates(inv: dict) -> dict:
+    """
+    Self-correct extracted rates using the printed amount as ground truth.
+
+    If the invoice has an amount column, we can always derive the true
+    pre-discount, ex-GST rate regardless of what the AI extracted:
+        rate = amount / (qty * (1 - disc_percent/100))
+
+    This catches cases where Claude extracts the post-discount rate.
+    """
+    for item in inv.get("line_items", []):
+        amount = item.get("amount")
+        qty = item.get("qty", 0)
+        disc = item.get("disc_percent", 0)
+
+        if amount and qty and qty > 0:
+            divisor = qty * (1 - disc / 100)
+            if divisor > 0:
+                correct_rate = round(amount / divisor, 2)
+                # Only override if it meaningfully differs (>1% difference)
+                current_rate = item.get("rate", 0)
+                if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
+                    item["rate"] = correct_rate
+
+    return inv
+
+
+def detect_bill_discount_from_total(inv: dict) -> dict:
+    """
+    Mathematical fallback: if computed total > invoice total by more than ₹1
+    and no bill discount was already extracted, the difference is almost certainly
+    an undetected bill-level discount (e.g. handwritten "Less ₹X").
+
+    We auto-set bill_discount_amount = difference and mark it as auto-detected
+    so the UI can flag it for human review.
+
+    We do NOT apply this when computed < invoice total — that would mean the
+    invoice total is higher than our numbers, which signals a different problem
+    (missing line item, wrong rate) rather than a discount.
+    """
+    if inv.get("bill_discount_amount", 0) != 0:
+        return inv  # already has a discount, don't override
+
+    actual_total = inv.get("total", 0)
+    if actual_total <= 0:
+        return inv  # no printed total to compare against
+
+    computed_subtotal = sum(
+        item.get("qty", 0) * item.get("rate", 0) * (1 - item.get("disc_percent", 0) / 100)
+        for item in inv.get("line_items", [])
+    )
+    tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
+    expected = computed_subtotal + tax + inv.get("round_off", 0)
+    diff = round(expected - actual_total, 2)
+
+    if diff > 1:
+        inv["bill_discount_amount"] = diff
+        inv["bill_discount_percent"] = None
+        inv["bill_discount_auto_detected"] = True  # flag for UI transparency
+
+    return inv
+
+
+
     score = inv.get("confidence", 0.5)
     # Penalize missing fields
     if not inv.get("vendor_gstin"):
@@ -79,8 +213,9 @@ def compute_confidence(inv: dict) -> float:
         item["qty"] * item["rate"] * (1 - item.get("disc_percent", 0) / 100)
         for item in inv.get("line_items", [])
     )
+    bill_discount = inv.get("bill_discount_amount", 0)
     tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
-    expected_total = computed + tax + inv.get("round_off", 0)
+    expected_total = computed - bill_discount + tax + inv.get("round_off", 0)
     actual_total = inv.get("total", 0)
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
         score -= 0.15
@@ -291,8 +426,10 @@ async def _extract_invoices_from_file(
         else:
             return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
-    # Apply confidence scoring
+    # Correct rates, then detect any missed bill discount, then score
     for inv in invoices:
+        inv = correct_line_item_rates(inv)
+        inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)
 
     return invoices, None
