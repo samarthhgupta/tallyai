@@ -44,6 +44,7 @@ export interface ExtractedInvoice {
   total: number;
   tax_type: 'cgst_sgst' | 'igst';
   confidence: number;
+  confidence_reasons?: string[];
 }
 
 export interface FileResult {

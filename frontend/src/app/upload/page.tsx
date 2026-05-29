@@ -107,8 +107,17 @@ function InvoiceCard({ inv }: { inv: ExtractedInvoice }) {
               )}
             </div>
           </div>
-          <div className="shrink-0">
+          <div className="shrink-0 text-right">
             <ConfidenceBar score={inv.confidence} />
+            {inv.confidence_reasons && (
+              <ul className="mt-1.5 space-y-0.5">
+                {inv.confidence_reasons.map((r, i) => (
+                  <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
+                    {r.includes('✓') ? '' : '↓ '}{r}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
