@@ -88,40 +88,91 @@ def compute_confidence(inv: dict) -> float:
 
 
 MAX_PAGES = 8       # max pages sent per Claude call
-DPI = 96            # 96 DPI is sufficient for Claude to read text clearly
-JPEG_QUALITY = 75   # JPEG compression — keeps each page under ~150 KB
+DPI = 120           # DPI for scanned pages — higher than text PDFs for legibility
+JPEG_QUALITY = 75   # JPEG compression — keeps each page under ~200 KB
+
+# A page with fewer than this many characters is treated as a scan
+TEXT_CHARS_THRESHOLD = 50
 
 
-def _pdf_to_images(file_bytes: bytes) -> list[dict]:
-    """Convert PDF pages to base64 JPEG images using PyMuPDF."""
-    import fitz  # PyMuPDF
+def _is_scanned_page(page) -> bool:
+    """Return True if this PDF page is a scan (image-only, no extractable text)."""
+    text = page.get_text("text").strip()
+    return len(text) < TEXT_CHARS_THRESHOLD
+
+
+def _pdf_native_text(file_bytes: bytes) -> list[dict]:
+    """
+    Extract text from a native (text-based) PDF page by page.
+    Sends all page text in a single text block — fast and accurate.
+    """
+    import fitz
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages_text = []
+    for i, page in enumerate(list(doc)[:MAX_PAGES]):
+        text = page.get_text("text").strip()
+        if text:
+            pages_text.append(f"--- Page {i + 1} ---\n{text}")
+    doc.close()
+
+    combined = "\n\n".join(pages_text) if pages_text else "(no text extracted)"
+    return [{"type": "text", "text": f"Invoice document text:\n\n{combined}"}]
+
+
+def _pdf_scanned_images(file_bytes: bytes) -> list[dict]:
+    """
+    Render scanned PDF pages as JPEG images for Claude vision.
+    """
+    import fitz
     from PIL import Image
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     content_parts = []
-    pages = list(doc)[:MAX_PAGES]
 
-    for page in pages:
+    for page in list(doc)[:MAX_PAGES]:
         mat = fitz.Matrix(DPI / 72, DPI / 72)
         pix = page.get_pixmap(matrix=mat)
-
-        # Convert to JPEG via Pillow for better compression
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
         b64 = base64.standard_b64encode(buf.getvalue()).decode()
-
         content_parts.append({
             "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": b64,
-            },
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
         })
 
     doc.close()
     return content_parts
+
+
+def _pdf_to_content(file_bytes: bytes) -> list[dict]:
+    """
+    Auto-detect PDF type and choose the right extraction method.
+    - Native PDF (has selectable text) → extract text directly
+    - Scanned PDF (image pages) → render as JPEG images for vision
+    Mixed PDFs (some text, some scanned) are treated as scanned.
+    """
+    import fitz
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages = list(doc)[:MAX_PAGES]
+    scanned_pages = sum(1 for p in pages if _is_scanned_page(p))
+    doc.close()
+
+    is_scanned = scanned_pages > len(pages) / 2  # majority scanned → treat as scan
+
+    logger.info(
+        "PDF type detected: %s (%d/%d pages scanned)",
+        "scanned" if is_scanned else "native",
+        scanned_pages,
+        len(pages),
+    )
+
+    if is_scanned:
+        return _pdf_scanned_images(file_bytes)
+    else:
+        return _pdf_native_text(file_bytes)
 
 
 def _image_to_content(file_bytes: bytes, media_type: str) -> list[dict]:
@@ -171,7 +222,7 @@ async def _build_content_parts(upload: UploadFile) -> list[dict]:
     content_type = (upload.content_type or "").lower()
 
     if filename.endswith(".pdf") or "pdf" in content_type:
-        return _pdf_to_images(file_bytes)
+        return _pdf_to_content(file_bytes)
     elif filename.endswith(".png") or "png" in content_type:
         return _image_to_content(file_bytes, "image/png")
     elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type:
