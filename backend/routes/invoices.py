@@ -161,7 +161,43 @@ def correct_line_item_rates(inv: dict) -> dict:
     return inv
 
 
-def compute_confidence(inv: dict) -> float:
+def detect_bill_discount_from_total(inv: dict) -> dict:
+    """
+    Mathematical fallback: if computed total > invoice total by more than ₹1
+    and no bill discount was already extracted, the difference is almost certainly
+    an undetected bill-level discount (e.g. handwritten "Less ₹X").
+
+    We auto-set bill_discount_amount = difference and mark it as auto-detected
+    so the UI can flag it for human review.
+
+    We do NOT apply this when computed < invoice total — that would mean the
+    invoice total is higher than our numbers, which signals a different problem
+    (missing line item, wrong rate) rather than a discount.
+    """
+    if inv.get("bill_discount_amount", 0) != 0:
+        return inv  # already has a discount, don't override
+
+    actual_total = inv.get("total", 0)
+    if actual_total <= 0:
+        return inv  # no printed total to compare against
+
+    computed_subtotal = sum(
+        item.get("qty", 0) * item.get("rate", 0) * (1 - item.get("disc_percent", 0) / 100)
+        for item in inv.get("line_items", [])
+    )
+    tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
+    expected = computed_subtotal + tax + inv.get("round_off", 0)
+    diff = round(expected - actual_total, 2)
+
+    if diff > 1:
+        inv["bill_discount_amount"] = diff
+        inv["bill_discount_percent"] = None
+        inv["bill_discount_auto_detected"] = True  # flag for UI transparency
+
+    return inv
+
+
+
     score = inv.get("confidence", 0.5)
     # Penalize missing fields
     if not inv.get("vendor_gstin"):
@@ -390,9 +426,10 @@ async def _extract_invoices_from_file(
         else:
             return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
-    # Correct rates using printed amounts as ground truth, then score
+    # Correct rates, then detect any missed bill discount, then score
     for inv in invoices:
         inv = correct_line_item_rates(inv)
+        inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)
 
     return invoices, None

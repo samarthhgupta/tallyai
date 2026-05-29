@@ -78,9 +78,10 @@ function ConfidenceBar({ score }: { score: number }) {
 
 // ─── Review Banner ────────────────────────────────────────────────────────────
 
-function ReviewBanner({ computedTotal, invoiceTotal, sourceUrl, onDismiss }: {
+function ReviewBanner({ computedTotal, invoiceTotal, autoDetectedDiscount, sourceUrl, onDismiss }: {
   computedTotal: number;
   invoiceTotal: number;
+  autoDetectedDiscount?: boolean;
   sourceUrl?: string;
   onDismiss: () => void;
 }) {
@@ -93,10 +94,18 @@ function ReviewBanner({ computedTotal, invoiceTotal, sourceUrl, onDismiss }: {
         </svg>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-amber-800">Human review required</p>
-          <p className="text-sm text-amber-700 mt-0.5">
-            Computed total <strong>₹{formatINR(computedTotal)}</strong> differs from invoice total <strong>₹{formatINR(invoiceTotal)}</strong> by <strong>₹{formatINR(diff)}</strong>.
-            This could be a missed discount, a rounding difference, or an extraction error.
-          </p>
+          {autoDetectedDiscount ? (
+            <p className="text-sm text-amber-700 mt-0.5">
+              A bill-level discount of <strong>₹{formatINR(diff)}</strong> was <strong>auto-detected</strong> from the total mismatch and applied automatically.
+              Please verify against the original invoice — look for "Less", "Discount", or a "−" sign near this amount.
+              If correct, approve it; if wrong, the extracted data needs manual correction.
+            </p>
+          ) : (
+            <p className="text-sm text-amber-700 mt-0.5">
+              Computed total <strong>₹{formatINR(computedTotal)}</strong> differs from invoice total <strong>₹{formatINR(invoiceTotal)}</strong> by <strong>₹{formatINR(diff)}</strong>.
+              This could be a missed discount, a rounding difference, or an extraction error.
+            </p>
+          )}
           <p className="text-xs text-amber-600 mt-1">
             Please open the original invoice and verify each line item, any "Less" / discount rows, and the final total.
           </p>
@@ -203,6 +212,7 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
         <ReviewBanner
           computedTotal={computedTotal}
           invoiceTotal={inv.total}
+          autoDetectedDiscount={inv.bill_discount_auto_detected}
           sourceUrl={sourceUrl}
           onDismiss={() => setReviewed(true)}
         />
