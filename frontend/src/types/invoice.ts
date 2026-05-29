@@ -25,8 +25,9 @@ export interface LineItem {
   gst_percent: number;
   uom: string;
   qty: number;
-  rate: number;        // ex-GST
+  rate: number;        // ex-GST, BEFORE discount
   disc_percent: number;
+  amount?: number;     // printed amount from invoice (after discount, before GST)
 }
 
 export interface ExtractedInvoice {

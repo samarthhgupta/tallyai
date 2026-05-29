@@ -39,8 +39,9 @@ For each invoice found, return a JSON object with:
       "gst_percent": number,
       "uom": string (unit of measure as printed, e.g. "Nos", "Kg", "Pcs", "Mtr"),
       "qty": number,
-      "rate": number (EXCLUSIVE of GST),
-      "disc_percent": number (0 if no discount)
+      "rate": number,
+      "disc_percent": number,
+      "amount": number
     }
   ],
   "subtotal": number,
@@ -55,12 +56,65 @@ For each invoice found, return a JSON object with:
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
-Rules:
+CRITICAL RATE RULE — read this carefully:
+- "rate" must ALWAYS be the rate per unit BEFORE discount, EXCLUDING GST.
+- "disc_percent" is the discount percentage shown on the invoice.
+- "amount" is the line total as printed on the invoice (after discount, before GST).
+
+The correct relationship is: amount = qty × rate × (1 - disc_percent/100)
+
+Many Indian invoices show columns like: Rate | Discount% | Amount
+In this case "Rate" is already the pre-discount rate — use it directly.
+
+Some invoices show a discounted rate in the Rate column. To detect this:
+  If the invoice shows an Amount column, back-calculate the pre-discount rate:
+  rate = amount / (qty × (1 - disc_percent/100))
+
+EXAMPLE (Dream Touch style invoice):
+  Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
+  331.10 is the POST-discount rate. You must back-calculate:
+  rate = 9933 / (30 × (1 - 14/100)) = 9933 / 25.8 = 385.00  ← this is what goes in "rate"
+  disc_percent = 14
+  amount = 9933
+
+EXAMPLE (standard invoice):
+  Printed columns: Rate=1000, Disc=0%, Qty=5, Amount=5000
+  rate = 1000, disc_percent = 0, amount = 5000
+
+Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
 - If a line item has no explicit HSN, put "UNKNOWN".
-- Rate must always be EX-GST (back-calculate if needed: if invoice shows inclusive rate, divide by (1 + gst_percent/100)).
 - Confidence: 1.0 = all fields clearly visible, 0.5 = some fields unclear/missing, 0.0 = cannot read.
 - If multiple invoices exist in the document, return all of them."""
+
+
+def correct_line_item_rates(inv: dict) -> dict:
+    """
+    Self-correct extracted rates using the printed amount as ground truth.
+
+    If the invoice has an amount column, we can always derive the true
+    pre-discount, ex-GST rate regardless of what the AI extracted:
+        rate = amount / (qty * (1 - disc_percent/100))
+
+    This catches cases where Claude extracts the post-discount rate.
+    """
+    for item in inv.get("line_items", []):
+        amount = item.get("amount")
+        qty = item.get("qty", 0)
+        disc = item.get("disc_percent", 0)
+
+        if amount and qty and qty > 0:
+            divisor = qty * (1 - disc / 100)
+            if divisor > 0:
+                correct_rate = round(amount / divisor, 2)
+                # Only override if it meaningfully differs (>1% difference)
+                current_rate = item.get("rate", 0)
+                if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
+                    item["rate"] = correct_rate
+
+    return inv
 
 
 def compute_confidence(inv: dict) -> float:
@@ -291,8 +345,9 @@ async def _extract_invoices_from_file(
         else:
             return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
-    # Apply confidence scoring
+    # Correct rates using printed amounts as ground truth, then score
     for inv in invoices:
+        inv = correct_line_item_rates(inv)
         inv["confidence"] = compute_confidence(inv)
 
     return invoices, None
