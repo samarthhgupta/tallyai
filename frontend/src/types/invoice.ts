@@ -82,12 +82,17 @@ export function calcLineAmount(item: LineItem): number {
   return item.qty * item.rate * (1 - item.disc_percent / 100);
 }
 
+function cleanHsn(hsn: string): string {
+  return (hsn || '').replace(/[\s.]/g, '') || '—';
+}
+
 export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst', billDiscount = 0): HsnRow[] {
   const map: Record<string, HsnRow> = {};
   for (const item of items) {
-    const key = `${item.hsn}__${item.gst_percent}`;
+    const hsn = cleanHsn(item.hsn);
+    const key = `${hsn}__${item.gst_percent}`;
     if (!map[key]) {
-      map[key] = { hsn: item.hsn || '—', gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
+      map[key] = { hsn, gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
     }
     map[key].taxable += calcLineAmount(item);
   }
