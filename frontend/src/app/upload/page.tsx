@@ -76,9 +76,61 @@ function ConfidenceBar({ score }: { score: number }) {
   );
 }
 
+// ─── Review Banner ────────────────────────────────────────────────────────────
+
+function ReviewBanner({ computedTotal, invoiceTotal, sourceUrl, onDismiss }: {
+  computedTotal: number;
+  invoiceTotal: number;
+  sourceUrl?: string;
+  onDismiss: () => void;
+}) {
+  const diff = Math.abs(computedTotal - invoiceTotal);
+  return (
+    <div className="mx-5 mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-amber-800">Human review required</p>
+          <p className="text-sm text-amber-700 mt-0.5">
+            Computed total <strong>₹{formatINR(computedTotal)}</strong> differs from invoice total <strong>₹{formatINR(invoiceTotal)}</strong> by <strong>₹{formatINR(diff)}</strong>.
+            This could be a missed discount, a rounding difference, or an extraction error.
+          </p>
+          <p className="text-xs text-amber-600 mt-1">
+            Please open the original invoice and verify each line item, any "Less" / discount rows, and the final total.
+          </p>
+          <div className="flex items-center gap-3 mt-2">
+            {sourceUrl && (
+              <a
+                href={sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 underline hover:text-amber-900"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                Open original invoice
+              </a>
+            )}
+            <button
+              onClick={onDismiss}
+              className="text-xs font-medium text-amber-700 hover:text-amber-900 underline"
+            >
+              Mark as reviewed ✓
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Invoice Card ─────────────────────────────────────────────────────────────
 
 function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: string }) {
+  const [reviewed, setReviewed] = useState(false);
   const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
   const taxType = inv.tax_type;
   const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType);
@@ -87,9 +139,10 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
   const taxableValue = computedSubtotal - billDiscount;
   const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
   const computedTotal = taxableValue + computedTax + (inv.round_off || 0);
+  const needsReview = !reviewed && inv.total > 0 && Math.abs(computedTotal - inv.total) > 1;
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${needsReview ? 'border-amber-300' : 'border-gray-200'}`}>
       {/* Header */}
       <div className="px-5 py-4">
         <div className="flex items-start justify-between gap-4">
@@ -97,6 +150,14 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
             <div className="flex items-center gap-3 flex-wrap">
               <span className="font-semibold text-gray-900">{inv.vendor_name || 'Unknown Vendor'}</span>
               <ConfidenceBadge score={inv.confidence} />
+              {needsReview && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                  Needs Review
+                </span>
+              )}
               {sourceUrl && (
                 <a
                   href={sourceUrl}
@@ -136,6 +197,16 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
           </div>
         </div>
       </div>
+
+      {/* Review Banner */}
+      {needsReview && (
+        <ReviewBanner
+          computedTotal={computedTotal}
+          invoiceTotal={inv.total}
+          sourceUrl={sourceUrl}
+          onDismiss={() => setReviewed(true)}
+        />
+      )}
 
       {/* Line Items */}
       {inv.line_items.length > 0 && (
