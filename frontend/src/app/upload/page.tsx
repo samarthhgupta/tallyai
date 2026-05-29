@@ -142,9 +142,9 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
   const [reviewed, setReviewed] = useState(false);
   const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
   const taxType = inv.tax_type;
-  const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType);
   const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
   const billDiscount = inv.bill_discount_amount ?? 0;
+  const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType, billDiscount);
   const taxableValue = computedSubtotal - billDiscount;
   const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
   const computedTotal = taxableValue + computedTax + (inv.round_off || 0);
