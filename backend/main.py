@@ -1,5 +1,11 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from routes.invoices import router as invoices_router
 
 app = FastAPI(
     title="TallyAI Backend",
@@ -15,12 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routes will be added here as we build
-# from routes import invoices, companies, agent, auth
-# app.include_router(auth.router, prefix="/auth")
-# app.include_router(companies.router, prefix="/companies")
-# app.include_router(invoices.router, prefix="/invoices")
-# app.include_router(agent.router, prefix="/agent")
+app.include_router(invoices_router, prefix="/invoices")
 
 @app.get("/")
 def root():
