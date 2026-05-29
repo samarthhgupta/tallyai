@@ -359,28 +359,111 @@ def _doc_to_text(file_bytes: bytes) -> list[dict]:
     return [{"type": "text", "text": text}]
 
 
+# Minimum meaningful text characters across the whole document
+TEXT_MIN_CHARS = 80
+# Pixel brightness threshold — 0=black, 255=white; pages above this are "blank"
+BLANK_BRIGHTNESS = 252
+# Fraction of pixels that must exceed BLANK_BRIGHTNESS for a page to be considered blank
+BLANK_PIXEL_FRACTION = 0.97
+
+
+def _is_blank_image(img) -> bool:
+    """Return True if the PIL image is overwhelmingly white (blank page)."""
+    import struct
+    pixels = list(img.convert("L").getdata())  # greyscale
+    white = sum(1 for p in pixels if p >= BLANK_BRIGHTNESS)
+    return white / len(pixels) >= BLANK_PIXEL_FRACTION if pixels else True
+
+
+class BlankDocumentError(Exception):
+    """Raised when a document has no meaningful content worth sending to Claude."""
+    pass
+
+
+def _prescreen_pdf(file_bytes: bytes) -> None:
+    """Raise BlankDocumentError if the PDF is blank or has no usable content."""
+    import fitz
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages = list(doc)[:MAX_PAGES]
+
+    if not pages:
+        doc.close()
+        raise BlankDocumentError("PDF has no pages.")
+
+    total_text = ""
+    all_blank_images = True
+
+    for page in pages:
+        total_text += page.get_text("text").strip()
+        if _is_scanned_page(page):
+            # Render and check brightness
+            from PIL import Image
+            mat = fitz.Matrix(72 / 72, 72 / 72)  # 72 DPI is enough for blank detection
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            if not _is_blank_image(img):
+                all_blank_images = False
+        else:
+            all_blank_images = False  # native text page — not an image blank
+
+    doc.close()
+
+    is_native = len(total_text) >= TEXT_CHARS_THRESHOLD
+    if is_native and len(total_text) < TEXT_MIN_CHARS:
+        raise BlankDocumentError(f"PDF text content too short ({len(total_text)} chars) — likely blank or corrupt.")
+    if not is_native and all_blank_images:
+        raise BlankDocumentError("All scanned pages appear to be blank (white).")
+
+
+def _prescreen_image(file_bytes: bytes) -> None:
+    """Raise BlankDocumentError if the image is blank."""
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    if _is_blank_image(img):
+        raise BlankDocumentError("Image appears to be blank (white page).")
+
+
+def _prescreen_text(text: str) -> None:
+    """Raise BlankDocumentError if a text document has no meaningful content."""
+    if len(text.strip()) < TEXT_MIN_CHARS:
+        raise BlankDocumentError(f"Document has no meaningful text content ({len(text.strip())} chars).")
+
+
+
 async def _build_content_parts(upload: UploadFile) -> list[dict]:
-    """Read an UploadFile and return Claude content parts."""
+    """
+    Read an UploadFile, run a blank/content pre-screen, and return Claude content parts.
+    Raises BlankDocumentError before touching Claude if the file has no useful content.
+    """
     file_bytes = await upload.read()
     filename = (upload.filename or "").lower()
     content_type = (upload.content_type or "").lower()
 
     if filename.endswith(".pdf") or "pdf" in content_type:
+        _prescreen_pdf(file_bytes)
         return _pdf_to_content(file_bytes)
     elif filename.endswith(".png") or "png" in content_type:
+        _prescreen_image(file_bytes)
         return _image_to_content(file_bytes, "image/png")
     elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type:
+        _prescreen_image(file_bytes)
         return _image_to_content(file_bytes, "image/jpeg")
     elif filename.endswith(".docx"):
-        return _docx_to_text(file_bytes)
+        parts = _docx_to_text(file_bytes)
+        _prescreen_text(parts[0]["text"])
+        return parts
     elif filename.endswith(".doc"):
-        return _doc_to_text(file_bytes)
+        parts = _doc_to_text(file_bytes)
+        _prescreen_text(parts[0]["text"])
+        return parts
     else:
-        # Attempt as plain text fallback
         try:
             text = file_bytes.decode("utf-8", errors="ignore")
         except Exception:
-            text = "(unreadable file)"
+            text = ""
+        _prescreen_text(text)
         return [{"type": "text", "text": text}]
 
 
@@ -395,6 +478,9 @@ async def _extract_invoices_from_file(
 
     try:
         content_parts = await _build_content_parts(upload)
+    except BlankDocumentError as exc:
+        logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
+        return [], f"Skipped (no invoice content): {exc}"
     except Exception as exc:
         logger.exception("Failed to process file %s", upload.filename)
         return [], f"Could not process file: {exc}"
