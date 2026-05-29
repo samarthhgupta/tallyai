@@ -87,37 +87,60 @@ def compute_confidence(inv: dict) -> float:
     return max(0.0, min(1.0, score))
 
 
+MAX_PAGES = 8       # max pages sent per Claude call
+DPI = 96            # 96 DPI is sufficient for Claude to read text clearly
+JPEG_QUALITY = 75   # JPEG compression — keeps each page under ~150 KB
+
+
 def _pdf_to_images(file_bytes: bytes) -> list[dict]:
-    """Convert PDF pages to base64 PNG images using PyMuPDF (fitz)."""
+    """Convert PDF pages to base64 JPEG images using PyMuPDF."""
     import fitz  # PyMuPDF
+    from PIL import Image
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     content_parts = []
-    for page in doc:
-        mat = fitz.Matrix(150 / 72, 150 / 72)  # 150 DPI
+    pages = list(doc)[:MAX_PAGES]
+
+    for page in pages:
+        mat = fitz.Matrix(DPI / 72, DPI / 72)
         pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
-        b64 = base64.standard_b64encode(img_bytes).decode()
+
+        # Convert to JPEG via Pillow for better compression
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        b64 = base64.standard_b64encode(buf.getvalue()).decode()
+
         content_parts.append({
             "type": "image",
             "source": {
                 "type": "base64",
-                "media_type": "image/png",
+                "media_type": "image/jpeg",
                 "data": b64,
             },
         })
+
     doc.close()
     return content_parts
 
 
 def _image_to_content(file_bytes: bytes, media_type: str) -> list[dict]:
-    """Convert image bytes to Claude content part."""
-    b64 = base64.standard_b64encode(file_bytes).decode()
+    """Convert image bytes to Claude content part, compressing if needed."""
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    # Resize if wider than 1600px (keeps it readable but small)
+    if img.width > 1600:
+        ratio = 1600 / img.width
+        img = img.resize((1600, int(img.height * ratio)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    b64 = base64.standard_b64encode(buf.getvalue()).decode()
     return [{
         "type": "image",
         "source": {
             "type": "base64",
-            "media_type": media_type,
+            "media_type": "image/jpeg",
             "data": b64,
         },
     }]
