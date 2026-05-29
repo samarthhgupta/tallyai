@@ -86,16 +86,26 @@ EXAMPLE (standard invoice):
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
 
 BILL-LEVEL DISCOUNT RULE:
-Some Indian invoices show a discount on the overall invoice value (not per line item). This appears as:
-  - A "Discount" or "Trade Discount" row below the line items subtotal, before GST is calculated
-  - The discount may be a fixed rupee amount (e.g. "Discount: ₹500") or a percentage (e.g. "Discount: 5%")
+Some Indian invoices show a discount on the overall invoice value (not per line item). This is especially common in handwritten invoices. Look for ANY of these patterns anywhere between the line items subtotal and the GST section:
+  - Words: "Discount", "Trade Discount", "Less", "Less Discount", "(-)", or just a "−" / "-" sign next to an amount
+  - A percentage stated at bill level (e.g. "Less 5%", "Discount 10%")
+  - A fixed rupee amount below the subtotal that is being subtracted (e.g. "Less  500", "- 250.00")
+  - Handwritten invoices often just write "Less" followed by an amount with no label
 
 When a bill-level discount is present:
   - Set "bill_discount_amount" to the rupee value of the discount
-  - Set "bill_discount_percent" to the percentage if it was stated as a %, or null if it was a fixed amount
+  - Set "bill_discount_percent" to the percentage if it was stated as a %, or null if it was a fixed rupee amount
   - All line items should have disc_percent = 0 (the discount is NOT per-line)
   - GST is calculated on (subtotal - bill_discount_amount), NOT on the full subtotal
   - The invoice flow is: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total
+
+SELF-CORRECTION STEP — always do this before finalising each invoice:
+  1. Compute: expected_total = sum_of_line_amounts - bill_discount_amount + cgst + sgst + igst + round_off
+  2. Compare expected_total with the printed total on the invoice.
+  3. If the difference is more than ₹1, scan the entire invoice document again for any number that is close to that difference (within ₹2 rounding).
+  4. Check if that number appears next to "Less", "Discount", "−", or any subtraction indicator.
+  5. If yes — that is a missed bill-level discount. Set bill_discount_amount to that value and recalculate.
+  6. Only after this check should you finalise the invoice JSON.
 
 When NO bill-level discount is present:
   - Set "bill_discount_amount": 0
