@@ -31,8 +31,14 @@ function computeConfidence(inv: ExtractedInvoice): { score: number; reasons: str
     (s, item) => s + item.qty * item.rate * (1 - item.disc_percent / 100), 0
   );
   const billDiscount = inv.bill_discount_amount ?? 0;
-  const tax = (inv.cgst ?? 0) + (inv.sgst ?? 0) + (inv.igst ?? 0);
-  const expected = subtotal - billDiscount + tax + (inv.round_off ?? 0);
+  const taxableValue = subtotal - billDiscount;
+  // Recompute tax on post-discount taxable using each item's GST rate (pro-rated by share)
+  const recomputedTax = (inv.line_items ?? []).reduce((s, item) => {
+    const itemAmt = item.qty * item.rate * (1 - item.disc_percent / 100);
+    const discountShare = subtotal > 0 && billDiscount > 0 ? billDiscount * (itemAmt / subtotal) : 0;
+    return s + (itemAmt - discountShare) * item.gst_percent / 100;
+  }, 0);
+  const expected = taxableValue + recomputedTax + (inv.round_off ?? 0);
   if (inv.total > 0 && Math.abs(expected - inv.total) > 1) {
     score -= 0.15;
     reasons.push(`Computed total ₹${expected.toFixed(2)} doesn't match invoice total ₹${inv.total.toFixed(2)} (-15%)`);
