@@ -266,10 +266,18 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
               <tbody>
                 {hsnRows.map((row: HsnRow, i: number) => {
                   const calcTax = row.cgst + row.sgst + row.igst;
-                  const vendorTax = inv.line_items
+                  // vendorTax: expected tax for this HSN group, applying discount share
+                  const groupRawTaxable = inv.line_items
                     .filter((it) => it.hsn === row.hsn && it.gst_percent === row.gst_percent)
-                    .reduce((s, it) => s + calcLineAmount(it) * it.gst_percent / 100, 0);
-                  const match = Math.abs(calcTax - vendorTax) <= 1;
+                    .reduce((s, it) => s + calcLineAmount(it), 0);
+                  const discountShare = computedSubtotal > 0 && billDiscount > 0
+                    ? billDiscount * (groupRawTaxable / computedSubtotal)
+                    : 0;
+                  const adjustedGroupTaxable = groupRawTaxable - discountShare;
+                  const vendorTax = adjustedGroupTaxable * row.gst_percent / 100;
+                  // Also flag mismatch if there's an unexplained total gap (e.g. 0% GST items)
+                  const hasUnexplainedGap = needsReview && row.gst_percent === 0;
+                  const match = !hasUnexplainedGap && Math.abs(calcTax - vendorTax) <= 1;
                   return (
                     <tr key={i} className="hover:bg-gray-50">
                       <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
