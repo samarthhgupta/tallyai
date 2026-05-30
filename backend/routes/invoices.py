@@ -596,6 +596,7 @@ async def _extract_invoices_from_file(
         logger.exception("Failed to process file %s", upload.filename)
         return [], f"Could not process file: {exc}"
 
+    import re
     try:
         response = client.messages.create(
             model="claude-opus-4-5",
@@ -609,8 +610,6 @@ async def _extract_invoices_from_file(
                 }
             ],
         )
-    import re
-    try:
         raw_text = response.content[0].text.strip()
         # Strip markdown code fences if Claude wrapped the response
         if raw_text.startswith("```"):
