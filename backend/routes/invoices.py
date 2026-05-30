@@ -61,6 +61,7 @@ For each invoice found, return a JSON object with:
       "gst_percent": number (usually 0; use 18 only if GST is explicitly shown on the charge)
     }
   ],
+  "is_computer_generated": boolean (true if the invoice is clearly printed/computer-generated with consistent fonts and layout; false if handwritten or unclear),
   "tax_type": "cgst_sgst" or "igst",
   "confidence": number between 0 and 1
 }
@@ -90,6 +91,12 @@ LINE ITEM COMPLETENESS — never skip a line item:
   If any S.No. is missing from your output, find and extract it before finalising.
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
+
+COMPUTER-GENERATED INVOICE RULE:
+If an invoice is clearly computer-generated (consistent fonts, printed layout, machine-calculated totals), set "is_computer_generated": true.
+- All totals on a computer-generated invoice are mathematically correct — trust them completely.
+- Do NOT look for hidden discounts or assume any mismatch is an error.
+- The printed total IS the correct total. Extract it exactly as shown.
 
 CRITICAL RATE RULE — read this carefully:
 - "rate" must ALWAYS be the rate per unit BEFORE any discount, EXCLUDING GST.
@@ -135,6 +142,15 @@ EXAMPLE (J.B. Book Agency style — two separate discount columns):
   - effective_disc = 1 - (1-0.45)×(1-0) = 45%
   So: rate=399, disc_percent=45, amount=1536.15
   Verify: 7 × 399 × (1 - 45/100) = 2,793 × 0.55 = 1,536.15 ✓
+
+EXAMPLE (MRP + Disc% + Rate/Price column invoice):
+  Some invoices show: MRP | Disc% | Rate/Price | Qty | Amount
+  In this case the "Rate" or "Price" column is ALREADY the post-discount price (MRP × (1 - Disc%)).
+  To find the true pre-discount rate (what goes in our "rate" field), use the Amount column:
+    Our rate = Amount / (Qty × (1 - Disc%/100))   → this gives back the MRP
+  Cross-check: MRP × (1 - Disc%) should ≈ the printed Rate/Price column.
+  Example: MRP=500, Disc%=20, Rate(printed)=400, Qty=3, Amount=1200
+    Our rate = 1200 / (3 × 0.80) = 500 = MRP ✓   disc_percent=20, amount=1200
 
 EXAMPLE (Dream Touch style — single discount, post-discount rate in Rate column):
   Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
@@ -313,6 +329,9 @@ def detect_bill_discount_from_total(inv: dict) -> dict:
     """
     if inv.get("bill_discount_amount", 0) != 0:
         return inv  # already has a discount, don't override
+
+    if inv.get("is_computer_generated"):
+        return inv  # computer-generated invoices have correct calculations — trust them
 
     actual_total = inv.get("total", 0)
     if actual_total <= 0:
