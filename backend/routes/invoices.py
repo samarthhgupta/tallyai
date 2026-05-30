@@ -609,7 +609,13 @@ async def _extract_invoices_from_file(
                 }
             ],
         )
+    import re
+    try:
         raw_text = response.content[0].text.strip()
+        # Strip markdown code fences if Claude wrapped the response
+        if raw_text.startswith("```"):
+            raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
+            raw_text = re.sub(r"\n?```$", "", raw_text).strip()
     except Exception as exc:
         logger.exception("Claude API call failed for %s", upload.filename)
         return [], f"Claude API error: {exc}"
@@ -620,7 +626,6 @@ async def _extract_invoices_from_file(
             invoices = [invoices]
     except json.JSONDecodeError:
         # Try to extract JSON array from response
-        import re
         match = re.search(r"\[.*\]", raw_text, re.DOTALL)
         if match:
             try:
