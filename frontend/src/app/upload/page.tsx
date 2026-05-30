@@ -337,7 +337,7 @@ function InvoiceCard({
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['HSN @ Rate%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'].map((h) => (
+                  {['S.No.', 'HSN @ Rate%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -345,6 +345,7 @@ function InvoiceCard({
               <tbody>
                 {inv.line_items.map((item: LineItem, i: number) => (
                   <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center">{i + 1}</td>
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
                       {item.hsn.replace(/[\s.]/g, '') || '—'} @ {item.gst_percent}%
                     </td>
@@ -356,7 +357,7 @@ function InvoiceCard({
                   </tr>
                 ))}
                 <tr className="bg-gray-50 font-semibold">
-                  <td colSpan={5} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total Taxable Value</td>
+                  <td colSpan={6} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total Taxable Value</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(computedSubtotal)}</td>
                 </tr>
               </tbody>
@@ -381,7 +382,6 @@ function InvoiceCard({
               <tbody>
                 {hsnRows.map((row: HsnRow, i: number) => {
                   const calcTax = row.cgst + row.sgst + row.igst;
-                  // vendorTax: expected tax for this HSN group, applying discount share
                   const groupRawTaxable = inv.line_items
                     .filter((it) => it.hsn === row.hsn && it.gst_percent === row.gst_percent)
                     .reduce((s, it) => s + calcLineAmount(it), 0);
@@ -390,7 +390,6 @@ function InvoiceCard({
                     : 0;
                   const adjustedGroupTaxable = groupRawTaxable - discountShare;
                   const vendorTax = adjustedGroupTaxable * row.gst_percent / 100;
-                  // Also flag mismatch if there's an unexplained total gap (e.g. 0% GST items)
                   const hasUnexplainedGap = needsReview && row.gst_percent === 0;
                   const match = !hasUnexplainedGap && Math.abs(calcTax - vendorTax) <= 1;
                   return (
@@ -409,6 +408,14 @@ function InvoiceCard({
                     </tr>
                   );
                 })}
+                <tr className="bg-gray-50 font-semibold text-sm">
+                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(hsnRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.cgst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.cgst, 0)) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.sgst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.sgst, 0)) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.igst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.igst, 0)) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200"></td>
+                </tr>
               </tbody>
             </table>
           </div>
