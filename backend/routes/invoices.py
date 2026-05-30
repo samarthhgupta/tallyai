@@ -596,7 +596,6 @@ async def _extract_invoices_from_file(
         logger.exception("Failed to process file %s", upload.filename)
         return [], f"Could not process file: {exc}"
 
-    import re
     try:
         response = client.messages.create(
             model="claude-opus-4-5",
@@ -611,10 +610,6 @@ async def _extract_invoices_from_file(
             ],
         )
         raw_text = response.content[0].text.strip()
-        # Strip markdown code fences if Claude wrapped the response
-        if raw_text.startswith("```"):
-            raw_text = re.sub(r"^```[a-zA-Z]*\n?", "", raw_text)
-            raw_text = re.sub(r"\n?```$", "", raw_text).strip()
     except Exception as exc:
         logger.exception("Claude API call failed for %s", upload.filename)
         return [], f"Claude API error: {exc}"
@@ -624,25 +619,20 @@ async def _extract_invoices_from_file(
         if not isinstance(invoices, list):
             invoices = [invoices]
     except json.JSONDecodeError:
-        # Try to extract JSON array from response — handles fenced or partially-wrapped output
-        # First try stripping fences again in case the earlier strip missed an edge case
-        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", raw_text)
-        cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
-        try:
-            invoices = json.loads(cleaned)
-            if not isinstance(invoices, list):
-                invoices = [invoices]
-        except json.JSONDecodeError:
-            match = re.search(r"\[.*\]", cleaned, re.DOTALL)
-            if match:
-                try:
-                    invoices = json.loads(match.group())
-                    if not isinstance(invoices, list):
-                        invoices = [invoices]
-                except json.JSONDecodeError:
-                    return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
-            else:
-                return [], f"No JSON array found in Claude response: {raw_text[:200]}"
+        # Claude sometimes wraps output in markdown fences or adds commentary.
+        # Most robust recovery: find the outermost JSON array by locating the
+        # first '[' and the last ']' in the response and parsing that slice.
+        start = raw_text.find("[")
+        end = raw_text.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            try:
+                invoices = json.loads(raw_text[start : end + 1])
+                if not isinstance(invoices, list):
+                    invoices = [invoices]
+            except json.JSONDecodeError:
+                return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
+        else:
+            return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
     # Normalise HSN codes, correct rates, detect missed discounts, then score
     for inv in invoices:
