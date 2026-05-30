@@ -61,9 +61,9 @@ For each invoice found, return a JSON object with:
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
 CRITICAL RATE RULE — read this carefully:
-- "rate" must ALWAYS be the rate per unit BEFORE discount, EXCLUDING GST.
-- "disc_percent" is the discount percentage shown on the invoice.
-- "amount" is the line total as printed on the invoice (after discount, before GST).
+- "rate" must ALWAYS be the rate per unit BEFORE any discount, EXCLUDING GST.
+- "disc_percent" is the EFFECTIVE combined discount percentage (see compound discount rule below).
+- "amount" is the line total AFTER discount, BEFORE GST — this is usually the last column before GST (labelled "Net Amt", "Taxable", "Net Amount", or similar).
 
 The correct relationship is: amount = qty × rate × (1 - disc_percent/100)
 
@@ -71,21 +71,39 @@ Many Indian invoices show columns like: Rate | Discount% | Amount
 In this case "Rate" is already the pre-discount rate — use it directly.
 
 Some invoices show a discounted rate in the Rate column. To detect this:
-  If the invoice shows an Amount column, back-calculate the pre-discount rate:
+  If the invoice shows an Amount/Net Amt column, back-calculate the pre-discount rate:
   rate = amount / (qty × (1 - disc_percent/100))
 
-EXAMPLE (Dream Touch style invoice):
-  Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
-  331.10 is the POST-discount rate. You must back-calculate:
-  rate = 9933 / (30 × (1 - 14/100)) = 9933 / 25.8 = 385.00  ← this is what goes in "rate"
-  disc_percent = 14
-  amount = 9933
+COMPOUND DISCOUNT RULE — very common in Indian stationery/book invoices:
+Some invoices show discount as two chained percentages, e.g. "40+10.71" or "30+5".
+This means: first apply 40%, then apply 10.71% on the remainder.
+You MUST convert this to a single effective percentage before storing:
+  effective_disc = 1 - (1 - A/100) × (1 - B/100)
+  disc_percent = effective_disc × 100
 
-EXAMPLE (standard invoice):
+EXAMPLE (Bharat Book Depot style — compound discount):
+  Printed columns: Rate=40, Amount=1,32,000, Disc%=40+10.71, Net Amt=70,717.68, GST%=12
+  - "Amount" here is qty×rate = 3300×40 = 1,32,000 (PRE-discount — ignore for our amount field)
+  - "Net Amt" = 70,717.68 is the post-discount taxable amount — THIS goes in "amount"
+  - effective_disc = 1 - (1-0.40)×(1-0.1071) = 1 - 0.60×0.8929 = 46.43%
+  So: rate=40, disc_percent=46.43, amount=70717.68
+  Verify: 3300 × 40 × (1 - 46.43/100) = 1,32,000 × 0.5357 = 70,712 ≈ 70,717.68 ✓
+
+EXAMPLE (Dream Touch style — single discount, post-discount rate in Rate column):
+  Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
+  331.10 is the POST-discount rate. Back-calculate:
+  rate = 9933 / (30 × (1 - 14/100)) = 9933 / 25.8 = 385.00
+  disc_percent = 14, amount = 9933
+
+EXAMPLE (standard invoice — no discount):
   Printed columns: Rate=1000, Disc=0%, Qty=5, Amount=5000
   rate = 1000, disc_percent = 0, amount = 5000
 
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+COLUMN IDENTIFICATION RULE — when an invoice has both "Amount" and "Net Amt" columns:
+  - "Amount" = qty × rate (pre-discount gross) — DO NOT use this as the "amount" field
+  - "Net Amt" / "Net Amount" / "Taxable" = after discount, before GST — USE THIS as the "amount" field
 
 BUYER FIELDS:
 - "buyer_name": the name of the company the invoice is addressed TO (appears under "Bill To", "Consignee", "Buyer", "Ship To"). This is NOT the vendor/seller.
@@ -169,23 +187,37 @@ def correct_line_item_rates(inv: dict) -> dict:
     """
     Self-correct extracted rates using the printed amount as ground truth.
 
-    If the invoice has an amount column, we can always derive the true
-    pre-discount, ex-GST rate regardless of what the AI extracted:
+    amount field should be post-discount, pre-GST (Net Amt column).
+    Back-calculates the true pre-discount, ex-GST rate:
         rate = amount / (qty * (1 - disc_percent/100))
 
-    This catches cases where Claude extracts the post-discount rate.
+    Also sanitises compound discounts if Claude returned them as a string
+    like "40+10.71" instead of converting to effective %.
     """
     for item in inv.get("line_items", []):
+        # Sanitise disc_percent — handle "40+10.71" strings from Claude
+        disc = item.get("disc_percent", 0)
+        if isinstance(disc, str) and "+" in disc:
+            parts = disc.split("+")
+            try:
+                effective = 1.0
+                for p in parts:
+                    effective *= (1 - float(p.strip()) / 100)
+                disc = round((1 - effective) * 100, 4)
+                item["disc_percent"] = disc
+            except ValueError:
+                disc = 0
+                item["disc_percent"] = 0
+
         amount = item.get("amount")
         qty = item.get("qty", 0)
-        disc = item.get("disc_percent", 0)
 
         if amount and qty and qty > 0:
             divisor = qty * (1 - disc / 100)
             if divisor > 0:
                 correct_rate = round(amount / divisor, 2)
-                # Only override if it meaningfully differs (>1% difference)
                 current_rate = item.get("rate", 0)
+                # Only override if it meaningfully differs (>1% difference)
                 if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
                     item["rate"] = correct_rate
 
