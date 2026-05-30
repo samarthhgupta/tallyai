@@ -200,18 +200,26 @@ When NO bill-level discount is present:
 
 MULTI-PAGE INVOICE RULE:
 A single invoice often spans two or more pages. This is common for scanned invoices. Recognise a multi-page invoice by:
+
+EXPLICIT markers (easy to detect):
   - "Page 1 of 2" / "Page 2 of 2" printed at the bottom
   - "Continued..." or "Contd..." at the bottom of page 1
   - "...Continued" or a page number at the top of page 2
   - The same invoice number appearing on consecutive pages
-  - Page 1 has only line items (no GST summary / total) — GST and total appear on page 2
+
+IMPLICIT markers (no explicit label — use these signals):
+  - A page ends abruptly with only line items and NO totals section, no GST row, no Grand Total, no "Amount in Words" — this page is incomplete
+  - When a page is incomplete, look at the LAST serial number (S.No.) of the line items on that page
+  - Then check the NEXT page: if the FIRST serial number on the next page continues the sequence (e.g. page 1 ends at S.No. 7, page 2 starts at S.No. 8), they belong to the same invoice
+  - Even if the next page has a different layout or no header, treat it as a continuation
+  - The totals, GST, and Grand Total on the continuation page belong to the combined invoice
 
 When you see multiple pages that belong to the same invoice:
   - Combine ALL line items from ALL pages into ONE invoice object
   - The GST amounts, totals, and round-off are usually on the LAST page — use those
   - Use the invoice number, date, vendor, and buyer details from whichever page shows them
   - Do NOT return a separate JSON object for each page — one invoice = one JSON object
-  - If page 2 has no invoice number but clearly continues page 1 (same vendor, same format), treat it as the same invoice
+  - If page 2 has no invoice number but clearly continues page 1 (same vendor, same format, or continuing serial numbers), treat it as the same invoice
 
 Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
