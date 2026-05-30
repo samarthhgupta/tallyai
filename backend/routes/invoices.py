@@ -236,6 +236,7 @@ Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
 - If a line item has no explicit HSN, put "UNKNOWN".
 - Confidence: 1.0 = all fields clearly visible, 0.5 = some fields unclear/missing, 0.0 = cannot read.
+- Do NOT include a "confidence_reasons" field — it is computed server-side.
 - If multiple invoices exist in the document, return all of them."""
 
 
@@ -330,26 +331,41 @@ def detect_bill_discount_from_total(inv: dict) -> dict:
 
 def compute_confidence(inv: dict) -> float:
     score = inv.get("confidence", 0.5)
-    # Penalize missing fields
+    reasons: list[str] = []
+
     if not inv.get("vendor_gstin"):
         score -= 0.05
+        reasons.append("Missing vendor GSTIN")
     if not inv.get("invoice_number"):
         score -= 0.1
+        reasons.append("Missing invoice number")
     if not inv.get("invoice_date"):
         score -= 0.1
+        reasons.append("Missing invoice date")
     if not inv.get("line_items"):
         score -= 0.2
-    # Penalize if total doesn't match computed
+        reasons.append("No line items extracted")
+
     computed = sum(
         item["qty"] * item["rate"] * (1 - item.get("disc_percent", 0) / 100)
         for item in inv.get("line_items", [])
     )
     bill_discount = inv.get("bill_discount_amount", 0)
     tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
-    expected_total = computed - bill_discount + tax + inv.get("round_off", 0)
+    charges = sum(c.get("amount", 0) for c in inv.get("charges", []))
+    expected_total = computed - bill_discount + tax + charges + inv.get("round_off", 0)
     actual_total = inv.get("total", 0)
+
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
+        diff = expected_total - actual_total
+        diff_pct = round(abs(diff) / actual_total * 100, 1)
+        direction = "over" if diff > 0 else "under"
+        reasons.append(
+            f"Computed total ₹{expected_total:,.2f} is ₹{abs(diff):,.2f} ({diff_pct}%) {direction} invoice total ₹{actual_total:,.2f}"
+        )
         score -= 0.15
+
+    inv["confidence_reasons"] = reasons
     return max(0.0, min(1.0, score))
 
 
