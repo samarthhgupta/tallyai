@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
 import { loadCompanies, saveCompany, matchCompany, type LocalCompany, type MatchResult } from '@/lib/companies';
+import { findDuplicate, recordInvoice, type InvoiceFingerprint } from '@/lib/invoiceHistory';
 import type {
   ExtractedInvoice,
   FileResult,
@@ -76,6 +77,48 @@ function ConfidenceBar({ score }: { score: number }) {
         <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-xs text-gray-500">{pct}%</span>
+    </div>
+  );
+}
+
+// ─── Duplicate Banner ─────────────────────────────────────────────────────────
+
+function DuplicateBanner({
+  reason,
+  detail,
+  onReject,
+  onKeep,
+}: {
+  reason: 'batch' | 'history';
+  detail: string;
+  onReject: () => void;
+  onKeep: () => void;
+}) {
+  return (
+    <div className="mx-5 mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <svg className="w-5 h-5 text-red-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-red-800">Possible duplicate invoice</p>
+          <p className="text-sm text-red-700 mt-0.5">{detail}</p>
+          <div className="flex gap-3 mt-2">
+            <button
+              onClick={onReject}
+              className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-md hover:bg-red-700 transition-colors"
+            >
+              Reject &amp; remove
+            </button>
+            <button
+              onClick={onKeep}
+              className="px-3 py-1.5 border border-red-300 text-red-700 text-xs font-medium rounded-md hover:bg-red-100 transition-colors"
+            >
+              Keep anyway
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -161,12 +204,25 @@ function CompanyMatchBadge({ match }: { match: MatchResult }) {
   return null;
 }
 
-function InvoiceCard({ inv, sourceUrl, company }: { inv: ExtractedInvoice; sourceUrl?: string; company?: LocalCompany }) {
+function InvoiceCard({
+  inv, sourceUrl, company, historyMatch, onReject,
+}: {
+  inv: ExtractedInvoice;
+  sourceUrl?: string;
+  company?: LocalCompany;
+  historyMatch: InvoiceFingerprint | null;
+  onReject: () => void;
+}) {
   const [reviewed, setReviewed] = useState(false);
+  const [dupDismissed, setDupDismissed] = useState(false);
   const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
   const matchResult: MatchResult = company
     ? matchCompany(company, inv.buyer_gstin, inv.buyer_name)
     : 'no_buyer_data';
+
+  const isBatchDup = !!inv.duplicate_of;
+  const isHistoryDup = !!historyMatch && !dupDismissed;
+  const showDupBanner = (isBatchDup || isHistoryDup) && !dupDismissed;
   const taxType = inv.tax_type;
   const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
   const billDiscount = inv.bill_discount_amount ?? 0;
@@ -177,7 +233,7 @@ function InvoiceCard({ inv, sourceUrl, company }: { inv: ExtractedInvoice; sourc
   const needsReview = !reviewed && inv.total > 0 && Math.abs(computedTotal - inv.total) > 1;
 
   return (
-    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${needsReview ? 'border-amber-300' : 'border-gray-200'}`}>
+    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${showDupBanner ? 'border-red-300' : needsReview ? 'border-amber-300' : 'border-gray-200'}`}>
       {/* Header */}
       <div className="px-5 py-4">
         <div className="flex items-start justify-between gap-4">
@@ -244,6 +300,20 @@ function InvoiceCard({ inv, sourceUrl, company }: { inv: ExtractedInvoice; sourc
           </div>
         </div>
       </div>
+
+      {/* Duplicate Banner */}
+      {showDupBanner && (
+        <DuplicateBanner
+          reason={isBatchDup ? 'batch' : 'history'}
+          detail={
+            isBatchDup
+              ? `This invoice (${inv.invoice_number}) already appears in ${inv.duplicate_of_filename} in this upload batch.`
+              : `Invoice ${inv.invoice_number} from ${inv.vendor_name} was already uploaded on ${new Date(historyMatch!.uploaded_at).toLocaleDateString('en-IN')} (Total ₹${historyMatch!.total.toLocaleString('en-IN')}).`
+          }
+          onReject={onReject}
+          onKeep={() => setDupDismissed(true)}
+        />
+      )}
 
       {/* Review Banner */}
       {needsReview && (
@@ -387,6 +457,8 @@ export default function UploadPage() {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
 
+  const [rejectedInvoices, setRejectedInvoices] = useState<Set<string>>(new Set());
+
   // Add-company form
   const [showAddCompany, setShowAddCompany] = useState(false);
   const [newName, setNewName] = useState('');
@@ -454,6 +526,14 @@ export default function UploadPage() {
     try {
       const data = await extractInvoices(files);
       setResult(data);
+      // Record extracted invoices to history (for future duplicate detection)
+      data.file_results.forEach((fr) => {
+        fr.invoices.forEach((inv) => {
+          if (inv.invoice_number && !inv.duplicate_of) {
+            recordInvoice(inv.invoice_number, inv.vendor_name, inv.invoice_date, inv.total);
+          }
+        });
+      });
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -661,14 +741,22 @@ export default function UploadPage() {
                       </div>
                     )}
                     <div className="space-y-4">
-                      {fr.invoices.map((inv: ExtractedInvoice, idx: number) => (
-                        <InvoiceCard
-                          key={idx}
-                          inv={inv}
-                          sourceUrl={fileUrls[fr.filename]}
-                          company={companies.find((c) => c.id === selectedCompanyId)}
-                        />
-                      ))}
+                      {fr.invoices
+                        .filter((_, idx) => !rejectedInvoices.has(`${fr.filename}:${idx}`))
+                        .map((inv: ExtractedInvoice, idx: number) => {
+                          const key = `${fr.filename}:${idx}`;
+                          const historyMatch = findDuplicate(inv.invoice_number, inv.vendor_name);
+                          return (
+                            <InvoiceCard
+                              key={key}
+                              inv={inv}
+                              sourceUrl={fileUrls[fr.filename]}
+                              company={companies.find((c) => c.id === selectedCompanyId)}
+                              historyMatch={historyMatch}
+                              onReject={() => setRejectedInvoices((prev) => new Set([...prev, key]))}
+                            />
+                          );
+                        })}
                     </div>
                   </div>
                 );
