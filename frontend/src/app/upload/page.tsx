@@ -1,7 +1,10 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
+import { getSession, signOut } from '@/lib/auth';
+import { getMyCompanies, saveBatch, type Company } from '@/lib/db';
 import type {
   ExtractedInvoice,
   FileResult,
@@ -19,6 +22,7 @@ import {
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 function Sidebar() {
+  const router = useRouter();
   return (
     <aside className="fixed top-0 left-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col z-20">
       <div className="flex items-center gap-2 px-5 py-5 border-b border-gray-100">
@@ -29,15 +33,22 @@ function Sidebar() {
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         <div className="w-full text-left px-3 py-2 rounded-md text-sm font-medium bg-indigo-50 text-indigo-700">
-          Dashboard
+          Upload
         </div>
+        <button onClick={() => router.push('/companies')}
+          className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-50">
+          Companies
+        </button>
         <div className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-gray-400 cursor-not-allowed">
           History <span className="text-xs">(coming soon)</span>
         </div>
-        <div className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-gray-400 cursor-not-allowed">
-          Settings <span className="text-xs">(coming soon)</span>
-        </div>
       </nav>
+      <div className="px-3 pb-4">
+        <button onClick={() => signOut().then(() => router.replace('/login'))}
+          className="w-full text-left px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-50">
+          Sign out
+        </button>
+      </div>
     </aside>
   );
 }
@@ -335,6 +346,7 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
+  const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -342,6 +354,21 @@ export default function UploadPage() {
   const [result, setResult] = useState<ExtractionResponse | null>(null);
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auth + company state
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>('');
+  const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
+
+  useEffect(() => {
+    getSession().then((s) => {
+      if (!s) { router.replace('/login'); return; }
+      getMyCompanies().then((list) => {
+        setCompanies(list);
+        if (list.length === 1) setSelectedCompany(list[0].id);
+      });
+    });
+  }, [router]);
 
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
 
@@ -380,13 +407,22 @@ export default function UploadPage() {
     setExtracting(true);
     setExtractError('');
     setResult(null);
-    // Build object URLs for previewing original files
+    setSavedBatchId(null);
     const urls: Record<string, string> = {};
     files.forEach((f) => { urls[f.name] = URL.createObjectURL(f); });
     setFileUrls(urls);
     try {
       const data = await extractInvoices(files);
       setResult(data);
+      // Save to Supabase if a company is selected
+      if (selectedCompany && data.file_results.some((fr) => fr.invoices.length > 0)) {
+        try {
+          const batchId = await saveBatch(selectedCompany, data.file_results);
+          setSavedBatchId(batchId);
+        } catch {
+          // Non-fatal: extraction succeeded, saving failed
+        }
+      }
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -403,6 +439,28 @@ export default function UploadPage() {
           {/* Upload card */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload Invoices</h2>
+
+            {/* Company selector */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
+              {companies.length === 0 ? (
+                <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  No companies yet.
+                  <button onClick={() => router.push('/companies')} className="underline font-medium">Add a company →</button>
+                </div>
+              ) : (
+                <select
+                  value={selectedCompany}
+                  onChange={(e) => setSelectedCompany(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="">— Select a company —</option>
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}{c.gstin ? ` (${c.gstin})` : ''}</option>
+                  ))}
+                </select>
+              )}
+            </div>
 
             {/* Drop zone */}
             <div
@@ -459,9 +517,12 @@ export default function UploadPage() {
 
             {/* Action */}
             <div className="mt-4">
+              {!selectedCompany && files.length > 0 && (
+                <p className="text-xs text-amber-600 mb-2">Select a company above before extracting.</p>
+              )}
               <button
                 onClick={handleExtract}
-                disabled={!files.length || extracting}
+                disabled={!files.length || extracting || !selectedCompany}
                 className="px-6 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {extracting ? (
@@ -482,13 +543,21 @@ export default function UploadPage() {
           {/* Results */}
           {result && (
             <div className="space-y-8">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <h3 className="text-base font-semibold text-gray-900">
                   Extraction Results
                   <span className="ml-2 text-sm font-normal text-gray-500">
                     {result.total_invoices} invoice{result.total_invoices !== 1 ? 's' : ''} found across {result.file_results.length} file{result.file_results.length !== 1 ? 's' : ''}
                   </span>
                 </h3>
+                {savedBatchId && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full font-medium">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Saved to {companies.find((c) => c.id === selectedCompany)?.name}
+                  </span>
+                )}
               </div>
 
               {result.file_results.map((fr: FileResult) => {
