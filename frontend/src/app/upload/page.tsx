@@ -3,7 +3,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
-import { getSession, signOut } from '@/lib/auth';
 import { getMyCompanies, saveBatch, type Company } from '@/lib/db';
 import type {
   ExtractedInvoice,
@@ -43,12 +42,6 @@ function Sidebar() {
           History <span className="text-xs">(coming soon)</span>
         </div>
       </nav>
-      <div className="px-3 pb-4">
-        <button onClick={() => signOut().then(() => router.replace('/login'))}
-          className="w-full text-left px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-50">
-          Sign out
-        </button>
-      </div>
     </aside>
   );
 }
@@ -355,20 +348,19 @@ export default function UploadPage() {
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auth + company state
+  // Company state (no auth required yet)
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string>('');
   const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
 
   useEffect(() => {
-    getSession().then((s) => {
-      if (!s) { router.replace('/login'); return; }
-      getMyCompanies().then((list) => {
+    getMyCompanies().catch(() => {/* not logged in — ignore */}).then((list) => {
+      if (list) {
         setCompanies(list);
         if (list.length === 1) setSelectedCompany(list[0].id);
-      });
+      }
     });
-  }, [router]);
+  }, []);
 
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
 
