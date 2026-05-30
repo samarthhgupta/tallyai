@@ -54,9 +54,24 @@ For each invoice found, return a JSON object with:
   "igst": number,
   "round_off": number (0 if none),
   "total": number,
+  "charges": [
+    {
+      "description": string (e.g. "Postage", "Freight Charges", "Delivery Charges", "Packing Charges"),
+      "amount": number,
+      "gst_percent": number (usually 0; use 18 only if GST is explicitly shown on the charge)
+    }
+  ],
   "tax_type": "cgst_sgst" or "igst",
   "confidence": number between 0 and 1
 }
+
+CHARGES RULE:
+Some invoices include additional charges OUTSIDE the line items — postage, freight, delivery, packing, handling, courier charges. These appear as separate rows between the line items and the GST/total section.
+- Extract each such charge into the "charges" array with its description and amount.
+- If the charge row is blank or zero, do NOT include it in the array.
+- GST is rarely applied to these charges in Indian invoices. Only set gst_percent > 0 if GST is explicitly printed next to that charge.
+- These charges are NOT line items and must NOT appear in the line_items array.
+- They ARE included in the invoice total: Total = Taxable + GST + Charges + Round-off.
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
