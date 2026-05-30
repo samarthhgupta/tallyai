@@ -11,6 +11,7 @@ import type {
   ExtractionResponse,
   LineItem,
   HsnRow,
+  ExtraCharge,
 } from '@/types/invoice';
 import {
   formatINR,
@@ -205,12 +206,13 @@ function CompanyMatchBadge({ match }: { match: MatchResult }) {
 }
 
 function InvoiceCard({
-  inv, sourceUrl, company, historyMatch, onReject,
+  inv, sourceUrl, company, historyMatch, isBatchNew, onReject,
 }: {
   inv: ExtractedInvoice;
   sourceUrl?: string;
   company?: LocalCompany;
   historyMatch: InvoiceFingerprint | null;
+  isBatchNew: boolean;  // true = extracted in this batch, suppress history dup banner
   onReject: () => void;
 }) {
   const [reviewed, setReviewed] = useState(false);
@@ -221,7 +223,7 @@ function InvoiceCard({
     : 'no_buyer_data';
 
   const isBatchDup = !!inv.duplicate_of;
-  const isHistoryDup = !!historyMatch && !dupDismissed;
+  const isHistoryDup = !!historyMatch && !dupDismissed && !isBatchNew;
   const showDupBanner = (isBatchDup || isHistoryDup) && !dupDismissed;
   const taxType = inv.tax_type;
   const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
@@ -229,7 +231,8 @@ function InvoiceCard({
   const hsnRows: HsnRow[] = buildHsnSummary(inv.line_items, taxType, billDiscount);
   const taxableValue = computedSubtotal - billDiscount;
   const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
-  const computedTotal = taxableValue + computedTax + (inv.round_off || 0);
+  const chargesTotal = (inv.charges ?? []).reduce((s, c) => s + c.amount, 0);
+  const computedTotal = taxableValue + computedTax + chargesTotal + (inv.round_off || 0);
   const needsReview = !reviewed && inv.total > 0 && Math.abs(computedTotal - inv.total) > 1;
 
   return (
@@ -412,6 +415,33 @@ function InvoiceCard({
         </div>
       )}
 
+      {/* Freight / Postage / Delivery Charges */}
+      {(inv.charges ?? []).length > 0 && (
+        <div className="px-5 pb-3 pt-3 border-t border-gray-100">
+          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Additional Charges</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  {['Description', 'GST%', 'Amount'].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(inv.charges ?? []).map((c: ExtraCharge, i: number) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs">{c.description}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{c.gst_percent}%</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">{formatINR(c.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Totals */}
       <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex flex-wrap items-center gap-4 text-sm">
         <span className="text-gray-600">Subtotal: <strong>{formatINR(computedSubtotal)}</strong></span>
@@ -434,6 +464,9 @@ function InvoiceCard({
           </>
         ) : (
           <span className="text-gray-600">IGST: <strong>{formatINR(computedTax)}</strong></span>
+        )}
+        {chargesTotal > 0 && (
+          <span className="text-gray-600">Charges: <strong>+{formatINR(chargesTotal)}</strong></span>
         )}
         {(inv.round_off ?? 0) !== 0 && (
           <span className="text-gray-400 text-xs">Round off: {formatINR(inv.round_off)}</span>
@@ -462,6 +495,8 @@ export default function UploadPage() {
   const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
 
   const [rejectedInvoices, setRejectedInvoices] = useState<Set<string>>(new Set());
+  // Keys of invoices extracted in the current batch — excluded from history duplicate check
+  const [currentBatchKeys, setCurrentBatchKeys] = useState<Set<string>>(new Set());
 
   // Add-company form
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -529,15 +564,19 @@ export default function UploadPage() {
     setFileUrls(urls);
     try {
       const data = await extractInvoices(files);
-      setResult(data);
-      // Record extracted invoices to history (for future duplicate detection)
+      const batchKeys = new Set<string>();
       data.file_results.forEach((fr) => {
         fr.invoices.forEach((inv) => {
           if (inv.invoice_number && !inv.duplicate_of) {
+            // Record to history for future sessions BEFORE rendering,
+            // but track the keys so we don't flag them as history duplicates right now
             recordInvoice(inv.invoice_number, inv.vendor_name, inv.invoice_date, inv.total);
+            batchKeys.add(`${inv.invoice_number}__${inv.vendor_name}`);
           }
         });
       });
+      setCurrentBatchKeys(batchKeys);
+      setResult(data);
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -757,6 +796,7 @@ export default function UploadPage() {
                               sourceUrl={fileUrls[fr.filename]}
                               company={companies.find((c) => c.id === selectedCompanyId)}
                               historyMatch={historyMatch}
+                              isBatchNew={currentBatchKeys.has(`${inv.invoice_number}__${inv.vendor_name}`)}
                               onReject={() => setRejectedInvoices((prev) => new Set(Array.from(prev).concat(key)))}
                             />
                           );

@@ -30,6 +30,12 @@ export interface LineItem {
   amount?: number;     // printed amount from invoice (after discount, before GST)
 }
 
+export interface ExtraCharge {
+  description: string;  // "Postage", "Freight", "Delivery Charges", etc.
+  amount: number;
+  gst_percent: number;  // usually 0
+}
+
 export interface ExtractedInvoice {
   vendor_name: string;
   vendor_gstin: string | null;
@@ -46,6 +52,7 @@ export interface ExtractedInvoice {
   cgst: number;
   sgst: number;
   igst: number;
+  charges?: ExtraCharge[];   // freight, postage, delivery — excluded from HSN summary
   round_off: number;
   total: number;
   tax_type: 'cgst_sgst' | 'igst';
