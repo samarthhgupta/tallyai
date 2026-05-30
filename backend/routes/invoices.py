@@ -166,6 +166,19 @@ SELF-CORRECTION STEP — always do this before finalising each invoice:
   5. If yes — that is a missed bill-level discount. Set bill_discount_amount to that value and recalculate.
   6. Only after this check should you finalise the invoice JSON.
 
+COMPLETENESS CHECK — do this after extracting all invoices, before returning:
+  1. Count the number of distinct invoice numbers / bill numbers you found in the document.
+  2. Scan the ENTIRE document again from top to bottom — look for ANY of these invoice boundary markers you may have missed:
+     - A new vendor name / company letterhead
+     - A new "Invoice No." / "Bill No." / "Tax Invoice" / "Bill of Supply" header
+     - A new "Bill To" / "Buyer" section
+     - A separator line, page break, or clear visual boundary between invoices
+     - A different paper colour or layout style (e.g. a yellow/coloured invoice among white ones)
+     - A new barcode or QR code header
+  3. For EACH distinct invoice boundary found, verify you have a corresponding JSON object in your output.
+  4. If any invoice was missed, extract it now and add it to the array.
+  5. Only return the final JSON array after this completeness check passes.
+
 When NO bill-level discount is present:
   - Set "bill_discount_amount": 0
   - Set "bill_discount_percent": null
