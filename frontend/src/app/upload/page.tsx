@@ -352,6 +352,10 @@ function InvoiceCard({
                     <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">{formatINR(calcLineAmount(item))}</td>
                   </tr>
                 ))}
+                <tr className="bg-gray-50 font-semibold">
+                  <td colSpan={5} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total Taxable Value</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(computedSubtotal)}</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -753,7 +757,7 @@ export default function UploadPage() {
                               sourceUrl={fileUrls[fr.filename]}
                               company={companies.find((c) => c.id === selectedCompanyId)}
                               historyMatch={historyMatch}
-                              onReject={() => setRejectedInvoices((prev) => new Set([...prev, key]))}
+                              onReject={() => setRejectedInvoices((prev) => new Set(Array.from(prev).concat(key)))}
                             />
                           );
                         })}
