@@ -555,20 +555,17 @@ async def _extract_invoices_from_file(
 
 def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
     """
-    When the same invoice is split across separate uploaded files
-    (e.g. page1.jpg + page2.jpg), Claude returns one incomplete invoice per file.
-    We detect this by matching invoice numbers and merge them into a single invoice.
+    Two cases for invoices sharing the same invoice number across files:
 
-    Merge strategy:
-    - Combine line_items from all pages (page order = upload order)
-    - Financial totals (cgst, sgst, igst, total, round_off) come from whichever
-      page actually has them (usually the last page)
-    - Header fields (vendor, date, buyer) filled from whichever page has them
-    - Merged invoice replaces the entry in the first file; other files' entries removed
+    1. Multi-page split (one or both pages incomplete) → MERGE into one invoice.
+       A page is "incomplete" if total == 0 or line_items is empty.
+
+    2. True duplicate (both are complete invoices) → FLAG as duplicate.
+       Do not merge; mark the later occurrence with duplicate_of_filename so
+       the UI can prompt the human to reject it.
     """
     from collections import defaultdict
 
-    # Index all invoices: { norm_invoice_num: [(file_idx, inv_idx, inv), ...] }
     index: dict = defaultdict(list)
     for fi, fr in enumerate(file_results):
         for ii, inv in enumerate(fr["invoices"]):
@@ -576,38 +573,44 @@ def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
             if num:
                 index[num].append((fi, ii, inv))
 
-    merged_keys: set = set()  # (fi, ii) pairs that were merged into another
+    merged_keys: set = set()
 
     for num, entries in index.items():
         if len(entries) < 2:
             continue
 
-        # Sort by file upload order
         entries.sort(key=lambda x: x[0])
         base_fi, base_ii, base = entries[0]
 
         for fi, ii, page in entries[1:]:
-            # Append line items from subsequent pages
-            base["line_items"] = base.get("line_items", []) + page.get("line_items", [])
+            base_complete = base.get("total", 0) > 0 and len(base.get("line_items", [])) > 0
+            page_complete = page.get("total", 0) > 0 and len(page.get("line_items", [])) > 0
 
-            # Fill missing header fields from page 2+
-            for field in ("vendor_name", "vendor_gstin", "vendor_address",
-                          "buyer_name", "buyer_gstin", "invoice_date", "tax_type"):
-                if not base.get(field) and page.get(field):
-                    base[field] = page[field]
+            if base_complete and page_complete:
+                # Both are complete → true duplicate
+                page["duplicate_of"] = base.get("invoice_number", "")
+                page["duplicate_of_filename"] = file_results[base_fi]["filename"]
+            else:
+                # At least one is incomplete → multi-page split, merge them
+                base["line_items"] = base.get("line_items", []) + page.get("line_items", [])
 
-            # Use financial totals from whichever page has a non-zero total
-            if base.get("total", 0) == 0 and page.get("total", 0) > 0:
-                for f in ("subtotal", "bill_discount_amount", "bill_discount_percent",
-                          "cgst", "sgst", "igst", "round_off", "total"):
-                    if page.get(f) is not None:
-                        base[f] = page[f]
+                for field in ("vendor_name", "vendor_gstin", "vendor_address",
+                              "buyer_name", "buyer_gstin", "invoice_date", "tax_type"):
+                    if not base.get(field) and page.get(field):
+                        base[field] = page[field]
 
-            base["_merged_from_pages"] = True
-            merged_keys.add((fi, ii))
+                if base.get("total", 0) == 0 and page.get("total", 0) > 0:
+                    for f in ("subtotal", "bill_discount_amount", "bill_discount_percent",
+                              "cgst", "sgst", "igst", "round_off", "total"):
+                        if page.get(f) is not None:
+                            base[f] = page[f]
 
-        # Re-run post-processing on the merged invoice
-        base = normalize_hsn_codes(base)
+                base["_merged_from_pages"] = True
+                merged_keys.add((fi, ii))
+
+        # Re-run post-processing on merged invoice only
+        if not base.get("duplicate_of"):
+            base = normalize_hsn_codes(base)
         base = correct_line_item_rates(base)
         base = detect_bill_discount_from_total(base)
         base["confidence"] = compute_confidence(base)

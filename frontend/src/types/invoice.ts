@@ -51,6 +51,9 @@ export interface ExtractedInvoice {
   tax_type: 'cgst_sgst' | 'igst';
   confidence: number;
   confidence_reasons?: string[];
+  bill_discount_auto_detected?: boolean;
+  duplicate_of?: string;           // invoice_number of earlier copy (within-batch)
+  duplicate_of_filename?: string;  // filename of that earlier copy
 }
 
 export interface FileResult {
