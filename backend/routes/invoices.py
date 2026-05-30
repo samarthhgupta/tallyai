@@ -66,12 +66,23 @@ For each invoice found, return a JSON object with:
 }
 
 CHARGES RULE:
-Some invoices include additional charges OUTSIDE the line items — postage, freight, delivery, packing, handling, courier charges. These appear as separate rows between the line items and the GST/total section.
-- Extract each such charge into the "charges" array with its description and amount.
-- If the charge row is blank or zero, do NOT include it in the array.
-- GST is rarely applied to these charges in Indian invoices. Only set gst_percent > 0 if GST is explicitly printed next to that charge.
-- These charges are NOT line items and must NOT appear in the line_items array.
-- They ARE included in the invoice total: Total = Taxable + GST + Charges + Round-off.
+Some invoices include additional charges such as postage, freight, delivery, builty, packing, handling, courier charges. Where these appear determines how to extract them:
+
+CASE 1 — Charge appears AMONG the line items WITH an HSN/SAC code:
+  Treat it exactly like a regular line item. Put it in "line_items", not in "charges".
+  It WILL appear in the HSN Summary. GST applies per the rate column.
+  Example: "Builty Charges  HSN:9965  Qty:1  Rate:50  GST:0%" → goes in line_items.
+
+CASE 2 — Charge appears AFTER the line items subtotal WITHOUT an HSN code:
+  Put it in the "charges" array. It will NOT appear in the HSN Summary.
+  Example: "Postage: ₹30" printed below the taxable total → goes in charges[].
+  - Only set gst_percent > 0 if GST is explicitly printed next to that charge.
+  - If the charge row is blank or zero, do NOT include it.
+
+LINE ITEM COMPLETENESS — never skip a line item:
+  After extracting all line items, count the serial numbers (S.No.) on the invoice.
+  If S.No. runs from 1 to N, you must have exactly N line items extracted.
+  If any S.No. is missing from your output, find and extract it before finalising.
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
