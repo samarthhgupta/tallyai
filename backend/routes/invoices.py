@@ -624,17 +624,25 @@ async def _extract_invoices_from_file(
         if not isinstance(invoices, list):
             invoices = [invoices]
     except json.JSONDecodeError:
-        # Try to extract JSON array from response
-        match = re.search(r"\[.*\]", raw_text, re.DOTALL)
-        if match:
-            try:
-                invoices = json.loads(match.group())
-                if not isinstance(invoices, list):
-                    invoices = [invoices]
-            except json.JSONDecodeError:
-                return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
-        else:
-            return [], f"No JSON array found in Claude response: {raw_text[:200]}"
+        # Try to extract JSON array from response — handles fenced or partially-wrapped output
+        # First try stripping fences again in case the earlier strip missed an edge case
+        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", raw_text)
+        cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
+        try:
+            invoices = json.loads(cleaned)
+            if not isinstance(invoices, list):
+                invoices = [invoices]
+        except json.JSONDecodeError:
+            match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+            if match:
+                try:
+                    invoices = json.loads(match.group())
+                    if not isinstance(invoices, list):
+                        invoices = [invoices]
+                except json.JSONDecodeError:
+                    return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
+            else:
+                return [], f"No JSON array found in Claude response: {raw_text[:200]}"
 
     # Normalise HSN codes, correct rates, detect missed discounts, then score
     for inv in invoices:
