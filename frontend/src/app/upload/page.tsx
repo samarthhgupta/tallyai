@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
-import { getMyCompanies, saveBatch, type Company } from '@/lib/db';
+import { loadCompanies, saveCompany, matchCompany, type LocalCompany, type MatchResult } from '@/lib/companies';
 import type {
   ExtractedInvoice,
   FileResult,
@@ -142,9 +142,31 @@ function ReviewBanner({ computedTotal, invoiceTotal, autoDetectedDiscount, sourc
 
 // ─── Invoice Card ─────────────────────────────────────────────────────────────
 
-function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: string }) {
+function CompanyMatchBadge({ match }: { match: MatchResult }) {
+  if (match === 'gstin_match') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 border border-green-200">
+      ✓ GSTIN matched
+    </span>
+  );
+  if (match === 'name_match') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200">
+      ~ Name matched
+    </span>
+  );
+  if (match === 'mismatch') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+      ✗ Company mismatch
+    </span>
+  );
+  return null;
+}
+
+function InvoiceCard({ inv, sourceUrl, company }: { inv: ExtractedInvoice; sourceUrl?: string; company?: LocalCompany }) {
   const [reviewed, setReviewed] = useState(false);
   const vendorState = inv.vendor_gstin ? getStateFromGstin(inv.vendor_gstin) : null;
+  const matchResult: MatchResult = company
+    ? matchCompany(company, inv.buyer_gstin, inv.buyer_name)
+    : 'no_buyer_data';
   const taxType = inv.tax_type;
   const computedSubtotal = inv.line_items.reduce((s, item) => s + calcLineAmount(item), 0);
   const billDiscount = inv.bill_discount_amount ?? 0;
@@ -163,6 +185,12 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
             <div className="flex items-center gap-3 flex-wrap">
               <span className="font-semibold text-gray-900">{inv.vendor_name || 'Unknown Vendor'}</span>
               <ConfidenceBadge score={inv.confidence} />
+              {company && <CompanyMatchBadge match={matchResult} />}
+              {matchResult === 'mismatch' && (
+                <span className="text-xs text-red-600">
+                  Invoice is addressed to "{inv.buyer_name || inv.buyer_gstin}" — not {company?.name}
+                </span>
+              )}
               {needsReview && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -189,12 +217,18 @@ function InvoiceCard({ inv, sourceUrl }: { inv: ExtractedInvoice; sourceUrl?: st
               {inv.invoice_number && <span>Invoice #{inv.invoice_number}</span>}
               {inv.invoice_date && <span>· {inv.invoice_date}</span>}
               {inv.vendor_gstin && (
-                <span>· GSTIN: <span className="font-mono text-xs">{inv.vendor_gstin}</span></span>
+                <span>· Vendor GSTIN: <span className="font-mono text-xs">{inv.vendor_gstin}</span></span>
               )}
               {vendorState && vendorState !== 'Unknown' && (
                 <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{vendorState}</span>
               )}
             </div>
+            {(inv.buyer_name || inv.buyer_gstin) && (
+              <div className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-gray-400">
+                <span>Billed to: <span className="text-gray-600 font-medium">{inv.buyer_name || '—'}</span></span>
+                {inv.buyer_gstin && <span>· <span className="font-mono">{inv.buyer_gstin}</span></span>}
+              </div>
+            )}
           </div>
           <div className="shrink-0 text-right">
             <ConfidenceBar score={inv.confidence} />
@@ -348,19 +382,33 @@ export default function UploadPage() {
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Company state (no auth required yet)
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompany, setSelectedCompany] = useState<string>('');
+  // Company state
+  const [companies, setCompanies] = useState<LocalCompany[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
   const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
 
+  // Add-company form
+  const [showAddCompany, setShowAddCompany] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newGstin, setNewGstin] = useState('');
+
   useEffect(() => {
-    getMyCompanies().catch(() => {/* not logged in — ignore */}).then((list) => {
-      if (list) {
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompany(list[0].id);
-      }
-    });
+    const list = loadCompanies();
+    setCompanies(list);
+    if (list.length === 1) setSelectedCompanyId(list[0].id);
   }, []);
+
+  const handleAddCompany = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    const c = saveCompany(newName, newGstin);
+    const updated = loadCompanies();
+    setCompanies(updated);
+    setSelectedCompanyId(c.id);
+    setNewName('');
+    setNewGstin('');
+    setShowAddCompany(false);
+  };
 
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
 
@@ -406,15 +454,6 @@ export default function UploadPage() {
     try {
       const data = await extractInvoices(files);
       setResult(data);
-      // Save to Supabase if a company is selected
-      if (selectedCompany && data.file_results.some((fr) => fr.invoices.length > 0)) {
-        try {
-          const batchId = await saveBatch(selectedCompany, data.file_results);
-          setSavedBatchId(batchId);
-        } catch {
-          // Non-fatal: extraction succeeded, saving failed
-        }
-      }
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -432,25 +471,64 @@ export default function UploadPage() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload Invoices</h2>
 
-            {/* Company selector */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
-              {companies.length === 0 ? (
-                <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                  No companies yet.
-                  <button onClick={() => router.push('/companies')} className="underline font-medium">Add a company →</button>
-                </div>
-              ) : (
-                <select
-                  value={selectedCompany}
-                  onChange={(e) => setSelectedCompany(e.target.value)}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            {/* Company selector + add */}
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700">Company</label>
+                <button
+                  type="button"
+                  onClick={() => setShowAddCompany((v) => !v)}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
                 >
-                  <option value="">— Select a company —</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}{c.gstin ? ` (${c.gstin})` : ''}</option>
-                  ))}
-                </select>
+                  {showAddCompany ? 'Cancel' : '+ Add company'}
+                </button>
+              </div>
+
+              {showAddCompany && (
+                <form onSubmit={handleAddCompany} className="mb-3 bg-indigo-50 border border-indigo-200 rounded-lg p-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Company Name *</label>
+                      <input
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        required
+                        autoFocus
+                        placeholder="e.g. Atul Udyog"
+                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">GSTIN</label>
+                      <input
+                        value={newGstin}
+                        onChange={(e) => setNewGstin(e.target.value.toUpperCase())}
+                        placeholder="27AABCU9603R1ZX"
+                        maxLength={15}
+                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors">
+                    Save Company
+                  </button>
+                </form>
+              )}
+
+              <select
+                value={selectedCompanyId}
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+              >
+                <option value="">— Select a company —</option>
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{c.gstin ? ` · ${c.gstin}` : ''}
+                  </option>
+                ))}
+              </select>
+              {companies.length === 0 && (
+                <p className="text-xs text-gray-400 mt-1">Add a company above to enable invoice matching.</p>
               )}
             </div>
 
@@ -509,12 +587,9 @@ export default function UploadPage() {
 
             {/* Action */}
             <div className="mt-4">
-              {!selectedCompany && files.length > 0 && (
-                <p className="text-xs text-amber-600 mb-2">Select a company above before extracting.</p>
-              )}
               <button
                 onClick={handleExtract}
-                disabled={!files.length || extracting || !selectedCompany}
+                disabled={!files.length || extracting}
                 className="px-6 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {extracting ? (
@@ -542,12 +617,9 @@ export default function UploadPage() {
                     {result.total_invoices} invoice{result.total_invoices !== 1 ? 's' : ''} found across {result.file_results.length} file{result.file_results.length !== 1 ? 's' : ''}
                   </span>
                 </h3>
-                {savedBatchId && (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full font-medium">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Saved to {companies.find((c) => c.id === selectedCompany)?.name}
+                {selectedCompanyId && companies.find((c) => c.id === selectedCompanyId) && (
+                  <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
+                    Matching against: <strong>{companies.find((c) => c.id === selectedCompanyId)?.name}</strong>
                   </span>
                 )}
               </div>
@@ -590,7 +662,12 @@ export default function UploadPage() {
                     )}
                     <div className="space-y-4">
                       {fr.invoices.map((inv: ExtractedInvoice, idx: number) => (
-                        <InvoiceCard key={idx} inv={inv} sourceUrl={fileUrls[fr.filename]} />
+                        <InvoiceCard
+                          key={idx}
+                          inv={inv}
+                          sourceUrl={fileUrls[fr.filename]}
+                          company={companies.find((c) => c.id === selectedCompanyId)}
+                        />
                       ))}
                     </div>
                   </div>
