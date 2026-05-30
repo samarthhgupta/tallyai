@@ -134,6 +134,21 @@ When NO bill-level discount is present:
   - Set "bill_discount_amount": 0
   - Set "bill_discount_percent": null
 
+MULTI-PAGE INVOICE RULE:
+A single invoice often spans two or more pages. This is common for scanned invoices. Recognise a multi-page invoice by:
+  - "Page 1 of 2" / "Page 2 of 2" printed at the bottom
+  - "Continued..." or "Contd..." at the bottom of page 1
+  - "...Continued" or a page number at the top of page 2
+  - The same invoice number appearing on consecutive pages
+  - Page 1 has only line items (no GST summary / total) — GST and total appear on page 2
+
+When you see multiple pages that belong to the same invoice:
+  - Combine ALL line items from ALL pages into ONE invoice object
+  - The GST amounts, totals, and round-off are usually on the LAST page — use those
+  - Use the invoice number, date, vendor, and buyer details from whichever page shows them
+  - Do NOT return a separate JSON object for each page — one invoice = one JSON object
+  - If page 2 has no invoice number but clearly continues page 1 (same vendor, same format), treat it as the same invoice
+
 Other rules:
 - Line items: do NOT capture product/service names. HSN/SAC code is mandatory per line item.
 - If a line item has no explicit HSN, put "UNKNOWN".
@@ -538,6 +553,76 @@ async def _extract_invoices_from_file(
     return invoices, None
 
 
+def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
+    """
+    When the same invoice is split across separate uploaded files
+    (e.g. page1.jpg + page2.jpg), Claude returns one incomplete invoice per file.
+    We detect this by matching invoice numbers and merge them into a single invoice.
+
+    Merge strategy:
+    - Combine line_items from all pages (page order = upload order)
+    - Financial totals (cgst, sgst, igst, total, round_off) come from whichever
+      page actually has them (usually the last page)
+    - Header fields (vendor, date, buyer) filled from whichever page has them
+    - Merged invoice replaces the entry in the first file; other files' entries removed
+    """
+    from collections import defaultdict
+
+    # Index all invoices: { norm_invoice_num: [(file_idx, inv_idx, inv), ...] }
+    index: dict = defaultdict(list)
+    for fi, fr in enumerate(file_results):
+        for ii, inv in enumerate(fr["invoices"]):
+            num = (inv.get("invoice_number") or "").strip().upper()
+            if num:
+                index[num].append((fi, ii, inv))
+
+    merged_keys: set = set()  # (fi, ii) pairs that were merged into another
+
+    for num, entries in index.items():
+        if len(entries) < 2:
+            continue
+
+        # Sort by file upload order
+        entries.sort(key=lambda x: x[0])
+        base_fi, base_ii, base = entries[0]
+
+        for fi, ii, page in entries[1:]:
+            # Append line items from subsequent pages
+            base["line_items"] = base.get("line_items", []) + page.get("line_items", [])
+
+            # Fill missing header fields from page 2+
+            for field in ("vendor_name", "vendor_gstin", "vendor_address",
+                          "buyer_name", "buyer_gstin", "invoice_date", "tax_type"):
+                if not base.get(field) and page.get(field):
+                    base[field] = page[field]
+
+            # Use financial totals from whichever page has a non-zero total
+            if base.get("total", 0) == 0 and page.get("total", 0) > 0:
+                for f in ("subtotal", "bill_discount_amount", "bill_discount_percent",
+                          "cgst", "sgst", "igst", "round_off", "total"):
+                    if page.get(f) is not None:
+                        base[f] = page[f]
+
+            base["_merged_from_pages"] = True
+            merged_keys.add((fi, ii))
+
+        # Re-run post-processing on the merged invoice
+        base = normalize_hsn_codes(base)
+        base = correct_line_item_rates(base)
+        base = detect_bill_discount_from_total(base)
+        base["confidence"] = compute_confidence(base)
+        file_results[base_fi]["invoices"][base_ii] = base
+
+    # Remove entries that were merged into another invoice
+    for fi, fr in enumerate(file_results):
+        fr["invoices"] = [
+            inv for ii, inv in enumerate(fr["invoices"])
+            if (fi, ii) not in merged_keys
+        ]
+
+    return file_results
+
+
 @router.post("/upload")
 async def upload_invoices(
     files: list[UploadFile] = File(...),
@@ -561,7 +646,6 @@ async def upload_invoices(
     batch_id = str(uuid.uuid4())
 
     file_results = []
-    total_invoices = 0
 
     for upload in files:
         invoices, error = await _extract_invoices_from_file(upload, client)
@@ -570,7 +654,12 @@ async def upload_invoices(
             "invoices": invoices,
             "error": error,
         })
-        total_invoices += len(invoices)
+
+    # Merge invoices with the same invoice number across different files
+    # (handles the case where a multi-page invoice was scanned as separate image files)
+    file_results = _merge_cross_file_invoices(file_results)
+
+    total_invoices = sum(len(fr["invoices"]) for fr in file_results)
 
     return {
         "batch_id": batch_id,
