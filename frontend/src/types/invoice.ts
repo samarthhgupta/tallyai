@@ -32,10 +32,12 @@ export interface LineItem {
 
 export interface ExtractedInvoice {
   vendor_name: string;
-  invoice_number: string;
-  invoice_date: string;
   vendor_gstin: string | null;
   vendor_address: string | null;
+  buyer_name: string | null;
+  buyer_gstin: string | null;
+  invoice_number: string;
+  invoice_date: string;
   line_items: LineItem[];
   subtotal: number;
   bill_discount_amount: number;            // 0 if none; deducted from subtotal before GST

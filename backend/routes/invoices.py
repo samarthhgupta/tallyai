@@ -29,10 +29,12 @@ SYSTEM_PROMPT = """You are an expert Indian invoice data extractor. Extract ALL 
 For each invoice found, return a JSON object with:
 {
   "vendor_name": string,
-  "invoice_number": string,
-  "invoice_date": string (YYYY-MM-DD),
   "vendor_gstin": string or null,
   "vendor_address": string or null,
+  "buyer_name": string or null,
+  "buyer_gstin": string or null,
+  "invoice_number": string,
+  "invoice_date": string (YYYY-MM-DD),
   "line_items": [
     {
       "hsn": string (HSN or SAC code),
@@ -84,6 +86,11 @@ EXAMPLE (standard invoice):
   rate = 1000, disc_percent = 0, amount = 5000
 
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+BUYER FIELDS:
+- "buyer_name": the name of the company the invoice is addressed TO (appears under "Bill To", "Consignee", "Buyer", "Ship To"). This is NOT the vendor/seller.
+- "buyer_gstin": the GSTIN of the buyer/recipient, usually printed next to the buyer's name or address.
+- If the invoice does not show buyer details, set both to null.
 
 BILL-LEVEL DISCOUNT RULE:
 Some Indian invoices show a discount on the overall invoice value (not per line item). This is especially common in handwritten invoices. Look for ANY of these patterns anywhere between the line items subtotal and the GST section:
