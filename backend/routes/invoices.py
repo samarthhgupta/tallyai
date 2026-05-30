@@ -599,7 +599,7 @@ async def _extract_invoices_from_file(
     try:
         response = client.messages.create(
             model="claude-opus-4-5",
-            max_tokens=4096,
+            max_tokens=8192,
             system=SYSTEM_PROMPT,
             messages=[
                 {
@@ -610,6 +610,12 @@ async def _extract_invoices_from_file(
             ],
         )
         raw_text = response.content[0].text.strip()
+        # Warn if Claude hit the token limit — response may be truncated
+        if response.stop_reason == "max_tokens":
+            logger.warning(
+                "Claude hit max_tokens for %s — response may be truncated (%d chars)",
+                upload.filename, len(raw_text),
+            )
     except Exception as exc:
         logger.exception("Claude API call failed for %s", upload.filename)
         return [], f"Claude API error: {exc}"
