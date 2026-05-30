@@ -75,19 +75,35 @@ Some invoices show a discounted rate in the Rate column. To detect this:
   rate = amount / (qty × (1 - disc_percent/100))
 
 COMPOUND DISCOUNT RULE — very common in Indian stationery/book invoices:
-Some invoices show discount as two chained percentages, e.g. "40+10.71" or "30+5".
-This means: first apply 40%, then apply 10.71% on the remainder.
-You MUST convert this to a single effective percentage before storing:
-  effective_disc = 1 - (1 - A/100) × (1 - B/100)
-  disc_percent = effective_disc × 100
 
-EXAMPLE (Bharat Book Depot style — compound discount):
+FORM 1 — Single cell with two percentages, e.g. "40+10.71" or "30+5":
+  This means: first apply 40%, then apply 10.71% on the remainder.
+  Convert to a single effective percentage:
+    effective_disc = 1 - (1 - A/100) × (1 - B/100)
+    disc_percent = effective_disc × 100
+
+FORM 2 — Two SEPARATE discount columns, e.g. "Disc1%" and "Disc2%" (or "Trade Disc%" and "Cash Disc%"):
+  These are also chained discounts applied sequentially. Combine them the same way:
+    effective_disc = 1 - (1 - Disc1/100) × (1 - Disc2/100)
+    disc_percent = effective_disc × 100
+  IMPORTANT: If Disc2% = 0, the effective discount is just Disc1%.
+  Do NOT add them (45 + 45 ≠ 90% — this is wrong). Always compound them.
+
+EXAMPLE (Bharat Book Depot style — compound single-cell discount):
   Printed columns: Rate=40, Amount=1,32,000, Disc%=40+10.71, Net Amt=70,717.68, GST%=12
   - "Amount" here is qty×rate = 3300×40 = 1,32,000 (PRE-discount — ignore for our amount field)
   - "Net Amt" = 70,717.68 is the post-discount taxable amount — THIS goes in "amount"
   - effective_disc = 1 - (1-0.40)×(1-0.1071) = 1 - 0.60×0.8929 = 46.43%
   So: rate=40, disc_percent=46.43, amount=70717.68
-  Verify: 3300 × 40 × (1 - 46.43/100) = 1,32,000 × 0.5357 = 70,712 ≈ 70,717.68 ✓
+  Verify: 3300 × 40 × (1 - 46.43/100) ≈ 70,717.68 ✓
+
+EXAMPLE (J.B. Book Agency style — two separate discount columns):
+  Printed columns: Rate=399, Amount=2,793, Disc1%=45, Disc2%=0, Net Amount=1,536.15, GST%=0
+  - "Amount" = 7×399 = 2,793 is PRE-discount gross — ignore for our amount field
+  - "Net Amount" = 1,536.15 is post-discount taxable — THIS goes in "amount"
+  - effective_disc = 1 - (1-0.45)×(1-0) = 45%
+  So: rate=399, disc_percent=45, amount=1536.15
+  Verify: 7 × 399 × (1 - 45/100) = 2,793 × 0.55 = 1,536.15 ✓
 
 EXAMPLE (Dream Touch style — single discount, post-discount rate in Rate column):
   Printed columns: Rate=331.10, Disc=14%, Qty=30, Amount=9933
@@ -102,8 +118,10 @@ EXAMPLE (standard invoice — no discount):
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
 
 COLUMN IDENTIFICATION RULE — when an invoice has both "Amount" and "Net Amt" columns:
-  - "Amount" = qty × rate (pre-discount gross) — DO NOT use this as the "amount" field
-  - "Net Amt" / "Net Amount" / "Taxable" = after discount, before GST — USE THIS as the "amount" field
+  - "Amount" / "Gross Amount" = qty × rate (pre-discount gross) — DO NOT use this as the "amount" field
+  - "Net Amt" / "Net Amount" / "Taxable" / "Value" = after ALL discounts, before GST — USE THIS as the "amount" field
+  - When in doubt: the "amount" field must satisfy  qty × rate × (1 - disc_percent/100) ≈ amount.
+    Cross-check using the printed Net Amount column — they must agree.
 
 BUYER FIELDS:
 - "buyer_name": the name of the company the invoice is addressed TO (appears under "Bill To", "Consignee", "Buyer", "Ship To"). This is NOT the vendor/seller.
@@ -196,6 +214,7 @@ def correct_line_item_rates(inv: dict) -> dict:
     """
     for item in inv.get("line_items", []):
         # Sanitise disc_percent — handle "40+10.71" strings from Claude
+        # Also handles cases where Claude summed two discount columns (e.g. 45+0=45 or 45+45=90 — wrong)
         disc = item.get("disc_percent", 0)
         if isinstance(disc, str) and "+" in disc:
             parts = disc.split("+")
@@ -208,6 +227,8 @@ def correct_line_item_rates(inv: dict) -> dict:
             except ValueError:
                 disc = 0
                 item["disc_percent"] = 0
+        elif isinstance(disc, (int, float)):
+            disc = float(disc)
 
         amount = item.get("amount")
         qty = item.get("qty", 0)
