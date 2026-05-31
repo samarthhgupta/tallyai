@@ -143,6 +143,73 @@ export function ConfidenceBadge({ score }: { score: number }) {
   return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Low {pct}%</span>;
 }
 
+// Maps a confidence_reason string to its server-side penalty amount (percentage points).
+function penaltyForReason(reason: string): number {
+  if (reason.includes("Missing vendor GSTIN")) return 5;
+  if (reason.includes("Missing invoice number")) return 10;
+  if (reason.includes("Missing invoice date")) return 10;
+  if (reason.includes("No line items")) return 20;
+  if (reason.includes("doesn't match") || reason.includes("Computed total") || reason.includes("is ₹")) return 15;
+  return 0;
+}
+
+function ConfidenceInfoPopover({ score, reasons }: { score: number; reasons: string[] }) {
+  const [open, setOpen] = useState(false);
+  const pct = Math.round(score * 100);
+
+  const totalPenalty = reasons.reduce((s, r) => s + penaltyForReason(r), 0);
+  const basePct = Math.min(100, pct + totalPenalty);
+
+  return (
+    <span className="relative inline-flex items-center">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        title="Why is confidence below 90%? Click to see breakdown."
+        className="ml-1 text-amber-500 hover:text-amber-700 focus:outline-none"
+        aria-label="Confidence breakdown"
+      >
+        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          {/* backdrop */}
+          <span className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <span className="absolute left-0 top-6 z-50 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+            <p className="font-semibold text-gray-800 mb-2 border-b border-gray-100 pb-1.5">Confidence Breakdown</p>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-gray-600">
+                <span>AI extraction confidence</span>
+                <span className="font-medium tabular-nums">{basePct}%</span>
+              </div>
+              {reasons.map((r, i) => {
+                const penalty = penaltyForReason(r);
+                return (
+                  <div key={i} className="flex justify-between text-red-600">
+                    <span className="flex-1 pr-2 leading-tight">{r}</span>
+                    {penalty > 0 && <span className="font-medium tabular-nums shrink-0">−{penalty}%</span>}
+                  </div>
+                );
+              })}
+              {reasons.length === 0 && (
+                <p className="text-gray-500 italic">No specific penalties recorded. Claude rated this extraction at {pct}% confidence.</p>
+              )}
+              <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-1.5 mt-1">
+                <span>Final confidence score</span>
+                <span className="tabular-nums">{pct}%</span>
+              </div>
+            </div>
+            <p className="mt-2 text-gray-400 leading-tight">
+              Confidence reflects how clearly the invoice could be read and whether all computed totals reconcile.
+            </p>
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
 export function ConfidenceBar({ score }: { score: number }) {
   const pct = Math.round(score * 100);
   const color = pct >= 80 ? 'bg-green-500' : pct >= 60 ? 'bg-amber-400' : 'bg-red-500';
@@ -416,7 +483,15 @@ export function InvoiceCard({
       {/* ── Action Bar ── */}
       <div className={`px-5 py-3 flex items-center justify-between gap-4 flex-wrap ${editMode ? 'bg-indigo-50 border-b border-indigo-100' : 'bg-gray-50 border-b border-gray-100'}`}>
         <div className="flex items-center gap-2 flex-wrap">
-          <ConfidenceBadge score={inv.confidence} />
+          <span className="inline-flex items-center gap-0.5">
+            <ConfidenceBadge score={inv.confidence} />
+            {inv.confidence < 0.90 && (
+              <ConfidenceInfoPopover
+                score={inv.confidence}
+                reasons={inv.confidence_reasons ?? []}
+              />
+            )}
+          </span>
           {company && <CompanyMatchBadge match={matchResult} />}
           {matchResult === 'mismatch' && (
             <span className="text-xs text-red-600">
