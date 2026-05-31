@@ -50,6 +50,20 @@ function getSacForCharge(description: string): string {
   return match?.sac ?? '';
 }
 
+function calcAutoRoundOff(d: ExtractedInvoice): number {
+  const subtotal = d.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
+  const discount = d.bill_discount_amount ?? 0;
+  const taxable = subtotal - discount;
+  const hsn = buildHsnSummary(d.line_items, d.tax_type, discount);
+  const tax = hsn.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
+  const chargesTot = (d.charges ?? []).reduce((s, c) => s + c.amount, 0);
+  const chargesGST = (d.charges ?? [])
+    .filter((c) => c.gst_percent > 0)
+    .reduce((s, c) => s + c.amount * c.gst_percent / 100, 0);
+  const base = taxable + tax + chargesTot + chargesGST;
+  return parseFloat((Math.round(base) - base).toFixed(2));
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
@@ -227,6 +241,7 @@ export function InvoiceCard({
   const [savedBadge, setSavedBadge] = useState(false);
   const [dupDismissed, setDupDismissed] = useState(false);
   const [reviewed, setReviewed] = useState(false);
+  const [roundOffAuto, setRoundOffAuto] = useState(true);
 
   const current = editMode ? draft : displayInv;
 
@@ -314,7 +329,8 @@ export function InvoiceCard({
     const value = numKeys.has(key) ? (parseFloat(raw) || 0) : raw;
     setDraft((d) => {
       const items = d.line_items.map((it, idx) => idx === i ? { ...it, [key]: value } : it);
-      return { ...d, line_items: items };
+      const next = { ...d, line_items: items };
+      return roundOffAuto ? { ...next, round_off: calcAutoRoundOff(next) } : next;
     });
   }
 
@@ -323,7 +339,28 @@ export function InvoiceCard({
     const value = numKeys.has(key) ? (parseFloat(raw) || 0) : raw;
     setDraft((d) => {
       const charges = (d.charges ?? []).map((c, idx) => idx === i ? { ...c, [key]: value } : c);
-      return { ...d, charges };
+      const next = { ...d, charges };
+      return roundOffAuto ? { ...next, round_off: calcAutoRoundOff(next) } : next;
+    });
+  }
+
+  function setDiscountAmount(raw: string) {
+    const amount = parseFloat(raw) || 0;
+    setDraft((d) => {
+      const subtotal = d.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
+      const pct = subtotal > 0 ? parseFloat(((amount / subtotal) * 100).toFixed(2)) : null;
+      const next = { ...d, bill_discount_amount: amount, bill_discount_percent: pct };
+      return roundOffAuto ? { ...next, round_off: calcAutoRoundOff(next) } : next;
+    });
+  }
+
+  function setDiscountPercent(raw: string) {
+    const pct = parseFloat(raw) || 0;
+    setDraft((d) => {
+      const subtotal = d.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
+      const amount = parseFloat((subtotal * pct / 100).toFixed(2));
+      const next = { ...d, bill_discount_amount: amount, bill_discount_percent: pct };
+      return roundOffAuto ? { ...next, round_off: calcAutoRoundOff(next) } : next;
     });
   }
 
@@ -332,6 +369,7 @@ export function InvoiceCard({
   function handleEnterEdit() {
     setDraft(deepClone(displayInv));
     setValidationErrors({});
+    setRoundOffAuto(true);
     setEditMode(true);
   }
 
@@ -791,16 +829,48 @@ export function InvoiceCard({
       {/* ── Totals ── */}
       <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex flex-wrap items-center gap-4 text-sm">
         <span className="text-gray-600">Subtotal: <strong>{formatINR(computedSubtotal)}</strong></span>
-        {billDiscount > 0 && (
-          <>
+
+        {/* Discount — always visible in edit mode, only when present in read mode */}
+        {(editMode || billDiscount > 0) && (
+          editMode ? (
+            <span className="flex items-center gap-1.5 text-orange-600">
+              <span className="text-xs text-gray-500">Discount:</span>
+              <span className="text-xs text-gray-400">₹</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={draft.bill_discount_amount ?? 0}
+                onChange={(e) => setDiscountAmount(e.target.value)}
+                className="w-24 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+              />
+              <span className="text-xs text-gray-400">or</span>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={draft.bill_discount_percent ?? ''}
+                placeholder="0"
+                onChange={(e) => setDiscountPercent(e.target.value)}
+                className="w-16 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+              />
+              <span className="text-xs text-gray-500">%</span>
+              <span className="text-xs text-gray-400">→ Discount Ledger</span>
+            </span>
+          ) : (
             <span className="text-orange-600">
               Discount: <strong>−{formatINR(billDiscount)}</strong>
               {current.bill_discount_percent != null && <span className="text-xs ml-1">({current.bill_discount_percent}%)</span>}
               <span className="text-xs ml-1 text-gray-400">→ Discount Ledger</span>
             </span>
-            <span className="text-gray-600">Taxable: <strong>{formatINR(taxableValue)}</strong></span>
-          </>
+          )
         )}
+
+        {(editMode || billDiscount > 0) && (
+          <span className="text-gray-600">Taxable: <strong>{formatINR(taxableValue)}</strong></span>
+        )}
+
         {current.tax_type === 'cgst_sgst' ? (
           <>
             <span className="text-gray-600">CGST: <strong>{formatINR(computedTax / 2)}</strong></span>
@@ -812,20 +882,41 @@ export function InvoiceCard({
         {chargesTotal > 0 && (
           <span className="text-gray-600">Charges: <strong>+{formatINR(chargesTotal)}</strong></span>
         )}
+
         <span className="text-gray-600 flex items-center gap-1">
           Round off:
           {editMode ? (
-            <input
-              type="number"
-              step="0.01"
-              value={current.round_off ?? 0}
-              onChange={(e) => setHeader('round_off', parseFloat(e.target.value) || 0)}
-              className="w-20 border border-gray-300 bg-blue-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
-            />
+            <span className="flex items-center gap-1">
+              <input
+                type="number"
+                step="0.01"
+                value={draft.round_off ?? 0}
+                onChange={(e) => {
+                  setRoundOffAuto(false);
+                  setHeader('round_off', parseFloat(e.target.value) || 0);
+                }}
+                className="w-20 border border-gray-300 bg-blue-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+              <button
+                onClick={() => {
+                  setRoundOffAuto(true);
+                  setDraft((d) => ({ ...d, round_off: calcAutoRoundOff(d) }));
+                }}
+                title="Auto-calculate round off to nearest ₹1"
+                className={`text-xs px-1.5 py-0.5 rounded border transition-colors whitespace-nowrap ${
+                  roundOffAuto
+                    ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
+                    : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-gray-200'
+                }`}
+              >
+                ↺ Auto
+              </button>
+            </span>
           ) : (
             <strong>{formatINR(current.round_off ?? 0)}</strong>
           )}
         </span>
+
         <span className={`ml-auto font-semibold text-base ${!isMismatched ? 'text-gray-900' : 'text-amber-700'}`}>
           Total: ₹{formatINR(computedTotal)}
         </span>
