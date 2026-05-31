@@ -157,45 +157,63 @@ HOW TO TEST:
   Also test combined charges if two or more charges together explain the gap.
 
 EXTRACTION AFTER SUCCESSFUL RECONCILIATION:
-  When applying GST to a charge resolves the mismatch, move it from charges[] to line_items[]:
-    hsn         = SAC code (9965 for freight-related, 9968 for postal/courier)
-    gst_percent = the applicable rate (from priority order above)
-    qty         = 1
-    rate        = charge.amount   (the original charge amount is the taxable value)
-    disc_percent = 0
-    amount      = charge.amount
-
-  For intra-state (CGST+SGST): CGST = gst_amount÷2, SGST = gst_amount÷2, IGST = 0
-  For inter-state (IGST): IGST = full gst_amount, CGST = 0, SGST = 0
-
-  This charge now appears in the HSN/SAC Summary and contributes to GST totals.
+  When applying GST to a charge resolves the mismatch:
+    → Update charges[].gst_percent to the applicable rate.
+    → The charge stays in charges[] with its description and amount unchanged.
+    → DO NOT move the charge from charges[] to line_items[].
+  The frontend automatically includes charges with gst_percent > 0 in the HSN Summary.
   Assign high confidence when this reconciliation fully closes the gap.
 
-EXAMPLE — Laxmi Agency (freight at 5% not explicitly stated):
-  Line items taxable = ₹20,304 | CGST 2.5% = ₹507.60 | SGST 2.5% = ₹507.60
-  Freight & Forwarding Charges = ₹995 (shown with no GST)
-  Computed total = ₹20,304 + ₹1,015.20 + ₹995 = ₹22,314.20
-  Invoice grand total = ₹22,364.00
-  Gap = ₹49.75 (after rounding)
-  Test: ₹995 × 5% = ₹49.75 ✓
-  → Freight is taxable at SAC 9965 @ 5%. Move to line_items[].
-  → New computed total = ₹22,314.20 + ₹49.75 ≈ ₹22,364.00 ✓
+  CRITICAL — why charges must NOT move to line_items[]:
+    If the invoice also has a bill-level discount, moving a charge to line_items[]
+    causes the discount to be pro-rated to the charge, which is always wrong
+    (discounts apply to goods, not to freight or postage).
+
+EXAMPLE — Laxmi Agency invoice L-1154 (the canonical example — memorise this):
+  Invoice layout:
+    Line items table: S.No.1 | LOTUS TOWEL | HSN 63026090 | Qty 120 | Price 180 | Amount 21,600
+    No Discount% column in the line items table.
+    Below the goods lines:
+      Less: Discount           @ 6.00%   = 1,296.00
+      Add:  Freight & Forwarding Charges = 995.00
+      Add:  SGST                @ 2.50%  = 532.48
+      Add:  CGST                @ 2.50%  = 532.48
+      Add:  Rounded Off (+)              = 0.04
+      Grand Total 120 Pcs.               ₹22,364.00
+    Tax summary: Taxable = 21,299.00 | CGST = 532.48 | SGST = 532.48
+
+  CORRECT extraction:
+    line_items: [{hsn:"63026090", gst_percent:5, qty:120, rate:180, disc_percent:0, amount:21600}]
+    bill_discount_percent: 6
+    bill_discount_amount: 1296   (= 21,600 × 6%)
+    charges: [{description:"Freight & Forwarding Charges", amount:995, gst_percent:5}]
+    Verify: subtotal=21,600 | discount=1,296 | taxable goods=20,304 | freight=995
+            total taxable=20,304+995=21,299 | CGST=21,299×2.5%=532.475≈532.48 ✓
+            total=21,299+532.48+532.48+0.04=22,364.00 ✓
+
+  WRONG extraction (what you must NEVER do):
+    line_items[0].disc_percent = 6   ← discount applied at LINE level
+    bill_discount_amount = 1296      ← same discount applied AGAIN at bill level
+    → taxable = (21,600×0.94) − 1,296 = 19,008 (WRONG, double-discounted)
+
+  The discount "@ 6.00% = 1,296" appears BELOW the goods lines = bill-level.
+  The 6% is calculated on goods only (21,600), not on freight.
+  disc_percent on ALL line items must be 0. Never set it to 6.
 
 EXAMPLE — Freight at explicit 12%:
   Freight Charges = ₹1,000, invoice shows "@ 12%" against it.
   Use 12% (Priority 1 overrides the 5% default).
-  → GST = ₹120. Move to line_items[] with hsn=9965, gst_percent=12.
+  → Update charges[].gst_percent = 12. Keep in charges[].
 
 EXAMPLE — Postage with GST:
   Line items taxable = ₹5,000 | GST 12% = ₹600 | Postage = ₹500
   Computed total = ₹6,100 | Invoice grand total = ₹6,190
   Gap = ₹90 → Test: ₹500 × 18% = ₹90 ✓
-  → Postage GST = 18% (SAC 9968). Move to line_items[].
+  → Update charges[Postage].gst_percent = 18. Keep in charges[].
 
 EXAMPLE — Non-taxable freight (reimbursement):
   Freight shown as ₹200. No GST row for 9965. Tax summary matches without freight GST.
-  Gap after adding freight amount = ₹0 (freight already included in grand total as-is).
-  → Freight is non-taxable. Keep in charges[], gst_percent=0.
+  → Keep in charges[], gst_percent=0. No change needed.
 
 LINE ITEM COMPLETENESS — extract exactly what is in the table, no more, no less:
   1. Count the serial numbers (S.No.) in the invoice's line items table. If S.No. runs 1 to N, you must have EXACTLY N line items — not N-1 (skip), not N+1 (hallucinate).
@@ -440,17 +458,21 @@ STEP 2 — CRITICAL ANTI-DOUBLE-DISCOUNT CHECK:
     - If the discount column is inside the line items table → line-item level only, bill_discount=0.
     - If the discount row is below the subtotal → bill level only, all disc_percent=0.
 
-EXAMPLE of double-discounting to AVOID (Laxmi Agency invoice):
-  Invoice shows: line item Rate=180, Qty=120. A "6%" discount row appears BELOW the subtotal.
+EXAMPLE of double-discounting to AVOID (Laxmi Agency invoice L-1154):
+  Invoice shows: line items table has NO Discount% column.
+  "Less: Discount @ 6.00% = 1,296" appears as a row BELOW the goods lines.
   WRONG extraction:
-    line_items[0].disc_percent = 6   ← discount applied at line level
+    line_items[0].disc_percent = 6   ← discount applied at line level (WRONG — no disc column in table)
     bill_discount_percent = 6        ← same discount applied again at bill level
-    computed_taxable = (120×180×0.94) − (20,304×6%) = 20,304 − 1,218 = 19,086  ← WRONG
+    computed_taxable = (120×180×0.94) − 1,296 = 20,304 − 1,296 = 19,008  ← WRONG
   CORRECT extraction:
-    line_items[0].disc_percent = 0   ← no line-level discount
-    bill_discount_percent = 6        ← discount applied once at bill level
-    bill_discount_amount = 1,296     ← 120×180×6% = 1,296
+    line_items[0].disc_percent = 0   ← no Discount% column in line items table → must be 0
+    bill_discount_percent = 6        ← discount is BELOW subtotal → bill level only
+    bill_discount_amount = 1,296     ← 21,600 × 6% = 1,296
     computed_taxable = 21,600 − 1,296 = 20,304  ← matches invoice ✓
+
+  RULE: If the invoice's line items table has NO Discount% column, then disc_percent=0
+  on every line item, always. The discount lives at bill level only.
 
 TOTAL IN WORDS RULE:
 On computer-generated Indian invoices, the total amount is almost always printed in words (e.g. "Rupees One Hundred Eighteen Only", "Rs. One Thousand Two Hundred and Fifty Only"). This appears near the bottom of the invoice, often labelled "Amount in Words", "Total in Words", or just written out with "Only" as a suffix.
