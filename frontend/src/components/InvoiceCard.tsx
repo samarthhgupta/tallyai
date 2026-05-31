@@ -403,156 +403,76 @@ export function InvoiceCard({
 
   const borderColor = showDupBanner ? 'border-red-300' : (isMismatched && !editMode) ? 'border-amber-300' : (editMode ? 'border-indigo-400' : 'border-gray-200');
 
+  // Totals for all rows (goods + charges) used in Tax Summary and Reconciliation
+  const allHsnRows = [...hsnRows, ...chargeHsnRows];
+  const totalCGST = allHsnRows.reduce((s, r) => s + r.cgst, 0);
+  const totalSGST = allHsnRows.reduce((s, r) => s + r.sgst, 0);
+  const totalIGST = allHsnRows.reduce((s, r) => s + r.igst, 0);
+  const totalTaxable = allHsnRows.reduce((s, r) => s + r.taxable, 0);
+
   return (
     <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${borderColor} ${editMode ? 'ring-1 ring-indigo-200' : ''}`}>
 
-      {/* ── Header ── */}
-      <div className={`px-5 py-4 ${editMode ? 'bg-indigo-50' : ''}`}>
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-3 flex-wrap">
-              {editMode ? (
-                <HeaderInput
-                  value={draft.vendor_name}
-                  onChange={(v) => setHeader('vendor_name', v)}
-                  error={validationErrors['vendor_name']}
-                  placeholder="Vendor Name"
-                  className="font-semibold text-gray-900 w-56"
-                />
-              ) : (
-                <span className="font-semibold text-gray-900">{current.vendor_name || 'Unknown Vendor'}</span>
-              )}
-              <ConfidenceBadge score={inv.confidence} />
-              {company && <CompanyMatchBadge match={matchResult} />}
-              {matchResult === 'mismatch' && (
-                <span className="text-xs text-red-600">
-                  Invoice is addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; — not {company?.name}
-                </span>
-              )}
-              {needsReview && !editMode && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
-                  ⚠ Needs Review
-                </span>
-              )}
-              {savedBadge && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 border border-green-200 animate-pulse">
-                  ✓ Saved
-                </span>
-              )}
-              {sourceUrl && (
-                <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 hover:underline">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                  View original
-                </a>
-              )}
-              {!editMode && (
-                <button onClick={() => downloadInvoiceExcel(displayInv)}
-                  className="inline-flex items-center gap-1 text-xs text-green-700 hover:text-green-900 bg-green-50 hover:bg-green-100 border border-green-200 px-2 py-0.5 rounded transition-colors">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Excel
-                </button>
-              )}
-            </div>
-
-            {/* Sub-header row */}
-            <div className="mt-1.5 flex items-start gap-3 flex-wrap text-sm text-gray-500">
-              {editMode ? (
-                <>
-                  <span className="flex items-center gap-1">
-                    <span className="text-xs text-gray-400">Invoice #</span>
-                    <HeaderInput
-                      value={draft.invoice_number}
-                      onChange={(v) => setHeader('invoice_number', v)}
-                      error={validationErrors['invoice_number']}
-                      placeholder="Invoice #"
-                      className="w-36"
-                    />
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="text-xs text-gray-400">Date</span>
-                    <HeaderInput
-                      value={draft.invoice_date}
-                      onChange={(v) => setHeader('invoice_date', v)}
-                      error={validationErrors['invoice_date']}
-                      placeholder="DD/MM/YYYY"
-                      className="w-32"
-                    />
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="text-xs text-gray-400">GSTIN</span>
-                    <HeaderInput
-                      value={draft.vendor_gstin ?? ''}
-                      onChange={(v) => setHeader('vendor_gstin', v.toUpperCase())}
-                      error={validationErrors['vendor_gstin']}
-                      placeholder="GSTIN"
-                      className="w-44 font-mono text-xs"
-                    />
-                  </span>
-                </>
-              ) : (
-                <>
-                  {current.invoice_number && <span>Invoice #{current.invoice_number}</span>}
-                  {current.invoice_date && <span>· {current.invoice_date}</span>}
-                  {current.vendor_gstin && (
-                    <span>· GSTIN: <span className="font-mono text-xs">{current.vendor_gstin}</span></span>
-                  )}
-                  {vendorState && vendorState !== 'Unknown' && (
-                    <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{vendorState}</span>
-                  )}
-                </>
-              )}
-            </div>
-
-            {(current.buyer_name || current.buyer_gstin) && !editMode && (
-              <div className="mt-0.5 flex items-center gap-2 flex-wrap text-xs text-gray-400">
-                <span>Billed to: <span className="text-gray-600 font-medium">{current.buyer_name || '—'}</span></span>
-                {current.buyer_gstin && <span>· <span className="font-mono">{current.buyer_gstin}</span></span>}
-              </div>
-            )}
-          </div>
-
-          {/* Right side: confidence + Edit button */}
-          <div className="shrink-0 text-right flex flex-col items-end gap-2">
-            <ConfidenceBar score={inv.confidence} />
-            {inv.confidence_reasons && (
-              <ul className="mt-0.5 space-y-0.5">
-                {inv.confidence_reasons.map((r, i) => (
-                  <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
-                    {r.includes('✓') ? '' : '↓ '}{r}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* Edit / Save / Cancel */}
-            <div className="flex items-center gap-2 mt-1">
-              {editMode ? (
-                <>
-                  <button onClick={handleCancel}
-                    className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 transition-colors">
-                    Cancel
-                  </button>
-                  <button onClick={handleSave}
-                    className="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors">
-                    Save Changes
-                  </button>
-                </>
-              ) : (
-                <button onClick={handleEnterEdit}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                  Edit Invoice
-                </button>
-              )}
-            </div>
-          </div>
+      {/* ── Action Bar ── */}
+      <div className={`px-5 py-3 flex items-center justify-between gap-4 flex-wrap ${editMode ? 'bg-indigo-50 border-b border-indigo-100' : 'bg-gray-50 border-b border-gray-100'}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <ConfidenceBadge score={inv.confidence} />
+          {company && <CompanyMatchBadge match={matchResult} />}
+          {matchResult === 'mismatch' && (
+            <span className="text-xs text-red-600">
+              Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; — not {company?.name}
+            </span>
+          )}
+          {needsReview && !editMode && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
+              ⚠ Needs Review
+            </span>
+          )}
+          {savedBadge && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 border border-green-200 animate-pulse">
+              ✓ Saved
+            </span>
+          )}
+          {sourceUrl && (
+            <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 hover:underline">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              View original
+            </a>
+          )}
+          {!editMode && (
+            <button onClick={() => downloadInvoiceExcel(displayInv)}
+              className="inline-flex items-center gap-1 text-xs text-green-700 hover:text-green-900 bg-green-50 hover:bg-green-100 border border-green-200 px-2 py-0.5 rounded transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Excel
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {editMode ? (
+            <>
+              <button onClick={handleCancel}
+                className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleSave}
+                className="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors">
+                Save Changes
+              </button>
+            </>
+          ) : (
+            <button onClick={handleEnterEdit}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              Edit Invoice
+            </button>
+          )}
         </div>
       </div>
 
@@ -570,7 +490,7 @@ export function InvoiceCard({
         />
       )}
 
-      {/* ── Mismatch / Review banner ── */}
+      {/* ── Mismatch / Review Banner ── */}
       {(needsReview || (editMode && (isMismatched || mismatchJustResolved))) && (
         <div className={`mx-5 mt-4 rounded-lg border px-4 py-3 ${mismatchJustResolved ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
           {mismatchJustResolved ? (
@@ -581,8 +501,7 @@ export function InvoiceCard({
               <div>
                 <p className="text-sm font-semibold">✓ Mismatch Resolved</p>
                 <p className="text-xs text-green-700 mt-0.5">
-                  Computed total ₹{formatINR(computedTotal)} now matches invoice total ₹{formatINR(invoiceTotal)}.
-                  Save changes to confirm.
+                  Computed total ₹{formatINR(computedTotal)} now matches invoice total ₹{formatINR(invoiceTotal)}. Save changes to confirm.
                 </p>
               </div>
             </div>
@@ -627,15 +546,98 @@ export function InvoiceCard({
         </div>
       )}
 
-      {/* ── Line Items ── */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 1 — Invoice Summary                                          */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="px-5 py-4 border-t border-gray-100">
+        <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+          1. Invoice Summary
+        </h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-2 text-sm">
+
+          {/* Invoice No */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Invoice No</span>
+            {editMode
+              ? <HeaderInput value={draft.invoice_number} onChange={(v) => setHeader('invoice_number', v)} error={validationErrors['invoice_number']} placeholder="Invoice #" className="flex-1" />
+              : <span className="font-medium">{current.invoice_number || '—'}</span>}
+          </div>
+
+          {/* Invoice Date */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Invoice Date</span>
+            {editMode
+              ? <HeaderInput value={draft.invoice_date} onChange={(v) => setHeader('invoice_date', v)} error={validationErrors['invoice_date']} placeholder="YYYY-MM-DD" className="flex-1" />
+              : <span className="font-medium">{current.invoice_date || '—'}</span>}
+          </div>
+
+          {/* Supplier Name */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Supplier Name</span>
+            {editMode
+              ? <HeaderInput value={draft.vendor_name} onChange={(v) => setHeader('vendor_name', v)} error={validationErrors['vendor_name']} placeholder="Vendor Name" className="flex-1 font-semibold" />
+              : <span className="font-semibold text-gray-900">{current.vendor_name || '—'}</span>}
+          </div>
+
+          {/* Supplier GSTIN */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Supplier GSTIN</span>
+            {editMode
+              ? <HeaderInput value={draft.vendor_gstin ?? ''} onChange={(v) => setHeader('vendor_gstin', v.toUpperCase())} error={validationErrors['vendor_gstin']} placeholder="GSTIN" className="flex-1 font-mono text-xs" />
+              : <span className="font-mono text-xs">{current.vendor_gstin || '—'}{vendorState && vendorState !== 'Unknown' && <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded not-italic font-sans">{vendorState}</span>}</span>}
+          </div>
+
+          {/* Customer Name */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Customer Name</span>
+            <span className="font-medium">{current.buyer_name || '—'}</span>
+          </div>
+
+          {/* Customer GSTIN */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Customer GSTIN</span>
+            <span className="font-mono text-xs">{current.buyer_gstin || '—'}</span>
+          </div>
+
+          {/* Invoice Total */}
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Invoice Total</span>
+            <span className="font-semibold text-gray-900">₹{formatINR(invoiceTotal)}</span>
+          </div>
+
+          {/* Confidence Score */}
+          <div className="flex items-center gap-2">
+            <span className="text-gray-500 w-36 shrink-0">Confidence</span>
+            <ConfidenceBar score={inv.confidence} />
+          </div>
+
+        </div>
+
+        {/* Confidence reasons (warnings) */}
+        {inv.confidence_reasons && inv.confidence_reasons.length > 0 && (
+          <ul className="mt-2 space-y-0.5">
+            {inv.confidence_reasons.map((r, i) => (
+              <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
+                {r.includes('✓') ? '' : '↓ '}{r}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 2 — Goods / Services                                         */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
       {current.line_items.length > 0 && (
-        <div className="px-5 pb-3 border-t border-gray-100 pt-4">
-          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Line Items</h4>
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
+          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+            2. Goods / Services
+          </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['S.No.', 'HSN @ Rate%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'].map((h) => (
+                  {['HSN', 'Ledger Name', 'Qty', 'UOM', 'Rate (ex-GST)', 'Disc %', 'Taxable Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -643,38 +645,55 @@ export function InvoiceCard({
               <tbody>
                 {current.line_items.map((item: LineItem, i: number) => (
                   <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center">{i + 1}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs min-w-[120px]">
+
+                    {/* HSN (editable in edit mode — includes GST% inline) */}
+                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs min-w-[140px]">
                       {editMode ? (
                         <div className="flex items-center gap-1">
                           <CellInput value={item.hsn.replace(/[\s.]/g, '') || ''} onChange={(v) => setLineItem(i, 'hsn', v)} className="w-20 text-left" />
-                          <span className="text-gray-400">@</span>
-                          <CellInput value={item.gst_percent} onChange={(v) => setLineItem(i, 'gst_percent', v)} type="number" min="0" step="0.01" className="w-12" />
+                          <span className="text-gray-400 text-xs">@</span>
+                          <CellInput value={item.gst_percent} onChange={(v) => setLineItem(i, 'gst_percent', v)} type="number" min="0" step="0.01" className="w-10" />
                           <span className="text-gray-400 text-xs">%</span>
                         </div>
                       ) : (
-                        <>{item.hsn.replace(/[\s.]/g, '') || '—'} @ {item.gst_percent}%</>
+                        item.hsn.replace(/[\s.]/g, '') || '—'
                       )}
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs">
-                      {editMode ? <CellInput value={item.uom || ''} onChange={(v) => setLineItem(i, 'uom', v)} className="w-16 text-left" /> : (item.uom || '—')}
+
+                    {/* Ledger Name — display only, auto-derived */}
+                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
+                      {item.hsn.replace(/[\s.]/g, '') || '—'} @ {item.gst_percent}%
                     </td>
+
+                    {/* Qty */}
                     <td className="px-2 py-1.5 border border-gray-200 text-right">
                       {editMode ? <CellInput value={item.qty} onChange={(v) => setLineItem(i, 'qty', v)} type="number" min="0" step="0.001" className="w-16" /> : item.qty}
                     </td>
+
+                    {/* UOM */}
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs">
+                      {editMode ? <CellInput value={item.uom || ''} onChange={(v) => setLineItem(i, 'uom', v)} className="w-14 text-left" /> : (item.uom || '—')}
+                    </td>
+
+                    {/* Rate */}
                     <td className="px-2 py-1.5 border border-gray-200 text-right">
                       {editMode ? <CellInput value={item.rate} onChange={(v) => setLineItem(i, 'rate', v)} type="number" min="0" step="0.01" className="w-20" /> : formatINR(item.rate)}
                     </td>
+
+                    {/* Disc % */}
                     <td className="px-2 py-1.5 border border-gray-200 text-right">
                       {editMode ? <CellInput value={item.disc_percent as number} onChange={(v) => setLineItem(i, 'disc_percent', v)} type="number" min="0" max="100" step="0.01" className="w-14" /> : `${item.disc_percent}%`}
                     </td>
+
+                    {/* Taxable Amount (after item discount, before bill discount) */}
                     <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
                       {formatINR(calcLineAmount(item))}
                     </td>
+
                   </tr>
                 ))}
                 <tr className="bg-gray-50 font-semibold">
-                  <td colSpan={6} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total Taxable Value</td>
+                  <td colSpan={6} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Line Item Taxable Value</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(computedSubtotal)}</td>
                 </tr>
               </tbody>
@@ -683,81 +702,83 @@ export function InvoiceCard({
         </div>
       )}
 
-      {/* ── HSN Summary ── */}
-      {(hsnRows.length > 0 || chargeHsnRows.length > 0) && (() => {
-        const allRows = [...hsnRows, ...chargeHsnRows];
-        return (
-          <div className="px-5 pb-3 pt-3 border-t border-gray-100">
-            <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">HSN Summary</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="bg-gray-50">
-                    {['HSN', 'GST%', 'Taxable', 'CGST', 'SGST', 'IGST', 'Status'].map((h) => (
-                      <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {hsnRows.map((row: HsnRow, i: number) => {
-                    const calcTax = row.cgst + row.sgst + row.igst;
-                    const vendorTax = row.taxable * row.gst_percent / 100;
-                    const match = Math.abs(calcTax - vendorTax) <= 1;
-                    return (
-                      <tr key={`goods-${i}`} className="hover:bg-gray-50">
-                        <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
-                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
-                        <td className="px-2 py-1.5 border border-gray-200">
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${match ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {match ? '✓ Match' : '✗ Mismatch'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {chargeHsnRows.map((row: HsnRow, i: number) => (
-                    <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/30">
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
-                        {row.hsn}
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
-                      <td className="px-2 py-1.5 border border-gray-200">
-                        <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">SAC</span>
-                      </td>
-                    </tr>
-                  ))}
-                  <tr className="bg-gray-50 font-semibold text-sm">
-                    <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(allRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.cgst > 0) ? formatINR(allRows.reduce((s, r) => s + r.cgst, 0)) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.sgst > 0) ? formatINR(allRows.reduce((s, r) => s + r.sgst, 0)) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.igst > 0) ? formatINR(allRows.reduce((s, r) => s + r.igst, 0)) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200"></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* ── Additional Charges ── */}
-      {(current.charges ?? []).length > 0 && (
-        <div className="px-5 pb-3 pt-3 border-t border-gray-100">
-          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Additional Charges</h4>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 3 — Bill Level Adjustments                                   */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {(editMode || billDiscount > 0) && (
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
+          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+            3. Bill Level Adjustments
+          </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['Description', 'SAC', 'GST%', 'CGST', 'SGST', 'IGST', 'Amount'].map((h) => (
+                  {['Description', 'Rate', 'Amount'].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr className={editMode ? 'bg-blue-50/30' : ''}>
+                  <td className="px-2 py-1.5 border border-gray-200 text-xs font-medium text-orange-700">Invoice Discount</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right w-32">
+                    {editMode ? (
+                      <div className="flex items-center justify-end gap-1">
+                        <input
+                          type="number" min="0" max="100" step="0.01"
+                          value={draft.bill_discount_percent ?? ''}
+                          placeholder="0"
+                          onChange={(e) => setDiscountPercent(e.target.value)}
+                          className="w-16 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+                        />
+                        <span className="text-xs text-gray-500">%</span>
+                      </div>
+                    ) : (
+                      <span className="text-orange-600">
+                        {current.bill_discount_percent != null ? `${current.bill_discount_percent}%` : '—'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right font-medium w-36">
+                    {editMode ? (
+                      <div className="flex items-center justify-end gap-1">
+                        <span className="text-xs text-gray-400">₹</span>
+                        <input
+                          type="number" min="0" step="0.01"
+                          value={draft.bill_discount_amount ?? 0}
+                          onChange={(e) => setDiscountAmount(e.target.value)}
+                          className="w-24 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-orange-600">−{formatINR(billDiscount)}</span>
+                    )}
+                  </td>
+                </tr>
+                <tr className="bg-gray-50 font-semibold">
+                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Net Goods Taxable Value</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(taxableValue)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 4 — Additional Charges                                        */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {(current.charges ?? []).length > 0 && (
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
+          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+            4. Additional Charges
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  {['Description', 'SAC', 'Ledger Name', 'Taxable Amount', 'GST %', 'GST Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -766,11 +787,10 @@ export function InvoiceCard({
                 {(current.charges ?? []).map((c: ExtraCharge, i: number) => {
                   const sac = getSacForCharge(c.description);
                   const gstAmt = c.amount * c.gst_percent / 100;
-                  const cgst = current.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0;
-                  const sgst = current.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0;
-                  const igst = current.tax_type === 'igst' ? gstAmt : 0;
                   return (
                     <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
+
+                      {/* Description */}
                       <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[200px]">
                         {editMode ? (
                           <select
@@ -785,51 +805,34 @@ export function InvoiceCard({
                               <option value={c.description}>{c.description}</option>
                             )}
                           </select>
-                        ) : (
-                          c.description
-                        )}
+                        ) : c.description}
                       </td>
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">
-                        {sac || '—'}
+
+                      {/* SAC */}
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">{sac || '—'}</td>
+
+                      {/* Ledger Name — display only */}
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
+                        {c.description} @ {c.gst_percent}%
                       </td>
+
+                      {/* Taxable Amount */}
+                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
+                        {editMode ? (
+                          <CellInput value={c.amount} onChange={(v) => setCharge(i, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
+                        ) : formatINR(c.amount)}
+                      </td>
+
+                      {/* GST % */}
                       <td className="px-2 py-1.5 border border-gray-200 text-right w-20">
                         {editMode ? (
-                          <CellInput
-                            value={c.gst_percent}
-                            onChange={(v) => setCharge(i, 'gst_percent', v)}
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.01"
-                            className="w-14"
-                          />
-                        ) : (
-                          `${c.gst_percent}%`
-                        )}
+                          <CellInput value={c.gst_percent} onChange={(v) => setCharge(i, 'gst_percent', v)} type="number" min="0" max="100" step="0.01" className="w-14" />
+                        ) : `${c.gst_percent}%`}
                       </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
-                        {cgst > 0 ? formatINR(cgst) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
-                        {sgst > 0 ? formatINR(sgst) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
-                        {igst > 0 ? formatINR(igst) : '—'}
-                      </td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium w-28">
-                        {editMode ? (
-                          <CellInput
-                            value={c.amount}
-                            onChange={(v) => setCharge(i, 'amount', v)}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            className="w-24"
-                          />
-                        ) : (
-                          formatINR(c.amount)
-                        )}
-                      </td>
+
+                      {/* GST Amount */}
+                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">{formatINR(gstAmt)}</td>
+
                     </tr>
                   );
                 })}
@@ -839,103 +842,159 @@ export function InvoiceCard({
         </div>
       )}
 
-      {/* ── Totals ── */}
-      <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex flex-wrap items-center gap-4 text-sm">
-        <span className="text-gray-600">Subtotal: <strong>{formatINR(computedSubtotal)}</strong></span>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 5 — Tax Summary                                              */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {allHsnRows.length > 0 && (
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
+          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+            5. Tax Summary
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-50">
+                  {['HSN / SAC', 'Taxable Value', 'CGST', 'SGST', 'IGST'].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {hsnRows.map((row: HsnRow, i: number) => (
+                  <tr key={`goods-${i}`} className="hover:bg-gray-50">
+                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                  </tr>
+                ))}
+                {chargeHsnRows.map((row: HsnRow, i: number) => (
+                  <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/20">
+                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
+                      {row.hsn} <span className="text-blue-500 not-italic font-sans">(SAC)</span>
+                    </td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                  </tr>
+                ))}
+                <tr className="bg-gray-50 font-semibold text-sm">
+                  <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-600">TOTAL</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(totalTaxable)}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalCGST > 0 ? formatINR(totalCGST) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalSGST > 0 ? formatINR(totalSGST) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalIGST > 0 ? formatINR(totalIGST) : '—'}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-        {/* Discount — always visible in edit mode, only when present in read mode */}
-        {(editMode || billDiscount > 0) && (
-          editMode ? (
-            <span className="flex items-center gap-1.5 text-orange-600">
-              <span className="text-xs text-gray-500">Discount:</span>
-              <span className="text-xs text-gray-400">₹</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={draft.bill_discount_amount ?? 0}
-                onChange={(e) => setDiscountAmount(e.target.value)}
-                className="w-24 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
-              />
-              <span className="text-xs text-gray-400">or</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                value={draft.bill_discount_percent ?? ''}
-                placeholder="0"
-                onChange={(e) => setDiscountPercent(e.target.value)}
-                className="w-16 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
-              />
-              <span className="text-xs text-gray-500">%</span>
-              <span className="text-xs text-gray-400">→ Discount Ledger</span>
-            </span>
-          ) : (
-            <span className="text-orange-600">
-              Discount: <strong>−{formatINR(billDiscount)}</strong>
-              {current.bill_discount_percent != null && <span className="text-xs ml-1">({current.bill_discount_percent}%)</span>}
-              <span className="text-xs ml-1 text-gray-400">→ Discount Ledger</span>
-            </span>
-          )
-        )}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* Section 6 — Invoice Reconciliation                                   */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="px-5 pb-5 pt-4 border-t border-gray-100">
+        <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+          6. Invoice Reconciliation
+        </h4>
+        <div className="max-w-xs text-sm space-y-1.5">
 
-        {(editMode || billDiscount > 0) && (
-          <span className="text-gray-600">Taxable: <strong>{formatINR(taxableValue)}</strong></span>
-        )}
+          <div className="flex justify-between text-gray-700">
+            <span>Line Item Taxable Value</span>
+            <span className="font-medium tabular-nums">{formatINR(computedSubtotal)}</span>
+          </div>
 
-        {current.tax_type === 'cgst_sgst' ? (
-          <>
-            <span className="text-gray-600">CGST: <strong>{formatINR(computedTax / 2)}</strong></span>
-            <span className="text-gray-600">SGST: <strong>{formatINR(computedTax / 2)}</strong></span>
-          </>
-        ) : (
-          <span className="text-gray-600">IGST: <strong>{formatINR(computedTax)}</strong></span>
-        )}
-        {chargesTotal > 0 && (
-          <span className="text-gray-600">Charges: <strong>+{formatINR(chargesTotal)}</strong></span>
-        )}
-
-        <span className="text-gray-600 flex items-center gap-1">
-          Round off:
-          {editMode ? (
-            <span className="flex items-center gap-1">
-              <input
-                type="number"
-                step="0.01"
-                value={draft.round_off ?? 0}
-                onChange={(e) => {
-                  setRoundOffAuto(false);
-                  setHeader('round_off', parseFloat(e.target.value) || 0);
-                }}
-                className="w-20 border border-gray-300 bg-blue-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              />
-              <button
-                onClick={() => {
-                  setRoundOffAuto(true);
-                  setDraft((d) => ({ ...d, round_off: calcAutoRoundOff(d) }));
-                }}
-                title="Auto-calculate round off to nearest ₹1"
-                className={`text-xs px-1.5 py-0.5 rounded border transition-colors whitespace-nowrap ${
-                  roundOffAuto
-                    ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
-                    : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-gray-200'
-                }`}
-              >
-                ↺ Auto
-              </button>
-            </span>
-          ) : (
-            <strong>{formatINR(current.round_off ?? 0)}</strong>
+          {billDiscount > 0 && (
+            <div className="flex justify-between text-orange-600">
+              <span>(−) Bill Level Discount</span>
+              <span className="font-medium tabular-nums">−{formatINR(billDiscount)}</span>
+            </div>
           )}
-        </span>
 
-        <span className={`ml-auto font-semibold text-base ${!isMismatched ? 'text-gray-900' : 'text-amber-700'}`}>
-          Total: ₹{formatINR(computedTotal)}
-        </span>
-        {invoiceTotal > 0 && !isMismatched && !editMode && (
-          <span className="text-xs text-green-600 font-medium">✓ Invoice Value Matched</span>
-        )}
+          {chargesTotal > 0 && (
+            <div className="flex justify-between text-blue-600">
+              <span>(+) Additional Charges</span>
+              <span className="font-medium tabular-nums">+{formatINR(chargesTotal)}</span>
+            </div>
+          )}
+
+          <div className="border-t border-gray-300 pt-1.5 flex justify-between font-semibold text-gray-800">
+            <span>Total Taxable Value</span>
+            <span className="tabular-nums">{formatINR(taxableValue + chargesTotal)}</span>
+          </div>
+
+          {current.tax_type === 'cgst_sgst' ? (
+            <>
+              <div className="flex justify-between text-gray-600">
+                <span>(+) CGST</span>
+                <span className="tabular-nums">+{formatINR(totalCGST)}</span>
+              </div>
+              <div className="flex justify-between text-gray-600">
+                <span>(+) SGST</span>
+                <span className="tabular-nums">+{formatINR(totalSGST)}</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between text-gray-600">
+              <span>(+) IGST</span>
+              <span className="tabular-nums">+{formatINR(totalIGST)}</span>
+            </div>
+          )}
+
+          <div className="flex justify-between text-gray-600 items-center">
+            <span>(+) Round Off</span>
+            {editMode ? (
+              <span className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={draft.round_off ?? 0}
+                  onChange={(e) => {
+                    setRoundOffAuto(false);
+                    setHeader('round_off', parseFloat(e.target.value) || 0);
+                  }}
+                  className="w-20 border border-gray-300 bg-blue-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+                <button
+                  onClick={() => {
+                    setRoundOffAuto(true);
+                    setDraft((d) => ({ ...d, round_off: calcAutoRoundOff(d) }));
+                  }}
+                  title="Auto-calculate round off to nearest ₹1"
+                  className={`text-xs px-1.5 py-0.5 rounded border transition-colors whitespace-nowrap ${
+                    roundOffAuto
+                      ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
+                      : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-gray-200'
+                  }`}
+                >
+                  ↺ Auto
+                </button>
+              </span>
+            ) : (
+              <span className="tabular-nums">{formatINR(current.round_off ?? 0)}</span>
+            )}
+          </div>
+
+          <div className={`border-t-2 pt-2 flex justify-between font-bold text-base ${isMismatched ? 'border-amber-400' : 'border-gray-400'}`}>
+            <span className="text-gray-900">Final Invoice Value</span>
+            <span className={`tabular-nums ${isMismatched ? 'text-amber-700' : 'text-gray-900'}`}>
+              ₹{formatINR(computedTotal)}
+            </span>
+          </div>
+
+          {invoiceTotal > 0 && !isMismatched && !editMode && (
+            <div className="text-xs text-green-600 font-medium text-right">✓ Invoice Value Matched</div>
+          )}
+          {invoiceTotal > 0 && isMismatched && !editMode && (
+            <div className="text-xs text-amber-600 text-right">
+              Invoice shows ₹{formatINR(invoiceTotal)} · Diff: {computedTotal > invoiceTotal ? '+' : '−'}₹{formatINR(Math.abs(computedTotal - invoiceTotal))}
+            </div>
+          )}
+
+        </div>
       </div>
 
       {/* ── Audit Log ── */}
