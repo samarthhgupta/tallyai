@@ -722,7 +722,6 @@ export function InvoiceCard({
                     <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/30">
                       <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
                         {row.hsn}
-                        <span className="ml-1 text-xs text-blue-500 font-sans">(charge)</span>
                       </td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
@@ -757,7 +756,7 @@ export function InvoiceCard({
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['Description', 'SAC', 'GST%', 'Amount'].map((h) => (
+                  {['Description', 'SAC', 'GST%', 'CGST', 'SGST', 'IGST', 'Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -765,6 +764,10 @@ export function InvoiceCard({
               <tbody>
                 {(current.charges ?? []).map((c: ExtraCharge, i: number) => {
                   const sac = getSacForCharge(c.description);
+                  const gstAmt = c.amount * c.gst_percent / 100;
+                  const cgst = current.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0;
+                  const sgst = current.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0;
+                  const igst = current.tax_type === 'igst' ? gstAmt : 0;
                   return (
                     <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
                       <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[200px]">
@@ -802,6 +805,15 @@ export function InvoiceCard({
                         ) : (
                           `${c.gst_percent}%`
                         )}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
+                        {cgst > 0 ? formatINR(cgst) : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
+                        {sgst > 0 ? formatINR(sgst) : '—'}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right text-xs">
+                        {igst > 0 ? formatINR(igst) : '—'}
                       </td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right font-medium w-28">
                         {editMode ? (
