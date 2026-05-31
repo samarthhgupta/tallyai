@@ -17,6 +17,39 @@ interface AuditEntry {
   timestamp: string;
 }
 
+// ─── Charge types & SAC mapping ────────────────────────────────────────────────
+
+const CHARGE_TYPES: { label: string; sac: string }[] = [
+  { label: 'Freight',                      sac: '9965' },
+  { label: 'Freight Charges',              sac: '9965' },
+  { label: 'Freight & Forwarding Charges', sac: '9965' },
+  { label: 'F&F Charges',                  sac: '9965' },
+  { label: 'Transport Charges',            sac: '9965' },
+  { label: 'Transportation Charges',       sac: '9965' },
+  { label: 'Delivery Charges',             sac: '9965' },
+  { label: 'Builty Charges',               sac: '9965' },
+  { label: 'LR Charges',                   sac: '9965' },
+  { label: 'Lorry Charges',                sac: '9965' },
+  { label: 'Cartage Charges',              sac: '9965' },
+  { label: 'Postage',                      sac: '9968' },
+  { label: 'Postal Charges',               sac: '9968' },
+  { label: 'Courier Charges',              sac: '9968' },
+  { label: 'Courier Service',              sac: '9968' },
+  { label: 'Dispatch Charges',             sac: '9968' },
+  { label: 'Shipping Charges',             sac: '9968' },
+  { label: 'Shipping Service',             sac: '9968' },
+  { label: 'Packing Charges',              sac: '' },
+  { label: 'Handling Charges',             sac: '' },
+  { label: 'Other Charges',                sac: '' },
+];
+
+function getSacForCharge(description: string): string {
+  const match = CHARGE_TYPES.find(
+    (ct) => ct.label.toLowerCase() === description.toLowerCase()
+  );
+  return match?.sac ?? '';
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/;
@@ -54,6 +87,22 @@ function buildAuditEntries(
           field: `Line ${i + 1}: ${f}`,
           original: String(orig[f]),
           updated: String(item[f]),
+          timestamp: now,
+        });
+      }
+    }
+  });
+
+  (updated.charges ?? []).forEach((charge, i) => {
+    const orig = (original.charges ?? [])[i];
+    if (!orig) return;
+    const chargeFields: Array<keyof ExtraCharge> = ['description', 'gst_percent', 'amount'];
+    for (const f of chargeFields) {
+      if (String(orig[f]) !== String(charge[f])) {
+        entries.push({
+          field: `Charge ${i + 1}: ${f}`,
+          original: String(orig[f]),
+          updated: String(charge[f]),
           timestamp: now,
         });
       }
@@ -189,7 +238,24 @@ export function InvoiceCard({
   const taxableValue = computedSubtotal - billDiscount;
   const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
   const chargesTotal = (current.charges ?? []).reduce((s, c) => s + c.amount, 0);
-  const computedTotal = taxableValue + computedTax + chargesTotal + (current.round_off ?? 0);
+
+  // HSN rows derived from additional charges that have GST > 0
+  const chargeHsnRows: HsnRow[] = (current.charges ?? [])
+    .filter((c) => c.gst_percent > 0)
+    .map((c) => {
+      const tax = c.amount * c.gst_percent / 100;
+      return {
+        hsn: getSacForCharge(c.description) || c.description,
+        gst_percent: c.gst_percent,
+        taxable: c.amount,
+        cgst: current.tax_type === 'cgst_sgst' ? tax / 2 : 0,
+        sgst: current.tax_type === 'cgst_sgst' ? tax / 2 : 0,
+        igst: current.tax_type === 'igst' ? tax : 0,
+      };
+    });
+
+  const chargesGST = chargeHsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
+  const computedTotal = taxableValue + computedTax + chargesTotal + chargesGST + (current.round_off ?? 0);
 
   // ─── Mismatch detection ────────────────────────────────────────────────────
 
@@ -249,6 +315,15 @@ export function InvoiceCard({
     setDraft((d) => {
       const items = d.line_items.map((it, idx) => idx === i ? { ...it, [key]: value } : it);
       return { ...d, line_items: items };
+    });
+  }
+
+  function setCharge(i: number, key: keyof ExtraCharge, raw: string) {
+    const numKeys = new Set<keyof ExtraCharge>(['amount', 'gst_percent']);
+    const value = numKeys.has(key) ? (parseFloat(raw) || 0) : raw;
+    setDraft((d) => {
+      const charges = (d.charges ?? []).map((c, idx) => idx === i ? { ...c, [key]: value } : c);
+      return { ...d, charges };
     });
   }
 
@@ -570,52 +645,71 @@ export function InvoiceCard({
       )}
 
       {/* ── HSN Summary ── */}
-      {hsnRows.length > 0 && (
-        <div className="px-5 pb-3 pt-3 border-t border-gray-100">
-          <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">HSN Summary</h4>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="bg-gray-50">
-                  {['HSN', 'GST%', 'Taxable', 'CGST', 'SGST', 'IGST', 'Status'].map((h) => (
-                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {hsnRows.map((row: HsnRow, i: number) => {
-                  const calcTax = row.cgst + row.sgst + row.igst;
-                  const vendorTax = row.taxable * row.gst_percent / 100;
-                  const match = Math.abs(calcTax - vendorTax) <= 1;
-                  return (
-                    <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
+      {(hsnRows.length > 0 || chargeHsnRows.length > 0) && (() => {
+        const allRows = [...hsnRows, ...chargeHsnRows];
+        return (
+          <div className="px-5 pb-3 pt-3 border-t border-gray-100">
+            <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">HSN Summary</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    {['HSN', 'GST%', 'Taxable', 'CGST', 'SGST', 'IGST', 'Status'].map((h) => (
+                      <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {hsnRows.map((row: HsnRow, i: number) => {
+                    const calcTax = row.cgst + row.sgst + row.igst;
+                    const vendorTax = row.taxable * row.gst_percent / 100;
+                    const match = Math.abs(calcTax - vendorTax) <= 1;
+                    return (
+                      <tr key={`goods-${i}`} className="hover:bg-gray-50">
+                        <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
+                        <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                        <td className="px-2 py-1.5 border border-gray-200">
+                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${match ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {match ? '✓ Match' : '✗ Mismatch'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {chargeHsnRows.map((row: HsnRow, i: number) => (
+                    <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/30">
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
+                        {row.hsn}
+                        <span className="ml-1 text-xs text-blue-500 font-sans">(charge)</span>
+                      </td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{row.gst_percent}%</td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
                       <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
                       <td className="px-2 py-1.5 border border-gray-200">
-                        <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${match ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {match ? '✓ Match' : '✗ Mismatch'}
-                        </span>
+                        <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">SAC</span>
                       </td>
                     </tr>
-                  );
-                })}
-                <tr className="bg-gray-50 font-semibold text-sm">
-                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(hsnRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.cgst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.cgst, 0)) : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.sgst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.sgst, 0)) : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{hsnRows.some(r => r.igst > 0) ? formatINR(hsnRows.reduce((s, r) => s + r.igst, 0)) : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200"></td>
-                </tr>
-              </tbody>
-            </table>
+                  ))}
+                  <tr className="bg-gray-50 font-semibold text-sm">
+                    <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Total</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(allRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.cgst > 0) ? formatINR(allRows.reduce((s, r) => s + r.cgst, 0)) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.sgst > 0) ? formatINR(allRows.reduce((s, r) => s + r.sgst, 0)) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{allRows.some(r => r.igst > 0) ? formatINR(allRows.reduce((s, r) => s + r.igst, 0)) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Additional Charges ── */}
       {(current.charges ?? []).length > 0 && (
@@ -625,19 +719,69 @@ export function InvoiceCard({
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['Description', 'GST%', 'Amount'].map((h) => (
+                  {['Description', 'SAC', 'GST%', 'Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {(current.charges ?? []).map((c: ExtraCharge, i: number) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs">{c.description}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{c.gst_percent}%</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">{formatINR(c.amount)}</td>
-                  </tr>
-                ))}
+                {(current.charges ?? []).map((c: ExtraCharge, i: number) => {
+                  const sac = getSacForCharge(c.description);
+                  return (
+                    <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
+                      <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[200px]">
+                        {editMode ? (
+                          <select
+                            value={c.description}
+                            onChange={(e) => setCharge(i, 'description', e.target.value)}
+                            className="w-full bg-blue-50 border-0 border-b border-blue-300 focus:outline-none focus:border-indigo-500 focus:bg-indigo-50 py-0.5 text-sm rounded-sm"
+                          >
+                            {CHARGE_TYPES.map((ct) => (
+                              <option key={ct.label} value={ct.label}>{ct.label}</option>
+                            ))}
+                            {!CHARGE_TYPES.find((ct) => ct.label === c.description) && (
+                              <option value={c.description}>{c.description}</option>
+                            )}
+                          </select>
+                        ) : (
+                          c.description
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">
+                        {sac || '—'}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right w-20">
+                        {editMode ? (
+                          <CellInput
+                            value={c.gst_percent}
+                            onChange={(v) => setCharge(i, 'gst_percent', v)}
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            className="w-14"
+                          />
+                        ) : (
+                          `${c.gst_percent}%`
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium w-28">
+                        {editMode ? (
+                          <CellInput
+                            value={c.amount}
+                            onChange={(v) => setCharge(i, 'amount', v)}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-24"
+                          />
+                        ) : (
+                          formatINR(c.amount)
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
