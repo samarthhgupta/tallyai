@@ -262,28 +262,97 @@ STEP 3 — Column label hints:
   Labels suggesting GST-EXCLUSIVE: "Net Amt", "Net Amount", "Taxable Amt", "Taxable Value", "Amount After Disc"
   Labels suggesting GST-INCLUSIVE: "Amount (₹)", "Total Amt", "Invoice Amt", "Gross Amt", or no qualifier
 
-WHEN AMOUNT COLUMN IS GST-INCLUSIVE:
-  The "amount" field we store must ALWAYS be taxable (GST-exclusive, post-discount). So convert:
-    stored_amount = printed_amount ÷ (1 + gst_percent/100)
-  Then the rate back-calculation works as usual:
-    rate = stored_amount ÷ qty ÷ (1 - disc_percent/100)
+WHEN AMOUNT COLUMN IS GST-INCLUSIVE — full back-calculation and verification procedure:
 
-EXAMPLE — Shri Ganesh Traders style (GST-inclusive Amount column):
-  GST summary shows: HSN 63041910 Taxable=1,25,180 | HSN 63023100 Taxable=33,999.74
-  Line item 1: HSN 63041910, Qty=80, Disc=0%, Price=500, Amount=42,000
-    Test: 80×500×1.05 = 42,000 ✓ (GST-inclusive at 5%)
-    Sum of amounts for 63041910 ≈ Taxable+GST → GST-INCLUSIVE
-    stored_amount = 42,000 ÷ 1.05 = 40,000
-    rate = 40,000 ÷ 80 ÷ 1 = 500
-  Line item 4: HSN 63023100, Qty=4, Disc=8%, Price=1970.93, Amount=8,829.76
-    stored_amount = 8,829.76 ÷ 1.12 = 7,883.71
-    rate = 7,883.76 ÷ 4 ÷ 0.92 = 2,142 (the "Price" printed is the POST-discount ex-GST net price)
-    Verify: 4 × 2142 × 0.92 × 1.12 = 8,829.79 ≈ 8,829.76 ✓
+The "amount" field we store must ALWAYS be taxable (GST-exclusive, post-discount). Convert:
+  stored_amount = printed_amount ÷ (1 + gst_percent/100)
+Then back-calculate the pre-discount ex-GST rate:
+  rate = stored_amount ÷ qty ÷ (1 − disc_percent/100)
 
-  NOTE: In Shri Ganesh Traders invoices the "Price" column = post-discount ex-GST net price.
-  The "Amount" column = qty × Price × (1+GST%) = GST-inclusive amount.
-  For discounted items: rate (pre-discount) = Price ÷ (1 - disc_percent/100)
-  For non-discounted items: rate = Price directly.
+After extracting all line items, run ALL SIX checks below. If any check fails, re-examine
+the failing line item before finalising the JSON.
+
+CHECK 1 — Confirm GST-inclusive detection using the GST summary (by HSN group):
+  For each HSN group: sum the stored_amounts (ex-GST) and compare to the printed taxable in
+  the GST summary. They must agree within ₹2.
+  If they do not agree, re-examine your GST-inclusive/exclusive decision for that HSN group.
+
+CHECK 2 — Verify the Price column for every line item:
+  After stripping GST: stored_amount ÷ qty must equal the "Price" column printed on the invoice.
+  Formula: printed_amount ÷ (1 + gst%) ÷ qty = printed_Price
+  If any line does not match, the Qty or GST% was likely read incorrectly.
+
+CHECK 3 — Forward round-trip for every line item:
+  Starting from your extracted rate, work forward and reproduce the printed Amount:
+  rate × (1 − disc%) × qty × (1 + gst%) = printed_Amount   (within ₹1)
+  If it does not match, the disc_percent or rate is wrong.
+
+CHECK 4 — HSN-wise taxable subtotals vs GST summary:
+  For each HSN code, sum the stored_amounts of all line items with that HSN.
+  Compare to the taxable value in the invoice's GST/Tax summary table.
+  They must agree within ₹2. A larger gap means a line item was missed or assigned the wrong HSN.
+
+CHECK 5 — GST amount verification:
+  For each HSN group: stored_taxable × gst_rate / 2 = CGST = SGST (for CGST+SGST invoices)
+                  or: stored_taxable × gst_rate = IGST (for IGST invoices)
+  Compare computed GST to what is printed in the GST summary. Must agree within ₹2.
+
+CHECK 6 — Grand Total reconciliation:
+  Sum all stored_amounts → Taxable Value
+  Add all GST amounts (CGST + SGST or IGST)
+  Add charges, round-off
+  Result must equal the printed Grand Total within ₹2.
+  Any remaining gap after checks 1–5 pass is usually one paisa of rounding — acceptable.
+  A gap larger than ₹2 means something is wrong: re-examine line items, disc%, or charges.
+
+EXAMPLE — Shri Ganesh Traders (invoice SGT/495/2024-25):
+  Invoice columns: S.N. | Description | HSN | Qty | Unit | MRP | Discount% | Price | Amount(₹)
+  "Price" = post-discount ex-GST rate per unit. "Amount" = GST-inclusive total.
+  GST summary: HSN 63041910 @ 5% Taxable=1,25,180 | HSN 63023100 @ 12% Taxable=33,999.74
+  Grand Total: ₹1,69,519.00. Round Off: +₹0.30.
+
+  CHECK 1 (detect GST-inclusive):
+    Lines 1–3 printed amounts: 42,000 + 65,310 + 24,129 = 1,31,439
+    1,25,180 × 1.05 = 1,31,439 ✓ → GST-inclusive confirmed for 63041910
+    Lines 4–6 printed amounts: 8,829.76 + 9,932.70 + 19,317.24 = 38,079.70
+    38,079.70 ÷ 1.12 = 33,999.73 ≈ 33,999.74 ✓ → GST-inclusive confirmed for 63023100
+
+  Line 1 (HSN 63041910, Qty=80, Disc=0%, GST=5%, Amount=42,000):
+    stored_amount = 42,000 ÷ 1.05 = 40,000   rate = 40,000 ÷ 80 ÷ 1.00 = 500
+  Line 2 (HSN 63041910, Qty=100, Disc=0%, GST=5%, Amount=65,310):
+    stored_amount = 65,310 ÷ 1.05 = 62,200   rate = 62,200 ÷ 100 ÷ 1.00 = 622
+  Line 3 (HSN 63041910, Qty=60, Disc=0%, GST=5%, Amount=24,129):
+    stored_amount = 24,129 ÷ 1.05 = 22,980   rate = 22,980 ÷ 60 ÷ 1.00 = 383
+  Line 4 (HSN 63023100, Qty=4, Disc=8%, GST=12%, Amount=8,829.76):
+    stored_amount = 8,829.76 ÷ 1.12 = 7,883.71   rate = 7,883.71 ÷ 4 ÷ 0.92 = 2,142.31
+  Line 5 (HSN 63023100, Qty=6, Disc=8%, GST=12%, Amount=9,932.70):
+    stored_amount = 9,932.70 ÷ 1.12 = 8,868.48   rate = 8,868.48 ÷ 6 ÷ 0.92 = 1,606.61
+  Line 6 (HSN 63023100, Qty=6, Disc=8%, GST=12%, Amount=19,317.24):
+    stored_amount = 19,317.24 ÷ 1.12 = 17,247.54   rate = 17,247.54 ÷ 6 ÷ 0.92 = 3,124.55
+
+  CHECK 2 (Price column cross-check):
+    Line 1: 42,000÷1.05÷80=500 = printed Price 500 ✓
+    Line 4: 8,829.76÷1.12÷4=1,970.93 = printed Price 1,970.93 ✓  (all 6 lines pass)
+
+  CHECK 3 (forward round-trip):
+    Line 4: 2,142.31×0.92×4×1.12 = 8,829.76 ✓  (all 6 lines pass)
+
+  CHECK 4 (HSN taxable subtotals):
+    63041910: 40,000+62,200+22,980 = 1,25,180 = GST summary 1,25,180 ✓
+    63023100: 7,883.71+8,868.48+17,247.54 = 33,999.73 ≈ 33,999.74 ✓
+
+  CHECK 5 (GST amounts):
+    63041910: 1,25,180×2.5% = 3,129.50 CGST = 3,129.50 SGST ✓
+    63023100: 33,999.73×6% = 2,039.98 CGST = 2,039.98 SGST ✓
+
+  CHECK 6 (Grand Total):
+    1,59,179.73 + 10,338.96 + 0.30 = 1,69,518.99 ≈ 1,69,519.00 ✓
+    (₹0.01 gap = rounding of 33,999.73 vs 33,999.74 — acceptable)
+
+  NOTE: In this invoice layout "Price" = post-discount ex-GST price per unit.
+  "Amount" = qty × Price × (1+GST%). disc_percent is applied at line level.
+  For discounted lines: rate = Price ÷ (1 − disc%)
+  For non-discounted lines: rate = Price directly.
 
 SET is_gst_inclusive_amounts: true in the invoice JSON when you detect GST-inclusive amounts,
 so the backend knows not to re-apply its own conversion.
