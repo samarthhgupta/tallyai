@@ -14,11 +14,30 @@ import base64
 import io
 import uuid
 import logging
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 import anthropic
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import JSONResponse
+
+
+def _d(value) -> Decimal:
+    """Convert any numeric value to Decimal safely via string to avoid fp noise."""
+    return Decimal(str(value)) if value is not None else Decimal("0")
+
+
+def _round2(value) -> float:
+    """Round a Decimal to 2 decimal places using ROUND_HALF_UP, return float."""
+    return float(_d(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _line_amount(qty, rate, disc_percent) -> Decimal:
+    """Exact decimal calculation: qty × rate × (1 - disc/100)."""
+    q = _d(qty)
+    r = _d(rate)
+    d = _d(disc_percent)
+    return q * r * (1 - d / Decimal("100"))
 
 logger = logging.getLogger(__name__)
 
@@ -276,38 +295,38 @@ def correct_line_item_rates(inv: dict) -> dict:
 
     amount field should be post-discount, pre-GST (Net Amt column).
     Back-calculates the true pre-discount, ex-GST rate:
-        rate = amount / (qty * (1 - disc_percent/100))
+        rate = amount / (qty × (1 - disc_percent/100))
+
+    Uses Decimal arithmetic throughout to eliminate floating-point rounding
+    errors (e.g. 2141.9999... incorrectly rounding to 2141 instead of 2142).
 
     Also sanitises compound discounts if Claude returned them as a string
     like "40+10.71" instead of converting to effective %.
     """
     for item in inv.get("line_items", []):
         # Sanitise disc_percent — handle "40+10.71" strings from Claude
-        # Also handles cases where Claude summed two discount columns (e.g. 45+0=45 or 45+45=90 — wrong)
-        disc = item.get("disc_percent", 0)
-        if isinstance(disc, str) and "+" in disc:
-            parts = disc.split("+")
+        disc_raw = item.get("disc_percent", 0)
+        if isinstance(disc_raw, str) and "+" in disc_raw:
+            parts = disc_raw.split("+")
             try:
-                effective = 1.0
+                effective = Decimal("1")
                 for p in parts:
-                    effective *= (1 - float(p.strip()) / 100)
-                disc = round((1 - effective) * 100, 4)
+                    effective *= (1 - _d(p.strip()) / Decimal("100"))
+                disc = _round2((1 - effective) * Decimal("100"))
                 item["disc_percent"] = disc
-            except ValueError:
-                disc = 0
-                item["disc_percent"] = 0
-        elif isinstance(disc, (int, float)):
-            disc = float(disc)
+            except Exception:
+                disc = 0.0
+                item["disc_percent"] = 0.0
+        else:
+            disc = float(disc_raw) if disc_raw else 0.0
 
         amount = item.get("amount")
         qty = item.get("qty", 0)
 
         if amount and qty and qty > 0:
-            divisor = qty * (1 - disc / 100)
+            divisor = _d(qty) * (1 - _d(disc) / Decimal("100"))
             if divisor > 0:
-                # Add tiny epsilon before rounding to avoid floating-point
-                # truncation (e.g. 2141.9999... rounding to 2141 instead of 2142)
-                correct_rate = round(amount / divisor + 1e-9, 2)
+                correct_rate = _round2(_d(amount) / divisor)
                 current_rate = item.get("rate", 0)
                 # Only override if it meaningfully differs (>1% difference)
                 if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
@@ -340,12 +359,12 @@ def detect_bill_discount_from_total(inv: dict) -> dict:
         return inv  # no printed total to compare against
 
     computed_subtotal = sum(
-        item.get("qty", 0) * item.get("rate", 0) * (1 - item.get("disc_percent", 0) / 100)
+        _line_amount(item.get("qty", 0), item.get("rate", 0), item.get("disc_percent", 0))
         for item in inv.get("line_items", [])
     )
-    tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
-    expected = computed_subtotal + tax + inv.get("round_off", 0)
-    diff = round(expected - actual_total, 2)
+    tax = _d(inv.get("cgst", 0)) + _d(inv.get("sgst", 0)) + _d(inv.get("igst", 0))
+    expected = computed_subtotal + tax + _d(inv.get("round_off", 0))
+    diff = _round2(expected - _d(actual_total))
 
     if diff > 1:
         inv["bill_discount_amount"] = diff
@@ -373,21 +392,21 @@ def compute_confidence(inv: dict) -> float:
         reasons.append("No line items extracted")
 
     computed = sum(
-        item["qty"] * item["rate"] * (1 - item.get("disc_percent", 0) / 100)
+        _line_amount(item.get("qty", 0), item.get("rate", 0), item.get("disc_percent", 0))
         for item in inv.get("line_items", [])
     )
-    bill_discount = inv.get("bill_discount_amount", 0)
-    tax = inv.get("cgst", 0) + inv.get("sgst", 0) + inv.get("igst", 0)
-    charges = sum(c.get("amount", 0) for c in inv.get("charges", []))
-    expected_total = computed - bill_discount + tax + charges + inv.get("round_off", 0)
-    actual_total = inv.get("total", 0)
+    bill_discount = _d(inv.get("bill_discount_amount", 0))
+    tax = _d(inv.get("cgst", 0)) + _d(inv.get("sgst", 0)) + _d(inv.get("igst", 0))
+    charges = sum(_d(c.get("amount", 0)) for c in inv.get("charges", []))
+    expected_total = computed - bill_discount + tax + charges + _d(inv.get("round_off", 0))
+    actual_total = _d(inv.get("total", 0))
 
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
         diff = expected_total - actual_total
-        diff_pct = round(abs(diff) / actual_total * 100, 1)
+        diff_pct = _round2(abs(diff) / actual_total * 100)
         direction = "over" if diff > 0 else "under"
         reasons.append(
-            f"Computed total ₹{expected_total:,.2f} is ₹{abs(diff):,.2f} ({diff_pct}%) {direction} invoice total ₹{actual_total:,.2f}"
+            f"Computed total ₹{float(expected_total):,.2f} is ₹{float(abs(diff)):,.2f} ({diff_pct}%) {direction} invoice total ₹{float(actual_total):,.2f}"
         )
         score -= 0.15
 
