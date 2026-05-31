@@ -369,18 +369,47 @@ BUYER FIELDS:
 - If the invoice does not show buyer details, set both to null.
 
 BILL-LEVEL DISCOUNT RULE:
-Some Indian invoices show a discount on the overall invoice value (not per line item). This is especially common in handwritten invoices. Look for ANY of these patterns anywhere between the line items subtotal and the GST section:
-  - Words: "Discount", "Trade Discount", "Less", "Less Discount", "(-)", or just a "−" / "-" sign next to an amount
-  - A percentage stated at bill level (e.g. "Less 5%", "Discount 10%")
-  - A fixed rupee amount below the subtotal that is being subtracted (e.g. "Less  500", "- 250.00")
-  - Handwritten invoices often just write "Less" followed by an amount with no label
 
-When a bill-level discount is present:
-  - Set "bill_discount_amount" to the rupee value of the discount
-  - Set "bill_discount_percent" to the percentage if it was stated as a %, or null if it was a fixed rupee amount
-  - All line items should have disc_percent = 0 (the discount is NOT per-line)
-  - GST is calculated on (subtotal - bill_discount_amount), NOT on the full subtotal
-  - The invoice flow is: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total
+STEP 1 — LOCATE where the discount appears on the invoice:
+
+  LOCATION A — Inside the line items table, in a "Disc%" or "Discount%" column:
+    → This is a LINE-ITEM discount.
+    → Set disc_percent on each affected line item.
+    → Set bill_discount_amount = 0 and bill_discount_percent = null.
+
+  LOCATION B — Below the line items subtotal, before the GST section:
+    → This is a BILL-LEVEL discount.
+    → Look for: "Discount", "Trade Discount", "Less", "Less Discount", "(-)",
+      a "−" / "-" sign next to an amount, "Less 5%", "Discount 10%",
+      a fixed rupee amount being subtracted, or (in handwritten invoices) just "Less ₹X".
+    → Set bill_discount_amount to the rupee value.
+    → Set bill_discount_percent to the % if stated as a percentage, else null.
+    → Set disc_percent = 0 on ALL line items — the discount is NOT per line.
+    → GST is calculated on (subtotal − bill_discount_amount), NOT on the full subtotal.
+    → Invoice flow: Subtotal → minus Bill Discount → Taxable Value → plus GST → Total.
+
+STEP 2 — CRITICAL ANTI-DOUBLE-DISCOUNT CHECK:
+  A discount must be applied EXACTLY ONCE across the whole extraction.
+  NEVER apply the same discount at both line-item level AND bill level.
+
+  Before finalising, verify:
+    computed_taxable = sum(qty × rate × (1 − disc_percent/100)) − bill_discount_amount
+  This must match the Taxable Value printed on the invoice (within ₹2).
+  If it does not match, you have double-discounted. Fix it by choosing only one location:
+    - If the discount column is inside the line items table → line-item level only, bill_discount=0.
+    - If the discount row is below the subtotal → bill level only, all disc_percent=0.
+
+EXAMPLE of double-discounting to AVOID (Laxmi Agency invoice):
+  Invoice shows: line item Rate=180, Qty=120. A "6%" discount row appears BELOW the subtotal.
+  WRONG extraction:
+    line_items[0].disc_percent = 6   ← discount applied at line level
+    bill_discount_percent = 6        ← same discount applied again at bill level
+    computed_taxable = (120×180×0.94) − (20,304×6%) = 20,304 − 1,218 = 19,086  ← WRONG
+  CORRECT extraction:
+    line_items[0].disc_percent = 0   ← no line-level discount
+    bill_discount_percent = 6        ← discount applied once at bill level
+    bill_discount_amount = 1,296     ← 120×180×6% = 1,296
+    computed_taxable = 21,600 − 1,296 = 20,304  ← matches invoice ✓
 
 TOTAL IN WORDS RULE:
 On computer-generated Indian invoices, the total amount is almost always printed in words (e.g. "Rupees One Hundred Eighteen Only", "Rs. One Thousand Two Hundred and Fifty Only"). This appears near the bottom of the invoice, often labelled "Amount in Words", "Total in Words", or just written out with "Only" as a suffix.
