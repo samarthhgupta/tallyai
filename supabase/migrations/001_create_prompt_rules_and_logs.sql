@@ -1,54 +1,63 @@
-"""
-invoices.py — FastAPI router for invoice upload and extraction.
+-- ============================================================
+-- TallyAI — Supabase Migration 001
+-- Creates:
+--   1. prompt_rules  — stores the AI system prompt (editable from dashboard)
+--   2. extraction_logs — stores every invoice extraction result
+-- ============================================================
 
-POST /invoices/upload
-  - Accepts multipart/form-data: files (list[UploadFile]) + company_id (str)
-  - Converts each file to image/text content
-  - Sends to Claude claude-opus-4-5 for extraction
-  - Returns batch_id + per-file extracted invoices
-"""
+-- ── 1. prompt_rules ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS prompt_rules (
+  id          BIGSERIAL PRIMARY KEY,
+  key         TEXT UNIQUE NOT NULL,
+  content     TEXT NOT NULL,
+  description TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
 
-from __future__ import annotations
+-- Auto-update updated_at on every edit
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-import base64
-import io
-import uuid
-import logging
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional
+CREATE TRIGGER prompt_rules_updated_at
+  BEFORE UPDATE ON prompt_rules
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
-import time
-
-import anthropic
-from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import JSONResponse
-
-from lib.prompt_loader import get_system_prompt
-from lib.extraction_logger import log_extraction
-
-
-def _d(value) -> Decimal:
-    """Convert any numeric value to Decimal safely via string to avoid fp noise."""
-    return Decimal(str(value)) if value is not None else Decimal("0")
-
-
-def _round2(value) -> float:
-    """Round a Decimal to 2 decimal places using ROUND_HALF_UP, return float."""
-    return float(_d(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+-- Allow backend (service key) full access; allow anon read-only
+ALTER TABLE prompt_rules ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON prompt_rules
+  USING (true) WITH CHECK (true);
+CREATE POLICY "anon read" ON prompt_rules
+  FOR SELECT USING (true);
 
 
-def _line_amount(qty, rate, disc_percent) -> Decimal:
-    """Exact decimal calculation: qty × rate × (1 - disc/100)."""
-    q = _d(qty)
-    r = _d(rate)
-    d = _d(disc_percent)
-    return q * r * (1 - d / Decimal("100"))
+-- ── 2. extraction_logs ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS extraction_logs (
+  id             BIGSERIAL PRIMARY KEY,
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  batch_id       TEXT,
+  file_name      TEXT,
+  invoices       JSONB NOT NULL DEFAULT '[]',
+  invoice_count  INTEGER DEFAULT 0,
+  processing_ms  INTEGER,
+  error          TEXT
+);
 
-logger = logging.getLogger(__name__)
+-- Only backend (service key) should write logs; no anon access
+ALTER TABLE extraction_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service role full access" ON extraction_logs
+  USING (true) WITH CHECK (true);
 
-router = APIRouter(tags=["invoices"])
 
-SYSTEM_PROMPT = """You are an expert Indian invoice data extractor. Extract ALL invoices from the provided document. A single document may contain multiple separate invoices.
+-- ── 3. Seed the system prompt ────────────────────────────────
+INSERT INTO prompt_rules (key, description, content) VALUES (
+  'system_prompt',
+  'Main AI extraction prompt — all rules for reading Indian GST invoices. Edit this to add/change rules without redeploying.',
+  'You are an expert Indian invoice data extractor. Extract ALL invoices from the provided document. A single document may contain multiple separate invoices.
 
 For each invoice found, return a JSON object with:
 {
@@ -124,8 +133,8 @@ POSTAL/COURIER charges (SAC 9968, default GST 18%):
 
 GST RATE PRIORITY ORDER (invoice evidence always overrides defaults):
   Priority 1: Explicit GST rate printed against the charge on the invoice → use that rate.
-  Priority 2: The charge's SAC appears in the invoice's HSN/SAC summary → use that rate.
-  Priority 3: The charge appears in the invoice's GST/Tax summary → use that rate.
+  Priority 2: The charge''s SAC appears in the invoice''s HSN/SAC summary → use that rate.
+  Priority 3: The charge appears in the invoice''s GST/Tax summary → use that rate.
   Priority 4: Apply default classification rate (5% for freight-related, 18% for postal/courier).
 
 SPECIAL CASE — freight embedded in product value:
@@ -148,7 +157,7 @@ VALIDATION HIERARCHY — investigate mismatches in this order:
   Step 3: Re-check GST treatment on goods (rate%, tax type CGST+SGST vs IGST).
   Step 4: Test whether freight-related charges are taxable under SAC 9965 @ 5%.
   Step 5: Test whether courier/postage charges are taxable under SAC 9968 @ 18%.
-  Step 6: Test other rates (12%, 18%) if steps 4–5 don't resolve it.
+  Step 6: Test other rates (12%, 18%) if steps 4–5 don''t resolve it.
   Step 7: If reconciliation succeeds at any step → classify charge as taxable (see below).
   Step 8: If no test resolves the mismatch → keep charges as non-taxable, flag for review.
 
@@ -221,7 +230,7 @@ EXAMPLE — Non-taxable freight (reimbursement):
   → Keep in charges[], gst_percent=0. No change needed.
 
 LINE ITEM COMPLETENESS — extract exactly what is in the table, no more, no less:
-  1. Count the serial numbers (S.No.) in the invoice's line items table. If S.No. runs 1 to N, you must have EXACTLY N line items — not N-1 (skip), not N+1 (hallucinate).
+  1. Count the serial numbers (S.No.) in the invoice''s line items table. If S.No. runs 1 to N, you must have EXACTLY N line items — not N-1 (skip), not N+1 (hallucinate).
   2. ONLY extract rows that have an explicit S.No. in the line items table. Do NOT extract:
      - Subtotal rows, total rows, tax rows, round-off rows
      - Charges mentioned in the footer or below the subtotal (those go in "charges")
@@ -353,7 +362,7 @@ CHECK 3 — Forward round-trip for every line item:
 
 CHECK 4 — HSN-wise taxable subtotals vs GST summary:
   For each HSN code, sum the stored_amounts of all line items with that HSN.
-  Compare to the taxable value in the invoice's GST/Tax summary table.
+  Compare to the taxable value in the invoice''s GST/Tax summary table.
   They must agree within ₹2. A larger gap means a line item was missed or assigned the wrong HSN.
 
 CHECK 5 — GST amount verification:
@@ -429,7 +438,7 @@ COLUMN IDENTIFICATION RULE — when an invoice has both "Amount" and "Net Amt" c
 
 BUYER FIELDS:
 - "buyer_name": the name of the company the invoice is addressed TO (appears under "Bill To", "Consignee", "Buyer", "Ship To"). This is NOT the vendor/seller.
-- "buyer_gstin": the GSTIN of the buyer/recipient, usually printed next to the buyer's name or address.
+- "buyer_gstin": the GSTIN of the buyer/recipient, usually printed next to the buyer''s name or address.
 - If the invoice does not show buyer details, set both to null.
 
 BILL-LEVEL DISCOUNT RULE:
@@ -476,7 +485,7 @@ EXAMPLE of double-discounting to AVOID (Laxmi Agency invoice L-1154):
     bill_discount_amount = 1,296     ← 21,600 × 6% = 1,296
     computed_taxable = 21,600 − 1,296 = 20,304  ← matches invoice ✓
 
-  RULE: If the invoice's line items table has NO Discount% column, then disc_percent=0
+  RULE: If the invoice''s line items table has NO Discount% column, then disc_percent=0
   on every line item, always. The discount lives at bill level only.
 
 TOTAL IN WORDS RULE:
@@ -548,600 +557,5 @@ Other rules:
 - If a line item has no explicit HSN, put "UNKNOWN".
 - Confidence: 1.0 = all fields clearly visible, 0.5 = some fields unclear/missing, 0.0 = cannot read.
 - Do NOT include a "confidence_reasons" field — it is computed server-side.
-- If multiple invoices exist in the document, return all of them."""
-
-
-def normalize_hsn_codes(inv: dict) -> dict:
-    """Strip dots and spaces from HSN/SAC codes (e.g. '1234.56.78' → '12345678')."""
-    for item in inv.get("line_items", []):
-        hsn = item.get("hsn", "")
-        if hsn and hsn != "UNKNOWN":
-            item["hsn"] = hsn.replace(".", "").replace(" ", "")
-    return inv
-
-
-def correct_line_item_rates(inv: dict) -> dict:
-    """
-    Self-correct extracted rates using the printed amount as ground truth.
-
-    amount field should be post-discount, pre-GST (Net Amt column).
-    Back-calculates the true pre-discount, ex-GST rate:
-        rate = amount / (qty × (1 - disc_percent/100))
-
-    Uses Decimal arithmetic throughout to eliminate floating-point rounding
-    errors (e.g. 2141.9999... incorrectly rounding to 2141 instead of 2142).
-
-    Also sanitises compound discounts if Claude returned them as a string
-    like "40+10.71" instead of converting to effective %.
-    """
-    for item in inv.get("line_items", []):
-        # Sanitise disc_percent — handle "40+10.71" strings from Claude
-        disc_raw = item.get("disc_percent", 0)
-        if isinstance(disc_raw, str) and "+" in disc_raw:
-            parts = disc_raw.split("+")
-            try:
-                effective = Decimal("1")
-                for p in parts:
-                    effective *= (1 - _d(p.strip()) / Decimal("100"))
-                disc = _round2((1 - effective) * Decimal("100"))
-                item["disc_percent"] = disc
-            except Exception:
-                disc = 0.0
-                item["disc_percent"] = 0.0
-        else:
-            disc = float(disc_raw) if disc_raw else 0.0
-
-        amount = item.get("amount")
-        qty = item.get("qty", 0)
-        gst_pct = item.get("gst_percent", 0)
-
-        # Claude already converts GST-inclusive amounts to GST-exclusive per the
-        # system prompt instructions. Do NOT re-divide here — that would double-convert.
-        effective_amount = _d(amount) if amount else Decimal("0")
-
-        if effective_amount and qty and qty > 0:
-            divisor = _d(qty) * (1 - _d(disc) / Decimal("100"))
-            if divisor > 0:
-                raw = effective_amount / divisor
-                # Round to 2 decimal places first
-                rate_2dp = float(raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-                # If within ₹0.10 of a whole number, snap to that integer.
-                # Indian invoice rates are whole rupees; the small gap (e.g. 2141.96
-                # instead of 2142) is a back-calculation artifact from the invoice
-                # software rounding the price column (1970.64 = 2142 × 0.92).
-                nearest_int = round(rate_2dp)
-                correct_rate = float(nearest_int) if abs(rate_2dp - nearest_int) < 0.10 else rate_2dp
-                current_rate = item.get("rate", 0)
-                pct_diff = abs(correct_rate - current_rate) / max(correct_rate, 0.01)
-                abs_diff = abs(correct_rate - current_rate)
-                # Override if >1% difference (wrong column extracted by Claude)
-                # OR if the back-calc gives a clean whole-rupee rate and the extracted
-                # rate is off by ≥₹0.50 — catches off-by-one errors like 2141 vs 2142
-                # where the % gap is tiny but the rupee difference is real.
-                is_whole = correct_rate == float(int(correct_rate))
-                if current_rate == 0 or pct_diff > 0.01 or (is_whole and abs_diff >= 0.5):
-                    item["rate"] = correct_rate
-
-    return inv
-
-
-def detect_bill_discount_from_total(inv: dict) -> dict:
-    """
-    Mathematical fallback: if computed total > invoice total by more than ₹1
-    and no bill discount was already extracted, the difference is almost certainly
-    an undetected bill-level discount (e.g. handwritten "Less ₹X").
-
-    We auto-set bill_discount_amount = difference and mark it as auto-detected
-    so the UI can flag it for human review.
-
-    We do NOT apply this when computed < invoice total — that would mean the
-    invoice total is higher than our numbers, which signals a different problem
-    (missing line item, wrong rate) rather than a discount.
-    """
-    if inv.get("bill_discount_amount", 0) != 0:
-        return inv  # already has a discount, don't override
-
-    if inv.get("is_computer_generated"):
-        return inv  # computer-generated invoices have correct calculations — trust them
-
-    actual_total = inv.get("total", 0)
-    if actual_total <= 0:
-        return inv  # no printed total to compare against
-
-    computed_subtotal = sum(
-        _line_amount(item.get("qty", 0), item.get("rate", 0), item.get("disc_percent", 0))
-        for item in inv.get("line_items", [])
-    )
-    tax = _d(inv.get("cgst", 0)) + _d(inv.get("sgst", 0)) + _d(inv.get("igst", 0))
-    expected = computed_subtotal + tax + _d(inv.get("round_off", 0))
-    diff = _round2(expected - _d(actual_total))
-
-    if diff > 1:
-        inv["bill_discount_amount"] = diff
-        inv["bill_discount_percent"] = None
-        inv["bill_discount_auto_detected"] = True  # flag for UI transparency
-
-    return inv
-
-
-def compute_confidence(inv: dict) -> float:
-    score = inv.get("confidence", 0.5)
-    reasons: list[str] = []
-
-    if not inv.get("vendor_gstin"):
-        score -= 0.05
-        reasons.append("Missing vendor GSTIN")
-    if not inv.get("invoice_number"):
-        score -= 0.1
-        reasons.append("Missing invoice number")
-    if not inv.get("invoice_date"):
-        score -= 0.1
-        reasons.append("Missing invoice date")
-    if not inv.get("line_items"):
-        score -= 0.2
-        reasons.append("No line items extracted")
-
-    computed = sum(
-        _line_amount(item.get("qty", 0), item.get("rate", 0), item.get("disc_percent", 0))
-        for item in inv.get("line_items", [])
-    )
-    bill_discount = _d(inv.get("bill_discount_amount", 0))
-    tax = _d(inv.get("cgst", 0)) + _d(inv.get("sgst", 0)) + _d(inv.get("igst", 0))
-    charges = sum(_d(c.get("amount", 0)) for c in inv.get("charges", []))
-    charges_gst = sum(
-        _d(c.get("amount", 0)) * _d(c.get("gst_percent", 0)) / _d(100)
-        for c in inv.get("charges", [])
-        if c.get("gst_percent", 0)
-    )
-    expected_total = computed - bill_discount + tax + charges + charges_gst + _d(inv.get("round_off", 0))
-    actual_total = _d(inv.get("total", 0))
-
-    if actual_total > 0 and abs(expected_total - actual_total) > 1:
-        diff = expected_total - actual_total
-        direction = "over" if diff > 0 else "under"
-        reasons.append(
-            f"Computed total ₹{float(expected_total):,.2f} is ₹{float(abs(diff)):,.2f} {direction} invoice total ₹{float(actual_total):,.2f}"
-        )
-        score -= 0.15
-
-    inv["confidence_reasons"] = reasons
-    return max(0.0, min(1.0, score))
-
-
-MAX_PAGES = 8       # max pages sent per Claude call
-DPI = 120           # DPI for scanned pages — higher than text PDFs for legibility
-JPEG_QUALITY = 75   # JPEG compression — keeps each page under ~200 KB
-
-# A page with fewer than this many characters is treated as a scan
-TEXT_CHARS_THRESHOLD = 50
-
-
-def _is_scanned_page(page) -> bool:
-    """Return True if this PDF page is a scan (image-only, no extractable text)."""
-    text = page.get_text("text").strip()
-    return len(text) < TEXT_CHARS_THRESHOLD
-
-
-def _pdf_native_text(file_bytes: bytes) -> list[dict]:
-    """
-    Extract text from a native (text-based) PDF page by page.
-    Sends all page text in a single text block — fast and accurate.
-    """
-    import fitz
-
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages_text = []
-    for i, page in enumerate(list(doc)[:MAX_PAGES]):
-        text = page.get_text("text").strip()
-        if text:
-            pages_text.append(f"--- Page {i + 1} ---\n{text}")
-    doc.close()
-
-    combined = "\n\n".join(pages_text) if pages_text else "(no text extracted)"
-    return [{"type": "text", "text": f"Invoice document text:\n\n{combined}"}]
-
-
-def _pdf_scanned_images(file_bytes: bytes) -> list[dict]:
-    """
-    Render scanned PDF pages as JPEG images for Claude vision.
-    """
-    import fitz
-    from PIL import Image
-
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    content_parts = []
-
-    for page in list(doc)[:MAX_PAGES]:
-        mat = fitz.Matrix(DPI / 72, DPI / 72)
-        pix = page.get_pixmap(matrix=mat)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-        b64 = base64.standard_b64encode(buf.getvalue()).decode()
-        content_parts.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-        })
-
-    doc.close()
-    return content_parts
-
-
-def _pdf_to_content(file_bytes: bytes) -> list[dict]:
-    """
-    Auto-detect PDF type and choose the right extraction method.
-    - Native PDF (has selectable text) → extract text directly
-    - Scanned PDF (image pages) → render as JPEG images for vision
-    Mixed PDFs (some text, some scanned) are treated as scanned.
-    """
-    import fitz
-
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = list(doc)[:MAX_PAGES]
-    scanned_pages = sum(1 for p in pages if _is_scanned_page(p))
-    doc.close()
-
-    is_scanned = scanned_pages > len(pages) / 2  # majority scanned → treat as scan
-
-    logger.info(
-        "PDF type detected: %s (%d/%d pages scanned)",
-        "scanned" if is_scanned else "native",
-        scanned_pages,
-        len(pages),
-    )
-
-    if is_scanned:
-        return _pdf_scanned_images(file_bytes)
-    else:
-        return _pdf_native_text(file_bytes)
-
-
-def _image_to_content(file_bytes: bytes, media_type: str) -> list[dict]:
-    """Convert image bytes to Claude content part, compressing if needed."""
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    # Resize if wider than 1600px (keeps it readable but small)
-    if img.width > 1600:
-        ratio = 1600 / img.width
-        img = img.resize((1600, int(img.height * ratio)), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-    b64 = base64.standard_b64encode(buf.getvalue()).decode()
-    return [{
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": "image/jpeg",
-            "data": b64,
-        },
-    }]
-
-
-def _docx_to_text(file_bytes: bytes) -> list[dict]:
-    """Extract text from .docx using python-docx."""
-    from docx import Document
-
-    doc = Document(io.BytesIO(file_bytes))
-    text = "\n".join(para.text for para in doc.paragraphs if para.text.strip())
-    return [{"type": "text", "text": text or "(empty document)"}]
-
-
-def _doc_to_text(file_bytes: bytes) -> list[dict]:
-    """Fallback text extraction for .doc (try plain text decode)."""
-    try:
-        text = file_bytes.decode("utf-8", errors="ignore")
-    except Exception:
-        text = "(could not decode .doc file)"
-    return [{"type": "text", "text": text}]
-
-
-# Minimum meaningful text characters across the whole document
-TEXT_MIN_CHARS = 80
-# Pixel brightness threshold — 0=black, 255=white; pages above this are "blank"
-BLANK_BRIGHTNESS = 252
-# Fraction of pixels that must exceed BLANK_BRIGHTNESS for a page to be considered blank
-BLANK_PIXEL_FRACTION = 0.97
-
-
-def _is_blank_image(img) -> bool:
-    """Return True if the PIL image is overwhelmingly white (blank page)."""
-    import struct
-    pixels = list(img.convert("L").getdata())  # greyscale
-    white = sum(1 for p in pixels if p >= BLANK_BRIGHTNESS)
-    return white / len(pixels) >= BLANK_PIXEL_FRACTION if pixels else True
-
-
-class BlankDocumentError(Exception):
-    """Raised when a document has no meaningful content worth sending to Claude."""
-    pass
-
-
-def _prescreen_pdf(file_bytes: bytes) -> None:
-    """Raise BlankDocumentError if the PDF is blank or has no usable content."""
-    import fitz
-
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = list(doc)[:MAX_PAGES]
-
-    if not pages:
-        doc.close()
-        raise BlankDocumentError("PDF has no pages.")
-
-    total_text = ""
-    all_blank_images = True
-
-    for page in pages:
-        total_text += page.get_text("text").strip()
-        if _is_scanned_page(page):
-            # Render and check brightness
-            from PIL import Image
-            mat = fitz.Matrix(72 / 72, 72 / 72)  # 72 DPI is enough for blank detection
-            pix = page.get_pixmap(matrix=mat)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            if not _is_blank_image(img):
-                all_blank_images = False
-        else:
-            all_blank_images = False  # native text page — not an image blank
-
-    doc.close()
-
-    is_native = len(total_text) >= TEXT_CHARS_THRESHOLD
-    if is_native and len(total_text) < TEXT_MIN_CHARS:
-        raise BlankDocumentError(f"PDF text content too short ({len(total_text)} chars) — likely blank or corrupt.")
-    if not is_native and all_blank_images:
-        raise BlankDocumentError("All scanned pages appear to be blank (white).")
-
-
-def _prescreen_image(file_bytes: bytes) -> None:
-    """Raise BlankDocumentError if the image is blank."""
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    if _is_blank_image(img):
-        raise BlankDocumentError("Image appears to be blank (white page).")
-
-
-def _prescreen_text(text: str) -> None:
-    """Raise BlankDocumentError if a text document has no meaningful content."""
-    if len(text.strip()) < TEXT_MIN_CHARS:
-        raise BlankDocumentError(f"Document has no meaningful text content ({len(text.strip())} chars).")
-
-
-
-async def _build_content_parts(upload: UploadFile) -> list[dict]:
-    """
-    Read an UploadFile, run a blank/content pre-screen, and return Claude content parts.
-    Raises BlankDocumentError before touching Claude if the file has no useful content.
-    """
-    file_bytes = await upload.read()
-    filename = (upload.filename or "").lower()
-    content_type = (upload.content_type or "").lower()
-
-    if filename.endswith(".pdf") or "pdf" in content_type:
-        _prescreen_pdf(file_bytes)
-        return _pdf_to_content(file_bytes)
-    elif filename.endswith(".png") or "png" in content_type:
-        _prescreen_image(file_bytes)
-        return _image_to_content(file_bytes, "image/png")
-    elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type:
-        _prescreen_image(file_bytes)
-        return _image_to_content(file_bytes, "image/jpeg")
-    elif filename.endswith(".docx"):
-        parts = _docx_to_text(file_bytes)
-        _prescreen_text(parts[0]["text"])
-        return parts
-    elif filename.endswith(".doc"):
-        parts = _doc_to_text(file_bytes)
-        _prescreen_text(parts[0]["text"])
-        return parts
-    else:
-        try:
-            text = file_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            text = ""
-        _prescreen_text(text)
-        return [{"type": "text", "text": text}]
-
-
-async def _extract_invoices_from_file(
-    upload: UploadFile, client: anthropic.Anthropic, batch_id: str = ""
-) -> tuple[list[dict], Optional[str]]:
-    """
-    Extract invoices from a single file.
-    Returns (invoices_list, error_or_None).
-    """
-    import json
-
-    try:
-        content_parts = await _build_content_parts(upload)
-    except BlankDocumentError as exc:
-        logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
-        return [], f"Skipped (no invoice content): {exc}"
-    except Exception as exc:
-        logger.exception("Failed to process file %s", upload.filename)
-        return [], f"Could not process file: {exc}"
-
-    try:
-        system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
-        t0 = time.monotonic()
-        response = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": content_parts
-                    + [{"type": "text", "text": "Extract all invoices from this document."}],
-                }
-            ],
-        )
-        raw_text = response.content[0].text.strip()
-        # Warn if Claude hit the token limit — response may be truncated
-        if response.stop_reason == "max_tokens":
-            logger.warning(
-                "Claude hit max_tokens for %s — response may be truncated (%d chars)",
-                upload.filename, len(raw_text),
-            )
-    except Exception as exc:
-        logger.exception("Claude API call failed for %s", upload.filename)
-        return [], f"Claude API error: {exc}"
-
-    try:
-        invoices = json.loads(raw_text)
-        if not isinstance(invoices, list):
-            invoices = [invoices]
-    except json.JSONDecodeError:
-        # Claude sometimes wraps output in markdown fences or adds commentary.
-        # Most robust recovery: find the outermost JSON array by locating the
-        # first '[' and the last ']' in the response and parsing that slice.
-        start = raw_text.find("[")
-        end = raw_text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                invoices = json.loads(raw_text[start : end + 1])
-                if not isinstance(invoices, list):
-                    invoices = [invoices]
-            except json.JSONDecodeError:
-                return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
-        else:
-            return [], f"No JSON array found in Claude response: {raw_text[:200]}"
-
-    # Normalise HSN codes, correct rates, detect missed discounts, then score
-    for inv in invoices:
-        inv = normalize_hsn_codes(inv)
-        inv = correct_line_item_rates(inv)
-        inv = detect_bill_discount_from_total(inv)
-        inv["confidence"] = compute_confidence(inv)
-
-    processing_ms = int((time.monotonic() - t0) * 1000)
-    log_extraction(
-        batch_id=batch_id,
-        file_name=upload.filename or "unknown",
-        invoices=invoices,
-        processing_ms=processing_ms,
-    )
-
-    return invoices, None
-
-
-def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
-    """
-    Two cases for invoices sharing the same invoice number across files:
-
-    1. Multi-page split (one or both pages incomplete) → MERGE into one invoice.
-       A page is "incomplete" if total == 0 or line_items is empty.
-
-    2. True duplicate (both are complete invoices) → FLAG as duplicate.
-       Do not merge; mark the later occurrence with duplicate_of_filename so
-       the UI can prompt the human to reject it.
-    """
-    from collections import defaultdict
-
-    index: dict = defaultdict(list)
-    for fi, fr in enumerate(file_results):
-        for ii, inv in enumerate(fr["invoices"]):
-            num = (inv.get("invoice_number") or "").strip().upper()
-            if num:
-                index[num].append((fi, ii, inv))
-
-    merged_keys: set = set()
-
-    for num, entries in index.items():
-        if len(entries) < 2:
-            continue
-
-        entries.sort(key=lambda x: x[0])
-        base_fi, base_ii, base = entries[0]
-
-        for fi, ii, page in entries[1:]:
-            base_complete = base.get("total", 0) > 0 and len(base.get("line_items", [])) > 0
-            page_complete = page.get("total", 0) > 0 and len(page.get("line_items", [])) > 0
-
-            if base_complete and page_complete:
-                # Both are complete → true duplicate
-                page["duplicate_of"] = base.get("invoice_number", "")
-                page["duplicate_of_filename"] = file_results[base_fi]["filename"]
-            else:
-                # At least one is incomplete → multi-page split, merge them
-                base["line_items"] = base.get("line_items", []) + page.get("line_items", [])
-
-                for field in ("vendor_name", "vendor_gstin", "vendor_address",
-                              "buyer_name", "buyer_gstin", "invoice_date", "tax_type"):
-                    if not base.get(field) and page.get(field):
-                        base[field] = page[field]
-
-                if base.get("total", 0) == 0 and page.get("total", 0) > 0:
-                    for f in ("subtotal", "bill_discount_amount", "bill_discount_percent",
-                              "cgst", "sgst", "igst", "round_off", "total"):
-                        if page.get(f) is not None:
-                            base[f] = page[f]
-
-                base["_merged_from_pages"] = True
-                merged_keys.add((fi, ii))
-
-        # Re-run post-processing on merged invoice only
-        if not base.get("duplicate_of"):
-            base = normalize_hsn_codes(base)
-        base = correct_line_item_rates(base)
-        base = detect_bill_discount_from_total(base)
-        base["confidence"] = compute_confidence(base)
-        file_results[base_fi]["invoices"][base_ii] = base
-
-    # Remove entries that were merged into another invoice
-    for fi, fr in enumerate(file_results):
-        fr["invoices"] = [
-            inv for ii, inv in enumerate(fr["invoices"])
-            if (fi, ii) not in merged_keys
-        ]
-
-    return file_results
-
-
-@router.post("/upload")
-async def upload_invoices(
-    files: list[UploadFile] = File(...),
-    company_id: Optional[str] = Form(None),
-):
-    """
-    Upload one or more invoice files for extraction.
-
-    Returns batch_id, per-file results, and total invoice count.
-    """
-    import os
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "ANTHROPIC_API_KEY not configured on server."},
-        )
-
-    client = anthropic.Anthropic(api_key=api_key)
-    batch_id = str(uuid.uuid4())
-
-    file_results = []
-
-    for upload in files:
-        invoices, error = await _extract_invoices_from_file(upload, client, batch_id)
-        if error:
-            log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown",
-                           invoices=[], processing_ms=0, error=error)
-        file_results.append({
-            "filename": upload.filename or "unknown",
-            "invoices": invoices,
-            "error": error,
-        })
-
-    # Merge invoices with the same invoice number across different files
-    # (handles the case where a multi-page invoice was scanned as separate image files)
-    file_results = _merge_cross_file_invoices(file_results)
-
-    total_invoices = sum(len(fr["invoices"]) for fr in file_results)
-
-    return {
-        "batch_id": batch_id,
-        "file_results": file_results,
-        "total_invoices": total_invoices,
-    }
+- If multiple invoices exist in the document, return all of them.'
+) ON CONFLICT (key) DO NOTHING;
