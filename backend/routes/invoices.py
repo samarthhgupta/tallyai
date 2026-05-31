@@ -104,16 +104,22 @@ CASE 3 — Charge appears AFTER the line items subtotal WITH an HSN code:
 
   - If the charge row is blank or zero, do NOT include it anywhere.
 
-LINE ITEM COMPLETENESS — never skip a line item:
-  After extracting all line items, count the serial numbers (S.No.) on the invoice.
-  If S.No. runs from 1 to N, you must have exactly N line items extracted.
-  If any S.No. is missing from your output, find and extract it before finalising.
+LINE ITEM COMPLETENESS — extract exactly what is in the table, no more, no less:
+  1. Count the serial numbers (S.No.) in the invoice's line items table. If S.No. runs 1 to N, you must have EXACTLY N line items — not N-1 (skip), not N+1 (hallucinate).
+  2. ONLY extract rows that have an explicit S.No. in the line items table. Do NOT extract:
+     - Subtotal rows, total rows, tax rows, round-off rows
+     - Charges mentioned in the footer or below the subtotal (those go in "charges")
+     - Anything from the invoice header, address block, or summary section
+     - Numbers that appear elsewhere on the invoice but not in the line items table
+  3. If you are uncertain whether a row is a line item or a summary row, check: does it have a serial number? If not, it is NOT a line item.
 
 Return ONLY a JSON array [...] of invoice objects. No markdown, no explanation.
 
 COMPUTER-GENERATED INVOICE RULE:
 If an invoice is clearly computer-generated (consistent fonts, printed layout, machine-calculated totals), set "is_computer_generated": true.
-- All totals on a computer-generated invoice are mathematically correct — trust them completely.
+- All values on a computer-generated invoice are mathematically exact — trust them completely.
+- Extract the Rate column value EXACTLY as printed — do NOT recalculate or estimate.
+- Extract the Amount column value EXACTLY as printed — do NOT recalculate.
 - Do NOT look for hidden discounts or assume any mismatch is an error.
 - The printed total IS the correct total. Extract it exactly as shown.
 
@@ -715,7 +721,10 @@ async def _extract_invoices_from_file(
     # Normalise HSN codes, correct rates, detect missed discounts, then score
     for inv in invoices:
         inv = normalize_hsn_codes(inv)
-        inv = correct_line_item_rates(inv)
+        # For computer-generated invoices all printed values are exact —
+        # skip rate back-calculation which can introduce errors from misread amounts
+        if not inv.get("is_computer_generated"):
+            inv = correct_line_item_rates(inv)
         inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)
 
@@ -780,7 +789,8 @@ def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
         # Re-run post-processing on merged invoice only
         if not base.get("duplicate_of"):
             base = normalize_hsn_codes(base)
-        base = correct_line_item_rates(base)
+        if not base.get("is_computer_generated"):
+            base = correct_line_item_rates(base)
         base = detect_bill_discount_from_total(base)
         base["confidence"] = compute_confidence(base)
         file_results[base_fi]["invoices"][base_ii] = base
