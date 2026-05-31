@@ -339,6 +339,10 @@ export function InvoiceCard({
   const chargesGST = chargeHsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
   const computedTotal = taxableValue + computedTax + chargesTotal + chargesGST + (current.round_off ?? 0);
 
+  // Split charges: GST-applicable (contribute to taxable base) vs non-GST (pass-through only)
+  const gstChargesTotal = (current.charges ?? []).filter(c => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+  const nonGstChargesTotal = (current.charges ?? []).filter(c => c.gst_percent === 0).reduce((s, c) => s + c.amount, 0);
+
   // ─── Mismatch detection ────────────────────────────────────────────────────
 
   const invoiceTotal = inv.total; // reference stays fixed (original extracted value)
@@ -856,26 +860,29 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 4 — Additional Charges                                        */}
+      {/* Section 4 — Additional Charges (Non-GST)                             */}
+      {/* Only charges with gst_percent === 0. GST-applicable charges appear   */}
+      {/* in Tax Summary (Section 5) and contribute to Total Taxable Value.    */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {(current.charges ?? []).length > 0 && (
+      {(current.charges ?? []).some(c => c.gst_percent === 0) && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
           <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
-            4. Additional Charges
+            4. Additional Charges (Non-GST)
           </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['Description', 'SAC', 'Ledger Name', 'Taxable Amount', 'GST %', 'GST Amount'].map((h) => (
+                  {['Description', 'SAC', 'Ledger Name', 'Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {(current.charges ?? []).map((c: ExtraCharge, i: number) => {
+                {(current.charges ?? []).filter(c => c.gst_percent === 0).map((c: ExtraCharge, i: number) => {
                   const sac = getSacForCharge(c.description);
-                  const gstAmt = c.amount * c.gst_percent / 100;
+                  // find original index for edit callbacks
+                  const origIdx = (current.charges ?? []).indexOf(c);
                   return (
                     <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
 
@@ -884,7 +891,7 @@ export function InvoiceCard({
                         {editMode ? (
                           <select
                             value={c.description}
-                            onChange={(e) => setCharge(i, 'description', e.target.value)}
+                            onChange={(e) => setCharge(origIdx, 'description', e.target.value)}
                             className="w-full bg-blue-50 border-0 border-b border-blue-300 focus:outline-none focus:border-indigo-500 focus:bg-indigo-50 py-0.5 text-sm rounded-sm"
                           >
                             {CHARGE_TYPES.map((ct) => (
@@ -900,27 +907,17 @@ export function InvoiceCard({
                       {/* SAC */}
                       <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">{sac || '—'}</td>
 
-                      {/* Ledger Name — display only */}
+                      {/* Ledger Name */}
                       <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
-                        {c.description} @ {c.gst_percent}%
+                        {c.description} @ 0%
                       </td>
 
-                      {/* Taxable Amount */}
+                      {/* Amount */}
                       <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
                         {editMode ? (
-                          <CellInput value={c.amount} onChange={(v) => setCharge(i, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
+                          <CellInput value={c.amount} onChange={(v) => setCharge(origIdx, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
                         ) : formatINR(c.amount)}
                       </td>
-
-                      {/* GST % */}
-                      <td className="px-2 py-1.5 border border-gray-200 text-right w-20">
-                        {editMode ? (
-                          <CellInput value={c.gst_percent} onChange={(v) => setCharge(i, 'gst_percent', v)} type="number" min="0" max="100" step="0.01" className="w-14" />
-                        ) : `${c.gst_percent}%`}
-                      </td>
-
-                      {/* GST Amount */}
-                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">{formatINR(gstAmt)}</td>
 
                     </tr>
                   );
@@ -1016,16 +1013,17 @@ export function InvoiceCard({
             </div>
           )}
 
-          {chargesTotal > 0 && (
+          {/* GST-applicable charges are part of the taxable base — shown here before Total Taxable */}
+          {gstChargesTotal > 0 && (
             <div className="flex justify-between text-blue-600">
-              <span>(+) Additional Charges</span>
-              <span className="font-medium tabular-nums">+{formatINR(chargesTotal)}</span>
+              <span>(+) Taxable Charges</span>
+              <span className="font-medium tabular-nums">+{formatINR(gstChargesTotal)}</span>
             </div>
           )}
 
           <div className="border-t border-gray-300 pt-1.5 flex justify-between font-semibold text-gray-800">
             <span>Total Taxable Value</span>
-            <span className="tabular-nums">{formatINR(taxableValue + chargesTotal)}</span>
+            <span className="tabular-nums">{formatINR(taxableValue + gstChargesTotal)}</span>
           </div>
 
           {current.tax_type === 'cgst_sgst' ? (
@@ -1043,6 +1041,14 @@ export function InvoiceCard({
             <div className="flex justify-between text-gray-600">
               <span>(+) IGST</span>
               <span className="tabular-nums">+{formatINR(totalIGST)}</span>
+            </div>
+          )}
+
+          {/* Non-GST charges are pass-through additions — shown after tax lines */}
+          {nonGstChargesTotal > 0 && (
+            <div className="flex justify-between text-gray-600">
+              <span>(+) Additional Charges (Non-GST)</span>
+              <span className="tabular-nums">+{formatINR(nonGstChargesTotal)}</span>
             </div>
           )}
 

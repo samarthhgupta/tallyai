@@ -41,6 +41,75 @@ function placeOfSupply(inv: ExtractedInvoice): string {
   return FULL_STATE_NAME[gstin.slice(0, 2)] ?? '';
 }
 
+// ─── Shared invoice calculations ──────────────────────────────────────────────
+// Mirrors InvoiceCard: GST-applicable charges merge into taxable value;
+// non-GST charges are pass-through additions shown after taxes.
+
+interface InvCalc {
+  computedSubtotal: number;
+  billDiscount: number;
+  taxableValue: number;          // goods only (after discount)
+  gstChargesAmount: number;      // charges with gst_percent > 0
+  nonGstChargesAmount: number;   // charges with gst_percent === 0
+  totalTaxableValue: number;     // taxableValue + gstChargesAmount (matches dashboard "Total Taxable Value")
+  allCGST: number;               // CGST on goods + GST charges
+  allSGST: number;
+  allIGST: number;
+  excelRoundOff: number;         // adjusted round-off matching dashboard reconciliation display
+  excelTotal: number;            // inv.total when available (matches dashboard Final Invoice Value)
+  hsnRows: ReturnType<typeof buildHsnSummary>;
+  chargeHsnRows: { hsn: string; gst_percent: number; taxable: number; cgst: number; sgst: number; igst: number }[];
+}
+
+function calcInv(inv: ExtractedInvoice): InvCalc {
+  const billDiscount = inv.bill_discount_amount ?? 0;
+  const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, billDiscount);
+  const computedSubtotal = inv.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
+  const taxableValue = computedSubtotal - billDiscount;
+  const invCharges = inv.charges ?? [];
+
+  // Split charges by GST status
+  const gstChargesAmount = invCharges.filter(c => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+  const nonGstChargesAmount = invCharges.filter(c => c.gst_percent === 0).reduce((s, c) => s + c.amount, 0);
+  const totalTaxableValue = taxableValue + gstChargesAmount;
+
+  // Charge HSN rows for GST-carrying charges
+  const chargeHsnRows = invCharges.filter(c => c.gst_percent > 0).map(c => {
+    const tax = r2(c.amount * c.gst_percent / 100);
+    const sac = sacForCharge(c.description) || c.description;
+    return {
+      hsn: sac,
+      gst_percent: c.gst_percent,
+      taxable: c.amount,
+      cgst: inv.tax_type === 'cgst_sgst' ? r2(tax / 2) : 0,
+      sgst: inv.tax_type === 'cgst_sgst' ? r2(tax / 2) : 0,
+      igst: inv.tax_type === 'igst' ? tax : 0,
+    };
+  });
+
+  // All-in GST totals (goods + GST-carrying charges) — matches dashboard Tax Summary TOTAL row
+  const allCGST = hsnRows.reduce((s, r) => s + r.cgst, 0) + chargeHsnRows.reduce((s, r) => s + r.cgst, 0);
+  const allSGST = hsnRows.reduce((s, r) => s + r.sgst, 0) + chargeHsnRows.reduce((s, r) => s + r.sgst, 0);
+  const allIGST = hsnRows.reduce((s, r) => s + r.igst, 0) + chargeHsnRows.reduce((s, r) => s + r.igst, 0);
+
+  // Replicate the dashboard reconciliation IIFE logic so Excel matches what the user sees.
+  // excelBase = everything except round-off (= recoBase in InvoiceCard).
+  const excelBase = totalTaxableValue + nonGstChargesAmount + r2(allCGST) + r2(allSGST) + r2(allIGST);
+  const invTotal = inv.total ?? 0;
+  const rawRoundOff = r2(inv.round_off ?? 0);
+  const useInvTotal = invTotal > 0 && Math.abs(invTotal - excelBase - rawRoundOff) <= 2;
+  const excelRoundOff = useInvTotal ? r2(invTotal - excelBase) : rawRoundOff;
+  const excelTotal = useInvTotal ? invTotal : r2(excelBase + excelRoundOff);
+
+  return {
+    computedSubtotal, billDiscount, taxableValue,
+    gstChargesAmount, nonGstChargesAmount, totalTaxableValue,
+    allCGST, allSGST, allIGST,
+    excelRoundOff, excelTotal,
+    hsnRows, chargeHsnRows,
+  };
+}
+
 // Group HSN rows by GST rate — used for GSTR-2B format (one row per rate slab)
 interface RateSlab {
   rate: number;
@@ -179,15 +248,15 @@ function buildGstReconSheet(invoices: { inv: ExtractedInvoice }[]): XLSX.WorkShe
 // ─── Per-invoice sheet helpers ─────────────────────────────────────────────────
 
 function invoiceSheets(inv: ExtractedInvoice) {
-  const billDiscount = inv.bill_discount_amount ?? 0;
-  const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, billDiscount);
-  const computedSubtotal = inv.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
-  const taxableValue = computedSubtotal - billDiscount;
-  const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
+  const {
+    computedSubtotal, billDiscount, taxableValue,
+    gstChargesAmount, nonGstChargesAmount, totalTaxableValue,
+    allCGST, allSGST, allIGST,
+    excelRoundOff, excelTotal,
+    hsnRows, chargeHsnRows,
+  } = calcInv(inv);
+
   const charges = inv.charges ?? [];
-  const chargesTotal = charges.reduce((s, c) => s + c.amount, 0);
-  const chargesGST = charges.reduce((s, c) => s + r2(c.amount * c.gst_percent / 100), 0);
-  const computedTotal = taxableValue + computedTax + chargesTotal + chargesGST + (inv.round_off ?? 0);
 
   const header = [
     ['Field', 'Value'],
@@ -202,56 +271,55 @@ function invoiceSheets(inv: ExtractedInvoice) {
     [''],
     ['Subtotal', r2(computedSubtotal)],
     ['Bill Discount', r2(billDiscount)],
-    ['Taxable Value', r2(taxableValue)],
-    inv.tax_type === 'cgst_sgst' ? ['CGST', r2(computedTax / 2)] : ['IGST', r2(computedTax)],
-    inv.tax_type === 'cgst_sgst' ? ['SGST', r2(computedTax / 2)] : ['', ''],
-    ['Additional Charges', r2(chargesTotal)],
-    ['Round Off', r2(inv.round_off ?? 0)],
-    ['Total', r2(computedTotal)],
+    // totalTaxableValue matches dashboard "Total Taxable Value" (includes GST-applicable charges)
+    ['Taxable Value', r2(totalTaxableValue)],
+    inv.tax_type === 'cgst_sgst' ? ['CGST', r2(allCGST)] : ['IGST', r2(allIGST)],
+    inv.tax_type === 'cgst_sgst' ? ['SGST', r2(allSGST)] : ['', ''],
+    // Only non-GST charges shown separately; GST charges already in Taxable Value
+    ['Additional Charges (Non-GST)', r2(nonGstChargesAmount)],
+    ['Round Off', excelRoundOff],
+    ['Total', excelTotal],
     ['Confidence', `${Math.round(inv.confidence * 100)}%`],
   ];
 
-  const lineItemRows = [
-    ['S.No.', 'Description / HSN', 'GST%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'],
-    ...inv.line_items.map((it, i) => [
-      i + 1,
-      it.hsn.replace(/[\s.]/g, '') || '—',
-      it.gst_percent,
-      it.uom || '—',
-      it.qty,
-      r2(it.rate),
-      it.disc_percent,
-      r2(calcLineAmount(it)),
-    ]),
-    ['', '', '', '', '', '', 'Subtotal', r2(computedSubtotal)],
-    // Additional charges — always included, 0% if non-taxable
-    ...charges.map((c, i) => [
-      inv.line_items.length + i + 1,
-      `${c.description}${sacForCharge(c.description) ? ` (SAC ${sacForCharge(c.description)})` : ''}`,
-      c.gst_percent,
-      '—',
-      1,
-      r2(c.amount),
-      0,
-      r2(c.amount),
-    ]),
-    ...(charges.length > 0 ? [['', '', '', '', '', '', 'Charges Total', r2(chargesTotal)]] : []),
-    ['', '', '', '', '', '', 'Total Taxable', r2(taxableValue + chargesTotal)],
+  // All Line Items — Issue 3: split "Description / HSN" into "Description" + "Ledger Name"
+  const lineItemRows: unknown[][] = [
+    ['S.No.', 'Description', 'Ledger Name', 'GST%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'],
+    ...inv.line_items.map((it, i) => {
+      const hsn = it.hsn.replace(/[\s.]/g, '') || '—';
+      return [
+        i + 1,
+        it.description || '—',
+        `${hsn} @ ${it.gst_percent}%`,
+        it.gst_percent,
+        it.uom || '—',
+        it.qty,
+        r2(it.rate),
+        it.disc_percent,
+        r2(calcLineAmount(it)),
+      ];
+    }),
+    ['', '', '', '', '', '', '', 'Subtotal', r2(computedSubtotal)],
+    // Charge rows (all charges included for full picture)
+    ...charges.map((c, i) => {
+      const sac = sacForCharge(c.description);
+      const ledger = `${sac || c.description} @ ${c.gst_percent}%`;
+      return [
+        inv.line_items.length + i + 1,
+        c.description,
+        ledger,
+        c.gst_percent,
+        '—',
+        1,
+        r2(c.amount),
+        0,
+        r2(c.amount),
+      ];
+    }),
+    ...(charges.length > 0 ? [['', '', '', '', '', '', '', 'Charges Total', r2(charges.reduce((s, c) => s + c.amount, 0))]] : []),
+    ['', '', '', '', '', '', '', 'Total Taxable', r2(totalTaxableValue)],
   ];
 
-  // Charge HSN rows for summary
-  const chargeHsnRows = charges.map((c) => {
-    const tax = r2(c.amount * c.gst_percent / 100);
-    const sac = sacForCharge(c.description) || c.description;
-    return {
-      hsn: sac,
-      gst_percent: c.gst_percent,
-      taxable: c.amount,
-      cgst: inv.tax_type === 'cgst_sgst' ? tax / 2 : 0,
-      sgst: inv.tax_type === 'cgst_sgst' ? tax / 2 : 0,
-      igst: inv.tax_type === 'igst' ? tax : 0,
-    };
-  });
   const allHsnRows = [...hsnRows, ...chargeHsnRows];
 
   const hsnSummaryRows = [
@@ -306,10 +374,11 @@ export function downloadBulkExcel(fileResults: FileResult[]) {
     ['File', 'Vendor Name', 'Vendor GSTIN', 'Buyer Name', 'Buyer GSTIN',
      'Invoice #', 'Invoice Date', 'Tax Type',
      'Subtotal', 'Bill Discount', 'Taxable Value', 'CGST', 'SGST', 'IGST',
-     'Additional Charges', 'Round Off', 'Total', 'Confidence%'],
+     'Additional Charges (Non-GST)', 'Round Off', 'Total', 'Confidence%'],
   ];
+  // Issue 3: 11 columns — "Description / HSN" split into "Description" + "Ledger Name"
   const allLineItems: unknown[][] = [
-    ['Invoice #', 'Vendor Name', 'S.No.', 'Description / HSN', 'GST%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'],
+    ['Invoice #', 'Vendor Name', 'S.No.', 'Description', 'Ledger Name', 'GST%', 'UOM', 'Qty', 'Rate (ex-GST)', 'Disc%', 'Amount'],
   ];
   const allHsn: unknown[][] = [
     ['Invoice #', 'Vendor Name', 'HSN / SAC', 'Description', 'GST%', 'Taxable', 'CGST', 'SGST', 'IGST'],
@@ -318,44 +387,52 @@ export function downloadBulkExcel(fileResults: FileResult[]) {
 
   for (const fr of fileResults) {
     for (const inv of fr.invoices) {
-      const billDiscount = inv.bill_discount_amount ?? 0;
-      const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, billDiscount);
-      const computedSubtotal = inv.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
-      const taxableValue = computedSubtotal - billDiscount;
-      const computedTax = hsnRows.reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0);
-      const invCharges = inv.charges ?? [];
-      const chargesTotal = invCharges.reduce((s, c) => s + c.amount, 0);
-      const chargesGST = invCharges.reduce((s, c) => s + r2(c.amount * c.gst_percent / 100), 0);
-      const computedTotal = taxableValue + computedTax + chargesTotal + chargesGST + (inv.round_off ?? 0);
+      const {
+        computedSubtotal, billDiscount, taxableValue,
+        gstChargesAmount, nonGstChargesAmount, totalTaxableValue,
+        allCGST, allSGST, allIGST,
+        excelRoundOff, excelTotal,
+        hsnRows, chargeHsnRows,
+      } = calcInv(inv);
 
+      const invCharges = inv.charges ?? [];
+
+      // Issue 2: use totalTaxableValue (includes GST charges), allCGST/allSGST/allIGST (includes charge GST),
+      //          nonGstChargesAmount for Additional Charges column, excelTotal/excelRoundOff for consistency with dashboard.
       summaryRows.push([
         fr.filename, inv.vendor_name, inv.vendor_gstin ?? '',
         inv.buyer_name ?? '', inv.buyer_gstin ?? '',
         inv.invoice_number, inv.invoice_date,
         inv.tax_type === 'cgst_sgst' ? 'CGST+SGST' : 'IGST',
-        r2(computedSubtotal), r2(billDiscount), r2(taxableValue),
-        inv.tax_type === 'cgst_sgst' ? r2(computedTax / 2) : 0,
-        inv.tax_type === 'cgst_sgst' ? r2(computedTax / 2) : 0,
-        inv.tax_type === 'igst' ? r2(computedTax) : 0,
-        r2(chargesTotal), r2(inv.round_off ?? 0), r2(computedTotal),
+        r2(computedSubtotal), r2(billDiscount), r2(totalTaxableValue),
+        inv.tax_type === 'cgst_sgst' ? r2(allCGST) : 0,
+        inv.tax_type === 'cgst_sgst' ? r2(allSGST) : 0,
+        inv.tax_type === 'igst' ? r2(allIGST) : 0,
+        r2(nonGstChargesAmount),
+        excelRoundOff,
+        excelTotal,
         Math.round(inv.confidence * 100),
       ]);
 
-      // Line items
+      // Issue 3: Line items with separate Description and Ledger Name columns
       inv.line_items.forEach((it, i) => {
+        const hsn = it.hsn.replace(/[\s.]/g, '') || '—';
         allLineItems.push([
           inv.invoice_number, inv.vendor_name, i + 1,
-          it.hsn.replace(/[\s.]/g, '') || '—',
+          it.description || '—',
+          `${hsn} @ ${it.gst_percent}%`,
           it.gst_percent, it.uom || '—', it.qty,
           r2(it.rate), it.disc_percent, r2(calcLineAmount(it)),
         ]);
       });
-      // Additional charges as line rows
+      // Charge rows — all charges (GST and non-GST) for full audit trail
       invCharges.forEach((c, i) => {
         const sac = sacForCharge(c.description);
+        const ledger = `${sac || c.description} @ ${c.gst_percent}%`;
         allLineItems.push([
           inv.invoice_number, inv.vendor_name, inv.line_items.length + i + 1,
-          `${c.description}${sac ? ` (SAC ${sac})` : ''}`,
+          c.description,
+          ledger,
           c.gst_percent, '—', 1, r2(c.amount), 0, r2(c.amount),
         ]);
       });
@@ -368,17 +445,13 @@ export function downloadBulkExcel(fileResults: FileResult[]) {
           r2(row.taxable), r2(row.cgst), r2(row.sgst), r2(row.igst),
         ]);
       });
-      // HSN summary — charges
-      invCharges.forEach((c) => {
-        const sac = sacForCharge(c.description) || c.description;
-        const tax = r2(c.amount * c.gst_percent / 100);
+      // HSN summary — GST-carrying charges
+      chargeHsnRows.forEach((row) => {
+        const desc = invCharges.find(c => sacForCharge(c.description) === row.hsn || c.description === row.hsn)?.description ?? '—';
         allHsn.push([
           inv.invoice_number, inv.vendor_name,
-          sac, c.description, c.gst_percent,
-          r2(c.amount),
-          inv.tax_type === 'cgst_sgst' ? tax / 2 : 0,
-          inv.tax_type === 'cgst_sgst' ? tax / 2 : 0,
-          inv.tax_type === 'igst' ? tax : 0,
+          row.hsn, desc, row.gst_percent,
+          r2(row.taxable), r2(row.cgst), r2(row.sgst), r2(row.igst),
         ]);
       });
 
