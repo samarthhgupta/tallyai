@@ -21,6 +21,7 @@ export const formatINR = (n: number): string =>
   n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export interface LineItem {
+  description?: string;  // product/service name as printed on invoice
   hsn: string;
   gst_percent: number;
   uom: string;
