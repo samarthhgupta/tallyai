@@ -282,6 +282,7 @@ export function InvoiceCard({
     - (displayInv.bill_discount_amount ?? 0)
     + buildHsnSummary(displayInv.line_items, displayInv.tax_type, displayInv.bill_discount_amount ?? 0).reduce((s, r) => s + r.cgst + r.sgst + r.igst, 0)
     + (displayInv.charges ?? []).reduce((s, c) => s + c.amount, 0)
+    + (displayInv.charges ?? []).reduce((s, c) => s + c.amount * c.gst_percent / 100, 0)
     + (displayInv.round_off ?? 0)
     - invoiceTotal
   ) > 1;

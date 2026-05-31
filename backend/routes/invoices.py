@@ -683,7 +683,12 @@ def compute_confidence(inv: dict) -> float:
     bill_discount = _d(inv.get("bill_discount_amount", 0))
     tax = _d(inv.get("cgst", 0)) + _d(inv.get("sgst", 0)) + _d(inv.get("igst", 0))
     charges = sum(_d(c.get("amount", 0)) for c in inv.get("charges", []))
-    expected_total = computed - bill_discount + tax + charges + _d(inv.get("round_off", 0))
+    charges_gst = sum(
+        _d(c.get("amount", 0)) * _d(c.get("gst_percent", 0)) / _d(100)
+        for c in inv.get("charges", [])
+        if c.get("gst_percent", 0)
+    )
+    expected_total = computed - bill_discount + tax + charges + charges_gst + _d(inv.get("round_off", 0))
     actual_total = _d(inv.get("total", 0))
 
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
