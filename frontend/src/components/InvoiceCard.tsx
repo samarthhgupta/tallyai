@@ -613,16 +613,22 @@ export function InvoiceCard({
 
         </div>
 
-        {/* Confidence reasons (warnings) */}
-        {inv.confidence_reasons && inv.confidence_reasons.length > 0 && (
-          <ul className="mt-2 space-y-0.5">
-            {inv.confidence_reasons.map((r, i) => (
-              <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
-                {r.includes('✓') ? '' : '↓ '}{r}
-              </li>
-            ))}
-          </ul>
-        )}
+        {/* Confidence reasons — suppress stale mismatch warnings when totals currently reconcile */}
+        {inv.confidence_reasons && inv.confidence_reasons.length > 0 && (() => {
+          const visibleReasons = inv.confidence_reasons.filter(r => {
+            if (!isMismatched && (r.includes("doesn't match") || r.includes("Computed total") || r.includes("match invoice total"))) return false;
+            return true;
+          });
+          return visibleReasons.length > 0 ? (
+            <ul className="mt-2 space-y-0.5">
+              {visibleReasons.map((r, i) => (
+                <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
+                  {r.includes('✓') ? '' : '↓ '}{r}
+                </li>
+              ))}
+            </ul>
+          ) : null;
+        })()}
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
@@ -637,7 +643,7 @@ export function InvoiceCard({
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['HSN', 'Ledger Name', 'Qty', 'UOM', 'Rate (ex-GST)', 'Disc %', 'Taxable Amount'].map((h) => (
+                  {['S.No', 'Description', 'HSN', 'Ledger Name', 'Qty', 'UOM', 'Rate (ex-GST)', 'Disc %', 'Taxable Amount'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -645,6 +651,14 @@ export function InvoiceCard({
               <tbody>
                 {current.line_items.map((item: LineItem, i: number) => (
                   <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
+
+                    {/* S.No */}
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{i + 1}</td>
+
+                    {/* Description */}
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[160px]">
+                      {item.description || '—'}
+                    </td>
 
                     {/* HSN (editable in edit mode — includes GST% inline) */}
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs min-w-[140px]">
@@ -693,7 +707,7 @@ export function InvoiceCard({
                   </tr>
                 ))}
                 <tr className="bg-gray-50 font-semibold">
-                  <td colSpan={6} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Line Item Taxable Value</td>
+                  <td colSpan={8} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Line Item Taxable Value</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(computedSubtotal)}</td>
                 </tr>
               </tbody>
@@ -854,7 +868,7 @@ export function InvoiceCard({
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['HSN / SAC', 'Taxable Value', 'CGST', 'SGST', 'IGST'].map((h) => (
+                  {['S.No', 'HSN / SAC', 'Taxable Value', 'CGST', 'SGST', 'IGST'].map((h) => (
                     <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -862,6 +876,7 @@ export function InvoiceCard({
               <tbody>
                 {hsnRows.map((row: HsnRow, i: number) => (
                   <tr key={`goods-${i}`} className="hover:bg-gray-50">
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{i + 1}</td>
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
                     <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
                     <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
@@ -871,6 +886,7 @@ export function InvoiceCard({
                 ))}
                 {chargeHsnRows.map((row: HsnRow, i: number) => (
                   <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/20">
+                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{hsnRows.length + i + 1}</td>
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
                       {row.hsn} <span className="text-blue-500 not-italic font-sans">(SAC)</span>
                     </td>
@@ -881,7 +897,7 @@ export function InvoiceCard({
                   </tr>
                 ))}
                 <tr className="bg-gray-50 font-semibold text-sm">
-                  <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-600">TOTAL</td>
+                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-gray-600">TOTAL</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(totalTaxable)}</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right">{totalCGST > 0 ? formatINR(totalCGST) : '—'}</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right">{totalSGST > 0 ? formatINR(totalSGST) : '—'}</td>

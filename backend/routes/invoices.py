@@ -61,6 +61,7 @@ For each invoice found, return a JSON object with:
   "invoice_date": string (YYYY-MM-DD),
   "line_items": [
     {
+      "description": string (product or service name exactly as printed in the line items table),
       "hsn": string (HSN or SAC code),
       "gst_percent": number,
       "uom": string (unit of measure as printed, e.g. "Nos", "Kg", "Pcs", "Mtr"),
