@@ -305,7 +305,9 @@ def correct_line_item_rates(inv: dict) -> dict:
         if amount and qty and qty > 0:
             divisor = qty * (1 - disc / 100)
             if divisor > 0:
-                correct_rate = round(amount / divisor, 2)
+                # Add tiny epsilon before rounding to avoid floating-point
+                # truncation (e.g. 2141.9999... rounding to 2141 instead of 2142)
+                correct_rate = round(amount / divisor + 1e-9, 2)
                 current_rate = item.get("rate", 0)
                 # Only override if it meaningfully differs (>1% difference)
                 if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
