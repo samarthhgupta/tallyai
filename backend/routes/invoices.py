@@ -77,7 +77,7 @@ For each invoice found, return a JSON object with:
     {
       "description": string (e.g. "Postage", "Freight Charges", "Delivery Charges", "Packing Charges"),
       "amount": number,
-      "gst_percent": number (usually 0; use 18 only if GST is explicitly shown on the charge)
+      "gst_percent": number (0 if non-taxable; otherwise use the rate determined by the GST Classification & Mismatch Resolution rule below)
     }
   ],
   "is_computer_generated": boolean (true if the invoice is clearly printed/computer-generated with consistent fonts and layout; false if handwritten or unclear),
@@ -95,15 +95,66 @@ CASE 1 — Charge appears AMONG the line items WITH an HSN/SAC code:
   Example: "Builty Charges  HSN:9965  Qty:1  Rate:50  GST:0%" → goes in line_items.
   Example: "Freight & Forwarding  HSN:9965  Qty:1  Rate:200  GST:18%" → goes in line_items.
 
-CASE 2 — Charge appears AFTER the line items subtotal WITHOUT an HSN code:
-  Put it in the "charges" array. It will NOT appear in the HSN Summary. GST is 0.
-  Example: "Postage: ₹30" printed below the taxable total → goes in charges[].
+CASE 2 — Charge appears AFTER the line items subtotal WITHOUT an HSN code AND no GST shown on it:
+  Put it in the "charges" array with gst_percent=0. It will NOT appear in the HSN Summary.
+  Example: "Postage: ₹30" with no GST → charges[], gst_percent=0.
 
 CASE 3 — Charge appears AFTER the line items subtotal WITH an HSN code:
   Even though it is after the subtotal, the HSN code means it must go in "line_items".
   Apply GST as shown. It WILL appear in the HSN Summary.
 
   - If the charge row is blank or zero, do NOT include it anywhere.
+
+ADDITIONAL CHARGES — GST CLASSIFICATION & MISMATCH RESOLUTION:
+
+Step 1 — Classify the charge type:
+  FREIGHT-RELATED charges (SAC 9965, default GST 5%):
+    Freight, Freight Charges, Freight & Forwarding, F&F Charges, Transport Charges,
+    Transportation Charges, Delivery Charges, Builty Charges, LR Charges,
+    Lorry Charges, Cartage Charges.
+  POSTAL/COURIER charges (SAC 9968, default GST 18%):
+    Postage, Postal Charges, Courier Charges, Courier Service,
+    Dispatch Charges, Shipping Charges, Shipping Service.
+
+Step 2 — Determine the GST rate on the charge (in priority order):
+  Priority 1: Explicit GST rate shown against the charge on the invoice → use that rate.
+  Priority 2: The charge appears in the invoice's HSN/SAC summary → use that rate.
+  Priority 3: The charge appears in the invoice's GST/Tax summary → use that rate.
+  Priority 4: Apply default classification rate (5% for freight-related, 18% for postal/courier).
+  Special case — freight embedded in product value: if no separate freight line exists and
+    the product taxable value already includes freight, do NOT create a separate charge.
+  Special case — reimbursement/non-taxable freight: if the invoice shows the freight amount
+    but explicitly charges no GST and it is absent from the tax summary → gst_percent=0.
+
+Step 3 — MISMATCH RESOLUTION (run this when computed total ≠ invoice grand total):
+  If a mismatch remains after checking line items and discounts, AND the invoice has
+  additional charges, test whether GST on those charges closes the gap:
+
+  For each charge in charges[]:
+    potential_gst = charge.amount × applicable_gst_rate
+    revised_total = current_computed_total + potential_gst
+    If revised_total ≈ invoice_grand_total (within ₹2):
+      → GST IS charged on this additional charge.
+      → Update charges[].gst_percent to the applicable rate.
+      → This charge MOVES from charges[] into line_items[] with:
+          hsn = SAC code (9965 or 9968)
+          gst_percent = applicable rate
+          qty = 1, rate = charge.amount, disc_percent = 0
+          amount = charge.amount
+      → It will now appear in the HSN Summary and contribute to GST totals.
+
+  EXAMPLE — Freight with GST:
+    Line items taxable = ₹10,000 | GST 18% = ₹1,800 | Freight = ₹1,000
+    Computed total = ₹12,800 | Invoice grand total = ₹12,850
+    Gap = ₹50 → Test: ₹1,000 × 5% = ₹50 ✓ → Freight GST = 5%, move to line_items.
+
+  EXAMPLE — Postage with GST:
+    Line items taxable = ₹5,000 | GST 12% = ₹600 | Postage = ₹500
+    Computed total = ₹6,100 | Invoice grand total = ₹6,190
+    Gap = ₹90 → Test: ₹500 × 18% = ₹90 ✓ → Postage GST = 18%, move to line_items.
+
+  If no single charge's GST resolves the mismatch, keep the charges as non-taxable
+  and let the mismatch be flagged for human review.
 
 LINE ITEM COMPLETENESS — extract exactly what is in the table, no more, no less:
   1. Count the serial numbers (S.No.) in the invoice's line items table. If S.No. runs 1 to N, you must have EXACTLY N line items — not N-1 (skip), not N+1 (hallucinate).
