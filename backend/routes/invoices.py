@@ -429,15 +429,9 @@ def correct_line_item_rates(inv: dict) -> dict:
         qty = item.get("qty", 0)
         gst_pct = item.get("gst_percent", 0)
 
-        # If the invoice has GST-inclusive amounts, Claude should have already
-        # converted amount to GST-exclusive (÷ (1+gst%)). But if Claude stored
-        # the raw GST-inclusive amount instead, detect and convert here:
-        # We detect this by checking if amount / (1+gst%) / qty / (1-disc%) gives
-        # a more reasonable rate than amount / qty / (1-disc%). We rely on
-        # Claude's is_gst_inclusive_amounts flag as the primary signal.
+        # Claude already converts GST-inclusive amounts to GST-exclusive per the
+        # system prompt instructions. Do NOT re-divide here — that would double-convert.
         effective_amount = _d(amount) if amount else Decimal("0")
-        if inv.get("is_gst_inclusive_amounts") and gst_pct and effective_amount:
-            effective_amount = effective_amount / (1 + _d(gst_pct) / Decimal("100"))
 
         if effective_amount and qty and qty > 0:
             divisor = _d(qty) * (1 - _d(disc) / Decimal("100"))
