@@ -81,6 +81,7 @@ For each invoice found, return a JSON object with:
     }
   ],
   "is_computer_generated": boolean (true if the invoice is clearly printed/computer-generated with consistent fonts and layout; false if handwritten or unclear),
+  "is_gst_inclusive_amounts": boolean (true if the Amount column on the invoice is GST-inclusive; false if GST-exclusive — determined by your detection step above),
   "tax_type": "cgst_sgst" or "igst",
   "confidence": number between 0 and 1
 }
@@ -188,6 +189,53 @@ EXAMPLE (standard invoice — no discount):
   rate = 1000, disc_percent = 0, amount = 5000
 
 Always exclude GST from rate. If invoice shows GST-inclusive rate, divide by (1 + gst_percent/100).
+
+GST-INCLUSIVE AMOUNT COLUMN DETECTION — do this FIRST before extracting any line item:
+
+Many Indian invoices print the Amount column as GST-inclusive (taxable value + GST together).
+You MUST detect which type the invoice has before extracting "amount" for each line item.
+
+STEP 1 — Check using the GST summary table (most reliable):
+  If the invoice has a GST/Tax summary at the bottom showing Taxable Value, CGST, SGST, IGST:
+  - Add up all printed line item amounts → call this SumAmounts
+  - Compare SumAmounts with the Taxable Value from the GST summary:
+      If SumAmounts ≈ Taxable Value (within ₹2) → Amount column is GST-EXCLUSIVE → use amounts directly
+      If SumAmounts ≈ Taxable Value + Total Tax (within ₹2) → Amount column is GST-INCLUSIVE → convert each amount
+
+STEP 2 — Check using invoice reconciliation (if no GST summary):
+  - GST-exclusive: SumAmounts + GST + Charges + Round-off ≈ Grand Total
+  - GST-inclusive: SumAmounts + Charges + Round-off ≈ Grand Total (GST already inside amounts)
+  Test both. Choose whichever reconciles with the Grand Total.
+
+STEP 3 — Column label hints:
+  Labels suggesting GST-EXCLUSIVE: "Net Amt", "Net Amount", "Taxable Amt", "Taxable Value", "Amount After Disc"
+  Labels suggesting GST-INCLUSIVE: "Amount (₹)", "Total Amt", "Invoice Amt", "Gross Amt", or no qualifier
+
+WHEN AMOUNT COLUMN IS GST-INCLUSIVE:
+  The "amount" field we store must ALWAYS be taxable (GST-exclusive, post-discount). So convert:
+    stored_amount = printed_amount ÷ (1 + gst_percent/100)
+  Then the rate back-calculation works as usual:
+    rate = stored_amount ÷ qty ÷ (1 - disc_percent/100)
+
+EXAMPLE — Shri Ganesh Traders style (GST-inclusive Amount column):
+  GST summary shows: HSN 63041910 Taxable=1,25,180 | HSN 63023100 Taxable=33,999.74
+  Line item 1: HSN 63041910, Qty=80, Disc=0%, Price=500, Amount=42,000
+    Test: 80×500×1.05 = 42,000 ✓ (GST-inclusive at 5%)
+    Sum of amounts for 63041910 ≈ Taxable+GST → GST-INCLUSIVE
+    stored_amount = 42,000 ÷ 1.05 = 40,000
+    rate = 40,000 ÷ 80 ÷ 1 = 500
+  Line item 4: HSN 63023100, Qty=4, Disc=8%, Price=1970.93, Amount=8,829.76
+    stored_amount = 8,829.76 ÷ 1.12 = 7,883.71
+    rate = 7,883.76 ÷ 4 ÷ 0.92 = 2,142 (the "Price" printed is the POST-discount ex-GST net price)
+    Verify: 4 × 2142 × 0.92 × 1.12 = 8,829.79 ≈ 8,829.76 ✓
+
+  NOTE: In Shri Ganesh Traders invoices the "Price" column = post-discount ex-GST net price.
+  The "Amount" column = qty × Price × (1+GST%) = GST-inclusive amount.
+  For discounted items: rate (pre-discount) = Price ÷ (1 - disc_percent/100)
+  For non-discounted items: rate = Price directly.
+
+SET is_gst_inclusive_amounts: true in the invoice JSON when you detect GST-inclusive amounts,
+so the backend knows not to re-apply its own conversion.
 
 COLUMN IDENTIFICATION RULE — when an invoice has both "Amount" and "Net Amt" columns:
   - "Amount" / "Gross Amount" = qty × rate (pre-discount gross) — DO NOT use this as the "amount" field
@@ -328,11 +376,22 @@ def correct_line_item_rates(inv: dict) -> dict:
 
         amount = item.get("amount")
         qty = item.get("qty", 0)
+        gst_pct = item.get("gst_percent", 0)
 
-        if amount and qty and qty > 0:
+        # If the invoice has GST-inclusive amounts, Claude should have already
+        # converted amount to GST-exclusive (÷ (1+gst%)). But if Claude stored
+        # the raw GST-inclusive amount instead, detect and convert here:
+        # We detect this by checking if amount / (1+gst%) / qty / (1-disc%) gives
+        # a more reasonable rate than amount / qty / (1-disc%). We rely on
+        # Claude's is_gst_inclusive_amounts flag as the primary signal.
+        effective_amount = _d(amount) if amount else Decimal("0")
+        if inv.get("is_gst_inclusive_amounts") and gst_pct and effective_amount:
+            effective_amount = effective_amount / (1 + _d(gst_pct) / Decimal("100"))
+
+        if effective_amount and qty and qty > 0:
             divisor = _d(qty) * (1 - _d(disc) / Decimal("100"))
             if divisor > 0:
-                raw = _d(amount) / divisor
+                raw = effective_amount / divisor
                 # Round to 2 decimal places first
                 rate_2dp = float(raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
                 # If within ₹0.10 of a whole number, snap to that integer.

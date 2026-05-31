@@ -58,6 +58,7 @@ export interface ExtractedInvoice {
   tax_type: 'cgst_sgst' | 'igst';
   confidence: number;
   confidence_reasons?: string[];
+  is_gst_inclusive_amounts?: boolean;
   duplicate_of?: string;           // invoice_number of earlier copy (within-batch)
   duplicate_of_filename?: string;  // filename of that earlier copy
 }
