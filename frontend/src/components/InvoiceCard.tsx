@@ -916,6 +916,17 @@ export function InvoiceCard({
         <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
           6. Invoice Reconciliation
         </h4>
+        {/* Reconciliation-only display values: absorb small rounding variance into Round Off
+            so Final Invoice Value == Invoice Total. Only activates when diff <= ₹2.
+            No other section (GST, taxable, edit, export) is affected. */}
+        {(() => {
+          const recoBase = taxableValue + chargesTotal + computedTax + chargesGST;
+          const useInvoiceTotal = !editMode && invoiceTotal > 0 && Math.abs(invoiceTotal - recoBase - (current.round_off ?? 0)) <= 2;
+          const recoRoundOff = useInvoiceTotal
+            ? parseFloat((invoiceTotal - recoBase).toFixed(2))
+            : (current.round_off ?? 0);
+          const recoFinal = useInvoiceTotal ? invoiceTotal : computedTotal;
+          return (
         <div className="max-w-xs text-sm space-y-1.5">
 
           <div className="flex justify-between text-gray-700">
@@ -990,14 +1001,14 @@ export function InvoiceCard({
                 </button>
               </span>
             ) : (
-              <span className="tabular-nums">{formatINR(current.round_off ?? 0)}</span>
+              <span className="tabular-nums">{formatINR(recoRoundOff)}</span>
             )}
           </div>
 
           <div className={`border-t-2 pt-2 flex justify-between font-bold text-base ${isMismatched ? 'border-amber-400' : 'border-gray-400'}`}>
             <span className="text-gray-900">Final Invoice Value</span>
             <span className={`tabular-nums ${isMismatched ? 'text-amber-700' : 'text-gray-900'}`}>
-              ₹{formatINR(computedTotal)}
+              ₹{formatINR(recoFinal)}
             </span>
           </div>
 
@@ -1011,6 +1022,8 @@ export function InvoiceCard({
           )}
 
         </div>
+          );
+        })()}
       </div>
 
       {/* ── Audit Log ── */}
