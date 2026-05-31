@@ -423,10 +423,9 @@ def compute_confidence(inv: dict) -> float:
 
     if actual_total > 0 and abs(expected_total - actual_total) > 1:
         diff = expected_total - actual_total
-        diff_pct = _round2(abs(diff) / actual_total * 100)
         direction = "over" if diff > 0 else "under"
         reasons.append(
-            f"Computed total ₹{float(expected_total):,.2f} is ₹{float(abs(diff)):,.2f} ({diff_pct}%) {direction} invoice total ₹{float(actual_total):,.2f}"
+            f"Computed total ₹{float(expected_total):,.2f} is ₹{float(abs(diff)):,.2f} {direction} invoice total ₹{float(actual_total):,.2f}"
         )
         score -= 0.15
 
