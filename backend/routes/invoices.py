@@ -332,10 +332,24 @@ def correct_line_item_rates(inv: dict) -> dict:
         if amount and qty and qty > 0:
             divisor = _d(qty) * (1 - _d(disc) / Decimal("100"))
             if divisor > 0:
-                correct_rate = _round2(_d(amount) / divisor)
+                raw = _d(amount) / divisor
+                # Round to 2 decimal places first
+                rate_2dp = float(raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+                # If within ₹0.10 of a whole number, snap to that integer.
+                # Indian invoice rates are whole rupees; the small gap (e.g. 2141.96
+                # instead of 2142) is a back-calculation artifact from the invoice
+                # software rounding the price column (1970.64 = 2142 × 0.92).
+                nearest_int = round(rate_2dp)
+                correct_rate = float(nearest_int) if abs(rate_2dp - nearest_int) < 0.10 else rate_2dp
                 current_rate = item.get("rate", 0)
-                # Only override if it meaningfully differs (>1% difference)
-                if current_rate == 0 or abs(correct_rate - current_rate) / max(correct_rate, 0.01) > 0.01:
+                pct_diff = abs(correct_rate - current_rate) / max(correct_rate, 0.01)
+                abs_diff = abs(correct_rate - current_rate)
+                # Override if >1% difference (wrong column extracted by Claude)
+                # OR if the back-calc gives a clean whole-rupee rate and the extracted
+                # rate is off by ≥₹0.50 — catches off-by-one errors like 2141 vs 2142
+                # where the % gap is tiny but the rupee difference is real.
+                is_whole = correct_rate == float(int(correct_rate))
+                if current_rate == 0 or pct_diff > 0.01 or (is_whole and abs_diff >= 0.5):
                     item["rate"] = correct_rate
 
     return inv
@@ -721,10 +735,7 @@ async def _extract_invoices_from_file(
     # Normalise HSN codes, correct rates, detect missed discounts, then score
     for inv in invoices:
         inv = normalize_hsn_codes(inv)
-        # For computer-generated invoices all printed values are exact —
-        # skip rate back-calculation which can introduce errors from misread amounts
-        if not inv.get("is_computer_generated"):
-            inv = correct_line_item_rates(inv)
+        inv = correct_line_item_rates(inv)
         inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)
 
@@ -789,8 +800,7 @@ def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
         # Re-run post-processing on merged invoice only
         if not base.get("duplicate_of"):
             base = normalize_hsn_codes(base)
-        if not base.get("is_computer_generated"):
-            base = correct_line_item_rates(base)
+        base = correct_line_item_rates(base)
         base = detect_bill_discount_from_total(base)
         base["confidence"] = compute_confidence(base)
         file_results[base_fi]["invoices"][base_ii] = base
