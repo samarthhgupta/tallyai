@@ -19,6 +19,7 @@ import {
   calcLineAmount,
   buildHsnSummary,
 } from '@/types/invoice';
+import { downloadInvoiceExcel, downloadBulkExcel } from '@/lib/exportExcel';
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,21 @@ function CompanyMatchBadge({ match }: { match: MatchResult }) {
   return null;
 }
 
+function DownloadXlsxButton({ inv }: { inv: ExtractedInvoice }) {
+  return (
+    <button
+      onClick={() => downloadInvoiceExcel(inv)}
+      title="Download as Excel"
+      className="inline-flex items-center gap-1 text-xs text-green-700 hover:text-green-900 bg-green-50 hover:bg-green-100 border border-green-200 px-2 py-0.5 rounded transition-colors"
+    >
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+      Excel
+    </button>
+  );
+}
+
 function InvoiceCard({
   inv, sourceUrl, company, historyMatch, isBatchNew, onReject,
 }: {
@@ -271,6 +287,7 @@ function InvoiceCard({
                   View original
                 </a>
               )}
+              <DownloadXlsxButton inv={inv} />
             </div>
             <div className="mt-1 flex items-center gap-2 flex-wrap text-sm text-gray-500">
               {inv.invoice_number && <span>Invoice #{inv.invoice_number}</span>}
@@ -747,11 +764,22 @@ export default function UploadPage() {
                     {result.total_invoices} invoice{result.total_invoices !== 1 ? 's' : ''} found across {result.file_results.length} file{result.file_results.length !== 1 ? 's' : ''}
                   </span>
                 </h3>
-                {selectedCompanyId && companies.find((c) => c.id === selectedCompanyId) && (
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
-                    Matching against: <strong>{companies.find((c) => c.id === selectedCompanyId)?.name}</strong>
-                  </span>
-                )}
+                <div className="flex items-center gap-3 flex-wrap">
+                  {selectedCompanyId && companies.find((c) => c.id === selectedCompanyId) && (
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
+                      Matching against: <strong>{companies.find((c) => c.id === selectedCompanyId)?.name}</strong>
+                    </span>
+                  )}
+                  <button
+                    onClick={() => downloadBulkExcel(result.file_results)}
+                    className="inline-flex items-center gap-1.5 text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md font-medium transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download All (Excel)
+                  </button>
+                </div>
               </div>
 
               {result.file_results.map((fr: FileResult) => {
