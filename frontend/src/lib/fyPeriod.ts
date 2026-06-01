@@ -120,3 +120,37 @@ export function loadFYPeriod(): FYPeriod {
 export function saveFYPeriod(p: FYPeriod): void {
   localStorage.setItem(KEY, JSON.stringify(p));
 }
+
+// ─── Derive FYPeriod from invoice date ────────────────────────────────────────
+// Used when saving invoices — month comes from invoice date, not user selection.
+
+export function periodFromInvoiceDate(invoiceDate: string, financialYear: string): FYPeriod {
+  let year: number;
+  let month: number; // 0-indexed
+  try {
+    if (/^\d{4}-\d{2}-\d{2}/.test(invoiceDate)) {
+      year = parseInt(invoiceDate.slice(0, 4));
+      month = parseInt(invoiceDate.slice(5, 7)) - 1;
+    } else if (/^\d{2}\/\d{2}\/\d{4}/.test(invoiceDate)) {
+      const p = invoiceDate.split('/');
+      year = parseInt(p[2]);
+      month = parseInt(p[1]) - 1;
+    } else if (/^\d{8}$/.test(invoiceDate)) {
+      year = parseInt(invoiceDate.slice(0, 4));
+      month = parseInt(invoiceDate.slice(4, 6)) - 1;
+    } else {
+      throw new Error('unparseable');
+    }
+  } catch {
+    const now = new Date();
+    year = now.getFullYear();
+    month = now.getMonth();
+  }
+  const mm = String(month + 1).padStart(2, '0');
+  const yy = String(year).slice(2);
+  return {
+    financial_year: financialYear,
+    period_month: `${year}-${mm}`,
+    period_label: `${MONTH_NAMES[month]}-${yy}`,
+  };
+}

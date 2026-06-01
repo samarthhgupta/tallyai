@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, type Company } from '@/lib/db';
-import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { useCompany } from '@/lib/companyContext';
 import {
   loadStockItems,
   addStockItem,
@@ -16,7 +16,6 @@ import {
   type StockItemImportResult,
 } from '@/lib/stockItems';
 
-type AnyCompany = Company | LocalCompany;
 type Tab = 'list' | 'import';
 
 const EMPTY_FORM = {
@@ -27,8 +26,8 @@ const EMPTY_FORM = {
 };
 
 export default function StockItemsPage() {
-  const [companies, setCompanies] = useState<AnyCompany[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const { company } = useCompany();
+  const router = useRouter();
   const [items, setItems] = useState<StockItemMaster[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -45,28 +44,20 @@ export default function StockItemsPage() {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    getSession().then(async (s) => {
-      if (s) {
-        const list = await getMyCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      } else {
-        const list = loadCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      }
+    getSession().then((session) => {
+      if (!session && !company) router.replace('/select-company');
     });
-  }, []);
+  }, [company, router]);
 
   const refresh = useCallback(async () => {
-    if (!selectedCompanyId) return;
+    if (!company?.id) return;
     setLoading(true);
     try {
-      setItems(await loadStockItems(selectedCompanyId));
+      setItems(await loadStockItems(company.id));
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId]);
+  }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -107,7 +98,7 @@ export default function StockItemsPage() {
       if (editingId) {
         await updateStockItem(editingId, params);
       } else {
-        await addStockItem(selectedCompanyId, params);
+        await addStockItem(company?.id ?? '', params);
       }
       setShowForm(false);
       setEditingId(null);
@@ -146,7 +137,7 @@ export default function StockItemsPage() {
   // ── Excel import ─────────────────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedCompanyId) return;
+    if (!file || !company?.id) return;
     setImporting(true);
     setImportResult(null);
     try {
@@ -191,7 +182,7 @@ export default function StockItemsPage() {
         hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
       }));
 
-      const result = await bulkUpsertStockItems(selectedCompanyId, rows);
+      const result = await bulkUpsertStockItems(company.id, rows);
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
@@ -214,7 +205,6 @@ export default function StockItemsPage() {
     ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
-    const company = companies.find((c) => c.id === selectedCompanyId);
     XLSX.writeFile(wb, `StockItems_${company?.name ?? 'export'}.xlsx`);
   };
 
@@ -226,7 +216,7 @@ export default function StockItemsPage() {
       (s.hsn_code ?? '').toLowerCase().includes(q);
   });
 
-  const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
+  const companyName = company?.name ?? '';
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -250,34 +240,23 @@ export default function StockItemsPage() {
                 </svg>
                 Template
               </button>
-              <button onClick={() => { setTab('import'); setShowForm(false); }} disabled={!selectedCompanyId}
+              <button onClick={() => { setTab('import'); setShowForm(false); }} disabled={!company?.id}
                 className="px-3 py-2 text-sm text-indigo-700 border border-indigo-300 bg-indigo-50 rounded-md hover:bg-indigo-100 disabled:opacity-40 transition-colors flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
                 </svg>
                 Import Excel
               </button>
-              <button onClick={openAdd} disabled={!selectedCompanyId}
+              <button onClick={openAdd} disabled={!company?.id}
                 className="px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
                 + Add Item
               </button>
             </div>
           </div>
 
-          {/* Company selector */}
+          {/* Search / export row */}
           <div className="flex items-center gap-3 mb-5">
-            <label className="text-sm font-medium text-gray-700 shrink-0">Company</label>
-            {companies.length === 0 ? (
-              <span className="text-sm text-gray-400">No companies found. Add one first.</span>
-            ) : (
-              <select value={selectedCompanyId}
-                onChange={(e) => { setSelectedCompanyId(e.target.value); setTab('list'); setShowForm(false); }}
-                className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                <option value="" disabled>Select company…</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
-            {selectedCompanyId && items.length > 0 && tab === 'list' && (
+            {company?.id && items.length > 0 && tab === 'list' && (
               <>
                 <input value={search} onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search items…"
@@ -293,7 +272,7 @@ export default function StockItemsPage() {
           </div>
 
           {/* ── Import panel ── */}
-          {tab === 'import' && selectedCompanyId && (
+          {tab === 'import' && company?.id && (
             <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -403,11 +382,7 @@ export default function StockItemsPage() {
           )}
 
           {/* ── Table ── */}
-          {!selectedCompanyId ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
-              <p className="text-sm">Select a company to view its stock item master.</p>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : filtered.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">

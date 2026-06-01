@@ -16,7 +16,7 @@ import { getSupabase } from './supabase';
 const db = () => getSupabase() as any;
 
 export const TAX_COMPONENTS = [
-  'CGST', 'SGST', 'IGST', 'CESS', 'TDS', 'TCS', 'GST TDS', 'GST TCS',
+  'CGST', 'SGST', 'IGST', 'CESS', 'TDS', 'TCS', 'GST TDS', 'GST TCS', 'PURCHASE',
 ] as const;
 
 export type TaxComponent = typeof TAX_COMPONENTS[number];

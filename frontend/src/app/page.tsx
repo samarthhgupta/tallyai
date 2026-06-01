@@ -2,10 +2,17 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useCompany } from '@/lib/companyContext';
 
 export default function HomePage() {
   const router = useRouter();
-  useEffect(() => { router.replace('/dashboard'); }, [router]);
+  const { company, loading } = useCompany();
+
+  useEffect(() => {
+    if (loading) return;
+    router.replace(company ? '/upload' : '/select-company');
+  }, [loading, company, router]);
+
   return (
     <div className="flex items-center justify-center min-h-screen">
       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />

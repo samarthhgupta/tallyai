@@ -3,11 +3,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, type Company } from '@/lib/db';
+import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
-import { getFYList, getMonthsForFY, currentFY, type MonthOption } from '@/lib/fyPeriod';
+import { getFYList, currentFY } from '@/lib/fyPeriod';
+import { useCompany } from '@/lib/companyContext';
+import FYPeriodSelector from '@/components/FYPeriodSelector';
 
 // ─── ITC Status badge ─────────────────────────────────────────────────────────
 
@@ -47,56 +49,34 @@ function SummaryCard({ label, value, sub }: { label: string; value: string; sub?
 
 export default function PurchaseRegisterPage() {
   const router = useRouter();
+  const { company } = useCompany();
 
-  // Auth + companies
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
-
-  // Filters
-  const [fyList] = useState<string[]>(getFYList);
-  const [selectedFY, setSelectedFY] = useState(currentFY);
-  const [monthOptions, setMonthOptions] = useState<MonthOption[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState('');  // '' = all months
+  const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [selectedITC, setSelectedITC] = useState<ITCStatus | ''>('');
 
-  // Data
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Delete state
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
 
   // ── Auth check ──
   useEffect(() => {
-    getSession().then(async (session) => {
-      if (!session) { router.replace('/login'); return; }
-      try {
-        const list = await getMyCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      } catch { /* ignore */ }
+    getSession().then((session) => {
+      if (!session && !company) router.replace('/select-company');
     });
-  }, [router]);
-
-  // ── Rebuild month list when FY changes ──
-  useEffect(() => {
-    const list = getMonthsForFY(selectedFY);
-    setMonthOptions(list);
-    setSelectedMonth(''); // reset to "all months" when FY changes
-  }, [selectedFY]);
+  }, [company, router]);
 
   // ── Fetch register ──
   const fetchRegister = useCallback(async () => {
-    if (!selectedCompanyId) return;
+    if (!company?.id) return;
     setLoading(true);
     setError('');
     try {
-      const data = await getPurchaseRegister(selectedCompanyId, {
+      const data = await getPurchaseRegister(company.id, {
         financialYear: selectedFY || undefined,
-        periodMonth: selectedMonth || undefined,
         itcStatus: selectedITC || undefined,
       });
       setInvoices(data);
@@ -105,7 +85,7 @@ export default function PurchaseRegisterPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId, selectedFY, selectedMonth, selectedITC]);
+  }, [company?.id, selectedFY, selectedITC]);
 
   useEffect(() => {
     fetchRegister();
@@ -126,7 +106,8 @@ export default function PurchaseRegisterPage() {
   const grandTotal = invoices.reduce((s, inv) => s + (inv.total ?? 0), 0);
   const itcAtRiskCount = invoices.filter((inv) => inv.itc_status === 'potentially_ineligible').length;
 
-  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const selectedCompany = company;
+  const selectedCompanyId = company?.id ?? '';
 
   // ── Delete handlers ──
   const handleDeleteInvoice = async (id: string, label: string) => {
@@ -232,54 +213,10 @@ export default function PurchaseRegisterPage() {
 
           {/* ── Filters ── */}
           <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 mb-6 flex flex-wrap items-end gap-4">
-            {/* Company */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Company</label>
-              {companies.length === 0 ? (
-                <p className="text-sm text-gray-400">No companies found.</p>
-              ) : (
-                <select
-                  value={selectedCompanyId}
-                  onChange={(e) => setSelectedCompanyId(e.target.value)}
-                  className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 min-w-[180px]"
-                >
-                  <option value="">— Select company —</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-
             {/* Financial Year */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Financial Year</label>
-              <select
-                value={selectedFY}
-                onChange={(e) => setSelectedFY(e.target.value)}
-                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">All Years</option>
-                {fyList.map((fy) => (
-                  <option key={fy} value={fy}>{fy}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Month */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                disabled={!selectedFY}
-                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-              >
-                <option value="">All Months</option>
-                {monthOptions.map((m) => (
-                  <option key={m.period_month} value={m.period_month}>{m.period_label}</option>
-                ))}
-              </select>
+              <FYPeriodSelector value={selectedFY} onChange={setSelectedFY} />
             </div>
 
             {/* ITC Status */}
@@ -363,7 +300,7 @@ export default function PurchaseRegisterPage() {
               </div>
               <p className="text-sm font-medium text-gray-700">No accepted invoices found</p>
               <p className="text-xs text-gray-400 mt-1">
-                {selectedMonth || selectedITC
+                {selectedITC
                   ? 'Try changing the filters above.'
                   : 'Upload and accept invoices to populate the register.'}
               </p>

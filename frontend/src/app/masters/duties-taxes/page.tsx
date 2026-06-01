@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, type Company } from '@/lib/db';
-import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { useCompany } from '@/lib/companyContext';
 import {
   loadDutiesTaxes,
   addDutiesTaxes,
@@ -14,8 +14,6 @@ import {
   type DutiesTaxesMaster,
   type TaxComponent,
 } from '@/lib/dutiesTaxes';
-
-type AnyCompany = Company | LocalCompany;
 
 // Common rate options — user can also type a custom value
 const COMMON_RATES = [0, 0.1, 0.25, 1, 1.5, 2, 2.5, 5, 6, 7.5, 9, 12, 14, 18, 28];
@@ -45,8 +43,8 @@ function groupByComponent(rows: DutiesTaxesMaster[]): Map<string, DutiesTaxesMas
 }
 
 export default function DutiesTaxesPage() {
-  const [companies, setCompanies] = useState<AnyCompany[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const { company } = useCompany();
+  const router = useRouter();
   const [records, setRecords] = useState<DutiesTaxesMaster[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -60,28 +58,20 @@ export default function DutiesTaxesPage() {
   const [ledgerAutoFilled, setLedgerAutoFilled] = useState(false);
 
   useEffect(() => {
-    getSession().then(async (s) => {
-      if (s) {
-        const list = await getMyCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      } else {
-        const list = loadCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      }
+    getSession().then((session) => {
+      if (!session && !company) router.replace('/select-company');
     });
-  }, []);
+  }, [company, router]);
 
   const refresh = useCallback(async () => {
-    if (!selectedCompanyId) return;
+    if (!company?.id) return;
     setLoading(true);
     try {
-      setRecords(await loadDutiesTaxes(selectedCompanyId));
+      setRecords(await loadDutiesTaxes(company.id));
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId]);
+  }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -149,7 +139,7 @@ export default function DutiesTaxesPage() {
           tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
         });
       } else {
-        await addDutiesTaxes(selectedCompanyId, {
+        await addDutiesTaxes(company?.id ?? '', {
           tax_component: form.tax_component,
           tax_rate: taxRate,
           tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
@@ -176,7 +166,7 @@ export default function DutiesTaxesPage() {
   };
 
   const grouped = groupByComponent(records);
-  const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
+  const companyName = company?.name ?? '';
 
   // Component colour chips
   const componentColour: Record<string, string> = {
@@ -204,29 +194,14 @@ export default function DutiesTaxesPage() {
                 Maps tax components to exact Tally tax ledger names. Used during XML generation.
               </p>
             </div>
-            <button onClick={openAdd} disabled={!selectedCompanyId}
+            <button onClick={openAdd} disabled={!company?.id}
               className="px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
               + Add Mapping
             </button>
           </div>
 
-          {/* Company selector */}
-          <div className="flex items-center gap-3 mb-6">
-            <label className="text-sm font-medium text-gray-700 shrink-0">Company</label>
-            {companies.length === 0 ? (
-              <span className="text-sm text-gray-400">No companies found. Add one first.</span>
-            ) : (
-              <select value={selectedCompanyId}
-                onChange={(e) => { setSelectedCompanyId(e.target.value); setShowForm(false); }}
-                className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                <option value="" disabled>Select company…</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
-          </div>
-
           {/* Info banner */}
-          {selectedCompanyId && records.length === 0 && !loading && (
+          {company?.id && records.length === 0 && !loading && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-5 text-xs text-blue-800 space-y-1">
               <p className="font-semibold">How this works:</p>
               <p>When an invoice is accepted, the system already knows the CGST, SGST, IGST amounts from extraction.</p>
@@ -309,11 +284,7 @@ export default function DutiesTaxesPage() {
           )}
 
           {/* ── Records ── */}
-          {!selectedCompanyId ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
-              <p className="text-sm">Select a company to view its Duties & Taxes mappings.</p>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : records.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
