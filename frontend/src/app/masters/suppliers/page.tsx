@@ -24,7 +24,7 @@ const EMPTY_FORM = { tally_ledger_name: '', vendor_gstin: '' };
 type Tab = 'list' | 'import';
 
 export default function SupplierMastersPage() {
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
   const router = useRouter();
   const [companyState, setCompanyState] = useState('');
   const [suppliers, setSuppliers] = useState<SupplierMaster[]>([]);
@@ -43,10 +43,11 @@ export default function SupplierMastersPage() {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (!session && !company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   // When company changes, derive its state from GSTIN
   useEffect(() => {

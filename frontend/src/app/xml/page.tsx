@@ -169,7 +169,7 @@ async function loadMasters(companyId: string) {
 
 export default function XmlGeneratorPage() {
   const router = useRouter();
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
 
   const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
@@ -191,10 +191,11 @@ export default function XmlGeneratorPage() {
 
   // Auth
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (!session && !company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   // Load invoices on company/FY change — also clear preview
   useEffect(() => {

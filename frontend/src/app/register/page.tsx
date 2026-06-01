@@ -49,7 +49,7 @@ function SummaryCard({ label, value, sub }: { label: string; value: string; sub?
 
 export default function PurchaseRegisterPage() {
   const router = useRouter();
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
 
   const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [selectedITC, setSelectedITC] = useState<ITCStatus | ''>('');
@@ -64,10 +64,11 @@ export default function PurchaseRegisterPage() {
 
   // ── Auth check ──
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (!session && !company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   // ── Fetch register ──
   const fetchRegister = useCallback(async () => {
