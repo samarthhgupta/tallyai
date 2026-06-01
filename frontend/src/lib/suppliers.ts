@@ -145,7 +145,13 @@ export function bulkUpsertSuppliers(
 
   rows.forEach((row, i) => {
     const rowNum = i + 2; // 1-indexed, row 1 = header
-    const gstin = (row.vendor_gstin ?? '').trim().toUpperCase();
+    // Tally exports "UNREGISTERED" (or similar) for parties not registered under GST.
+    // Normalise all such values to empty string so they are treated as unregistered.
+    const UNREGISTERED_MARKERS = new Set([
+      'UNREGISTERED', 'URD', 'N/A', 'NA', 'NIL', 'NOT APPLICABLE', 'NOT REGISTERED', '-', '—',
+    ]);
+    const rawGstin = (row.vendor_gstin ?? '').trim().toUpperCase();
+    const gstin = UNREGISTERED_MARKERS.has(rawGstin) ? '' : rawGstin;
     const ledger = (row.tally_ledger_name ?? '').trim();
     const state = (row.state_name ?? '').trim();
     const unregistered = !gstin;
