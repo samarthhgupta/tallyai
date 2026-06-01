@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, getPurchaseRegister, type Company } from '@/lib/db';
+import { getPurchaseRegister } from '@/lib/db';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems } from '@/lib/stockItems';
@@ -11,7 +11,9 @@ import { loadExpenseLedgers } from '@/lib/expenseLedgers';
 import { generateTallyXml, buildTallyPreview, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
-import { getFYList, getMonthsForFY, currentFY, type MonthOption } from '@/lib/fyPeriod';
+import { getFYList, currentFY } from '@/lib/fyPeriod';
+import { useCompany } from '@/lib/companyContext';
+import FYPeriodSelector from '@/components/FYPeriodSelector';
 import * as XLSX from 'xlsx';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -167,15 +169,9 @@ async function loadMasters(companyId: string) {
 
 export default function XmlGeneratorPage() {
   const router = useRouter();
+  const { company } = useCompany();
 
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
-
-  const [fyList] = useState<string[]>(getFYList);
-  const [selectedFY, setSelectedFY] = useState(currentFY);
-  const [monthOptions, setMonthOptions] = useState<MonthOption[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState('');
-
+  const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
 
@@ -183,12 +179,10 @@ export default function XmlGeneratorPage() {
     { gst_percent: null, tally_ledger_name: '' },
   ]);
 
-  // Preview state
   const [previewing, setPreviewing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[] | null>(null);
   const [previewError, setPreviewError] = useState('');
 
-  // XML state
   const [generatingXml, setGeneratingXml] = useState(false);
   const [xmlBlob, setXmlBlob] = useState<Blob | null>(null);
   const [xmlFilename, setXmlFilename] = useState('');
@@ -197,62 +191,42 @@ export default function XmlGeneratorPage() {
 
   // Auth
   useEffect(() => {
-    getSession().then(async (session) => {
-      if (!session) { router.replace('/login'); return; }
-      try {
-        const list = await getMyCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      } catch { /* ignore */ }
+    getSession().then((session) => {
+      if (!session && !company) router.replace('/select-company');
     });
-  }, [router]);
+  }, [company, router]);
 
-  // Months
-  useEffect(() => {
-    setMonthOptions(getMonthsForFY(selectedFY));
-    setSelectedMonth('');
-  }, [selectedFY]);
-
-  // Load invoices on company/period change — also clear preview
+  // Load invoices on company/FY change — also clear preview
   useEffect(() => {
     setPreviewRows(null);
     setXmlBlob(null);
-    if (!selectedCompanyId) { setInvoices([]); return; }
+    if (!company?.id) { setInvoices([]); return; }
     setLoadingInvoices(true);
     setLoadError('');
-    getPurchaseRegister(selectedCompanyId, {
-      financialYear: selectedFY || undefined,
-      periodMonth: selectedMonth || undefined,
-    })
+    getPurchaseRegister(company.id, { financialYear: selectedFY || undefined })
       .then(setInvoices)
       .catch((e) => setLoadError(e.message ?? 'Failed to load invoices'))
       .finally(() => setLoadingInvoices(false));
-  }, [selectedCompanyId, selectedFY, selectedMonth]);
+  }, [company?.id, selectedFY]);
 
-  // Clear preview when purchase ledger mapping changes
   useEffect(() => {
     setPreviewRows(null);
     setXmlBlob(null);
   }, [purchaseLedgers]);
 
-  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const selectedCompany = company;
 
   const validLedgers = useMemo(
     () => purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== ''),
     [purchaseLedgers],
   );
 
-  const periodLabel = selectedMonth
-    ? monthOptions.find((m) => m.period_month === selectedMonth)?.period_label ?? selectedMonth
-    : selectedFY;
-
-  const fileBase = `${selectedCompany?.tally_company_name ?? selectedCompany?.name ?? 'export'}_${periodLabel}`
+  const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
     .replace(/[^a-zA-Z0-9._-]/g, '_');
 
-  // ── Validation ──
   function validate(): string | null {
-    if (!selectedCompanyId) return 'Select a company.';
-    if (!selectedCompany?.tally_company_name) return 'Tally Company Name is missing — update it in Companies first.';
+    if (!company) return 'No company selected.';
+    if (!company.tally_company_name) return 'Tally Company Name is missing — update it in Companies first.';
     if (validLedgers.length === 0) return 'Configure at least one purchase ledger mapping.';
     if (invoices.length === 0) return 'No accepted invoices found for the selected period.';
     return null;
@@ -267,12 +241,12 @@ export default function XmlGeneratorPage() {
     setPreviewError('');
     setXmlBlob(null);
     try {
-      const masters = await loadMasters(selectedCompanyId);
+      const masters = await loadMasters(company!.id);
       const rows = buildTallyPreview({
         invoices,
         ...masters,
         purchaseLedgers: validLedgers,
-        tallyCompanyName: selectedCompany!.tally_company_name!,
+        tallyCompanyName: company!.tally_company_name!,
       });
       setPreviewRows(rows);
     } catch (e: unknown) {
@@ -325,7 +299,7 @@ export default function XmlGeneratorPage() {
     setGeneratingXml(true);
     setXmlBlob(null);
     try {
-      const masters = await loadMasters(selectedCompanyId);
+      const masters = await loadMasters(company!.id);
       const output = generateTallyXml({
         invoices,
         ...masters,
@@ -368,55 +342,33 @@ export default function XmlGeneratorPage() {
           </p>
         </div>
 
-        {/* ── Step 1: Company + Period + Purchase Ledger mapping ── */}
+        {/* ── Step 1: Period + Purchase Ledger mapping ── */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">1</span>
-            Company, Period &amp; Purchase Ledgers
+            Financial Year &amp; Purchase Ledgers
           </h2>
 
-          <div className="grid grid-cols-3 gap-4 mb-5">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5">Company</label>
-              <select
-                value={selectedCompanyId}
-                onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-900"
-              >
-                <option value="">Select company…</option>
-                {companies.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </div>
+          <div className="flex items-center gap-4 mb-5">
             <div>
               <label className="block text-xs text-gray-500 mb-1.5">Financial Year</label>
-              <select
-                value={selectedFY}
-                onChange={(e) => setSelectedFY(e.target.value)}
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-900"
-              >
-                {fyList.map((fy) => (
-                  <option key={fy} value={fy}>{fy}</option>
-                ))}
-              </select>
+              <FYPeriodSelector value={selectedFY} onChange={setSelectedFY} />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1.5">Month</label>
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-900"
-              >
-                <option value="">All months</option>
-                {monthOptions.map((m) => (
-                  <option key={m.period_month} value={m.period_month}>{m.period_label}</option>
-                ))}
-              </select>
+            <div className="pt-5 text-sm text-gray-500">
+              {loadingInvoices ? (
+                <span className="text-gray-400">Loading…</span>
+              ) : loadError ? (
+                <span className="text-red-600">{loadError}</span>
+              ) : (
+                <span>
+                  <span className="font-semibold text-gray-800">{invoices.length}</span>{' '}
+                  accepted invoice{invoices.length !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
           </div>
 
-          {selectedCompanyId && !selectedCompany?.tally_company_name && (
+          {company && !company.tally_company_name && (
             <div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 text-sm text-amber-800">
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
@@ -425,21 +377,6 @@ export default function XmlGeneratorPage() {
                 <strong>Tally Company Name is missing.</strong>{' '}
                 <button onClick={() => router.push('/companies')} className="underline">Update in Companies</button>
               </span>
-            </div>
-          )}
-
-          {selectedCompanyId && (
-            <div className="mb-5 text-sm text-gray-500">
-              {loadingInvoices ? (
-                <span className="text-gray-400">Loading invoices…</span>
-              ) : loadError ? (
-                <span className="text-red-600">{loadError}</span>
-              ) : (
-                <span>
-                  <span className="font-semibold text-gray-800">{invoices.length}</span>{' '}
-                  accepted invoice{invoices.length !== 1 ? 's' : ''} in this period
-                </span>
-              )}
             </div>
           )}
 
@@ -486,7 +423,7 @@ export default function XmlGeneratorPage() {
 
           <button
             onClick={handlePreview}
-            disabled={previewing || !selectedCompanyId || invoices.length === 0}
+            disabled={previewing || !company || invoices.length === 0}
             className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {previewing ? 'Building preview…' : 'Preview'}
@@ -552,7 +489,7 @@ export default function XmlGeneratorPage() {
           <div className="flex items-center gap-4">
             <button
               onClick={handleGenerateXml}
-              disabled={generatingXml || !selectedCompanyId || invoices.length === 0}
+              disabled={generatingXml || !company || invoices.length === 0}
               className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

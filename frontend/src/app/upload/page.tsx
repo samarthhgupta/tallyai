@@ -4,16 +4,16 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, type Company, computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
-import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
 import { learnVendorName } from '@/lib/suppliers';
 import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
 import AppSidebar from '@/components/AppSidebar';
-import FYPeriodSelector, { useFYPeriod } from '@/components/FYPeriodSelector';
-import type { FYPeriod } from '@/lib/fyPeriod';
+import FYPeriodSelector from '@/components/FYPeriodSelector';
+import { currentFY } from '@/lib/fyPeriod';
+import { useCompany } from '@/lib/companyContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -192,13 +192,11 @@ function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
 
 export default function UploadPage() {
   const router = useRouter();
-  const { period, update: updatePeriod } = useFYPeriod();
+  const { company } = useCompany();
+  const [financialYear, setFinancialYear] = useState<string>(currentFY);
 
-  // Auth + company state
+  // Auth state
   const [isAuthed, setIsAuthed] = useState(false);
-  const [supabaseCompanies, setSupabaseCompanies] = useState<Company[]>([]);
-  const [localCompanies, setLocalCompanies] = useState<LocalCompany[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
 
   // File + extraction state
   const [files, setFiles] = useState<File[]>([]);
@@ -223,26 +221,16 @@ export default function UploadPage() {
   const [itcPopup, setItcPopup] = useState<ITCItem[] | null>(null);
   const [rejectPopup, setRejectPopup] = useState<string[] | null>(null); // keys to reject
 
-  // ── Auth + company load ──
+  // ── Auth check ──
   useEffect(() => {
-    getSession().then(async (session) => {
-      if (session) {
-        setIsAuthed(true);
-        try {
-          const list = await getMyCompanies();
-          setSupabaseCompanies(list);
-          if (list.length === 1) setSelectedCompanyId(list[0].id);
-        } catch { /* ignore */ }
-      } else {
-        const list = loadCompanies();
-        setLocalCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      }
+    getSession().then((session) => {
+      if (session) setIsAuthed(true);
+      else if (!company) router.replace('/select-company');
     });
-  }, []);
+  }, [company, router]);
 
-  const companies = isAuthed ? supabaseCompanies : localCompanies;
-  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
+  const selectedCompany = company;
+  const selectedCompanyId = company?.id ?? '';
 
   // ── File handling ──
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
@@ -322,9 +310,9 @@ export default function UploadPage() {
       setResult(data);
 
       // Create batch in Supabase if authed + company selected
-      if (isAuthed && selectedCompanyId && period) {
+      if (isAuthed && selectedCompanyId && financialYear) {
         try {
-          const bid = await createBatch(selectedCompanyId, files.length, period);
+          const bid = await createBatch(selectedCompanyId, files.length, financialYear);
           setBatchId(bid);
         } catch { /* non-fatal; accept will fail later */ }
       }
@@ -394,7 +382,7 @@ export default function UploadPage() {
     };
 
     // If not authed or no batch, just remove locally — no DB save
-    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+    if (!isAuthed || !selectedCompanyId || !batchId || !financialYear) {
       removeFromQueue();
       setActionLoading(false);
       return;
@@ -428,7 +416,7 @@ export default function UploadPage() {
         }
       });
 
-      await insertAcceptedInvoices(selectedCompanyId, batchId, items, period, companyGstin, companyName);
+      await insertAcceptedInvoices(selectedCompanyId, batchId, items, financialYear, companyGstin, companyName);
       removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register.');
@@ -464,7 +452,7 @@ export default function UploadPage() {
       setRejectPopup(null);
     };
 
-    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+    if (!isAuthed || !selectedCompanyId || !batchId || !financialYear) {
       removeFromQueue();
       return;
     }
@@ -479,7 +467,7 @@ export default function UploadPage() {
         })
         .filter(Boolean) as InvoiceToSave[];
 
-      await insertRejectedInvoices(selectedCompanyId, batchId, items, period, reason || undefined);
+      await insertRejectedInvoices(selectedCompanyId, batchId, items, financialYear, reason || undefined);
       removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save rejection record.');
@@ -520,34 +508,9 @@ export default function UploadPage() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Upload Invoices</h2>
-              {period && <FYPeriodSelector value={period} onChange={updatePeriod} />}
+              <FYPeriodSelector value={financialYear} onChange={setFinancialYear} />
             </div>
 
-            {/* Company selector */}
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
-              {companies.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No companies found.{' '}
-                  <button onClick={() => router.push('/companies')} className="text-indigo-600 hover:underline font-medium">
-                    Add one →
-                  </button>
-                </p>
-              ) : (
-                <select
-                  value={selectedCompanyId}
-                  onChange={(e) => setSelectedCompanyId(e.target.value)}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="">— Select a company —</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{c.gstin ? ` · ${c.gstin}` : ''}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
 
             {/* Drop zone */}
             <div
@@ -598,16 +561,10 @@ export default function UploadPage() {
               <div className="mt-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm text-red-700">{extractError}</div>
             )}
 
-            {!selectedCompanyId && files.length > 0 && (
-              <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                Please select a company before extracting.
-              </p>
-            )}
-
             <div className="mt-4">
               <button
                 onClick={handleExtract}
-                disabled={!files.length || extracting || !selectedCompanyId}
+                disabled={!files.length || extracting}
                 className="px-6 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {extracting ? (
@@ -640,7 +597,7 @@ export default function UploadPage() {
                           <span className="ml-2 text-gray-400 font-normal">
                             {queue.length} invoice{queue.length !== 1 ? 's' : ''}
                             {selectedCompany ? ` · ${selectedCompany.name}` : ''}
-                            {period ? ` · ${period.period_label}` : ''}
+                            {financialYear ? ` · ${financialYear}` : ''}
                           </span>
                         </h3>
                       </div>

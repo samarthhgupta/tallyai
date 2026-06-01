@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, type Company } from '@/lib/db';
-import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { useCompany } from '@/lib/companyContext';
 import {
   loadSuppliers,
   addSupplier,
@@ -22,11 +22,10 @@ import {
 
 const EMPTY_FORM = { tally_ledger_name: '', vendor_gstin: '' };
 type Tab = 'list' | 'import';
-type AnyCompany = Company | LocalCompany;
 
 export default function SupplierMastersPage() {
-  const [companies, setCompanies] = useState<AnyCompany[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const { company } = useCompany();
+  const router = useRouter();
   const [companyState, setCompanyState] = useState('');
   const [suppliers, setSuppliers] = useState<SupplierMaster[]>([]);
   const [loading, setLoading] = useState(false);
@@ -43,41 +42,31 @@ export default function SupplierMastersPage() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
-  // Load companies — Supabase if authed, localStorage fallback
   useEffect(() => {
-    getSession().then(async (s) => {
-      if (s) {
-        const list = await getMyCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      } else {
-        const list = loadCompanies();
-        setCompanies(list);
-        if (list.length === 1) setSelectedCompanyId(list[0].id);
-      }
+    getSession().then((session) => {
+      if (!session && !company) router.replace('/select-company');
     });
-  }, []);
+  }, [company, router]);
 
   // When company changes, derive its state from GSTIN
   useEffect(() => {
-    if (!selectedCompanyId) return;
-    const company = companies.find((c) => c.id === selectedCompanyId);
-    const gstin = company && 'gstin' in company ? (company.gstin ?? '') : '';
+    if (!company?.id) return;
+    const gstin = 'gstin' in company ? (company.gstin ?? '') : '';
     const state = gstin ? (deriveStateFromGstin(gstin) ?? '') : '';
     setCompanyState(state);
     setImportResult(null);
-  }, [selectedCompanyId, companies]);
+  }, [company]);
 
   const refresh = useCallback(async () => {
-    if (!selectedCompanyId) return;
+    if (!company?.id) return;
     setLoading(true);
     try {
-      const list = await loadSuppliers(selectedCompanyId);
+      const list = await loadSuppliers(company.id);
       setSuppliers(list);
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId]);
+  }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -113,7 +102,7 @@ export default function SupplierMastersPage() {
           vendor_gstin: form.vendor_gstin,
         }, companyState);
       } else {
-        await addSupplier(selectedCompanyId, {
+        await addSupplier(company?.id ?? '', {
           tally_ledger_name: form.tally_ledger_name,
           vendor_gstin: form.vendor_gstin,
           companyState,
@@ -157,7 +146,7 @@ export default function SupplierMastersPage() {
   // ── Excel import ─────────────────────────────────────────────────────────
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedCompanyId) return;
+    if (!file || !company?.id) return;
     setImporting(true);
     setImportResult(null);
     try {
@@ -199,7 +188,7 @@ export default function SupplierMastersPage() {
         vendor_gstin: gstinCol !== -1 ? String(r[gstinCol] ?? '') : '',
       }));
 
-      const result = await bulkUpsertSuppliers(selectedCompanyId, rows, companyState);
+      const result = await bulkUpsertSuppliers(company?.id ?? '', rows, companyState);
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
@@ -223,7 +212,6 @@ export default function SupplierMastersPage() {
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 35 }, { wch: 20 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Supplier Master');
-    const company = companies.find((c) => c.id === selectedCompanyId);
     XLSX.writeFile(wb, `SupplierMaster_${company?.name ?? 'export'}.xlsx`);
   };
 
@@ -247,7 +235,7 @@ export default function SupplierMastersPage() {
     );
   });
 
-  const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
+  const companyName = company?.name ?? '';
   const unregCount = filtered.filter(isUnregistered).length;
 
   return (
@@ -272,37 +260,26 @@ export default function SupplierMastersPage() {
                 </svg>
                 Template
               </button>
-              <button onClick={() => { setTab('import'); setShowForm(false); }} disabled={!selectedCompanyId}
+              <button onClick={() => { setTab('import'); setShowForm(false); }} disabled={!company?.id}
                 className="px-3 py-2 text-sm text-indigo-700 border border-indigo-300 bg-indigo-50 rounded-md hover:bg-indigo-100 disabled:opacity-40 transition-colors flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
                 </svg>
                 Import Excel
               </button>
-              <button onClick={openAdd} disabled={!selectedCompanyId}
+              <button onClick={openAdd} disabled={!company?.id}
                 className="px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
                 + Add Supplier
               </button>
             </div>
           </div>
 
-          {/* Company selector */}
+          {/* Search / export row */}
           <div className="flex items-center gap-3 mb-5">
-            <label className="text-sm font-medium text-gray-700 shrink-0">Company</label>
-            {companies.length === 0 ? (
-              <span className="text-sm text-gray-400">No companies found. Add one first.</span>
-            ) : (
-              <select value={selectedCompanyId}
-                onChange={(e) => { setSelectedCompanyId(e.target.value); setTab('list'); setShowForm(false); }}
-                className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                <option value="" disabled>Select company…</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            )}
             {companyState && (
               <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-md">{companyState}</span>
             )}
-            {selectedCompanyId && suppliers.length > 0 && tab === 'list' && (
+            {company?.id && suppliers.length > 0 && tab === 'list' && (
               <>
                 <input value={search} onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search suppliers…"
@@ -318,7 +295,7 @@ export default function SupplierMastersPage() {
           </div>
 
           {/* ── Import panel ── */}
-          {tab === 'import' && selectedCompanyId && (
+          {tab === 'import' && company?.id && (
             <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -427,11 +404,7 @@ export default function SupplierMastersPage() {
           )}
 
           {/* ── Supplier table ── */}
-          {!selectedCompanyId ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
-              <p className="text-sm">Select a company to view its supplier master.</p>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : filtered.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">

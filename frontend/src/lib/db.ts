@@ -241,7 +241,7 @@ export function computeReadiness(
 export async function createBatch(
   companyId: string,
   fileCount: number,
-  period: FYPeriod,
+  financialYear: string,
 ): Promise<string> {
   const user = (await getSupabase().auth.getUser()).data.user;
   const { data, error } = await db()
@@ -250,10 +250,10 @@ export async function createBatch(
       company_id: companyId,
       uploaded_by: user?.id,
       file_count: fileCount,
-      invoice_count: 0,        // updated when invoices are inserted
-      financial_year: period.financial_year,
-      period_month: period.period_month,
-      period_label: period.period_label,
+      invoice_count: 0,
+      financial_year: financialYear,
+      period_month: null,
+      period_label: null,
     })
     .select('id')
     .single();
@@ -276,18 +276,21 @@ export async function insertAcceptedInvoices(
   companyId: string,
   batchId: string,
   items: InvoiceToSave[],
-  period: FYPeriod,
+  financialYear: string,
   companyGstin?: string | null,
   companyName?: string | null,
 ): Promise<void> {
   if (!items.length) return;
   const user = (await getSupabase().auth.getUser()).data.user;
   const now = new Date().toISOString();
+  const { periodFromInvoiceDate } = await import('./fyPeriod');
 
   const rows = items.map(({ inv, filename, itcStatusOverride, itcRemarkOverride, convertedToNonGst, convertedNonGstLedger }) => {
     const r = computeReadiness(inv, companyGstin, companyName);
     const finalItcStatus = itcStatusOverride ?? r.itcStatus;
     const finalItcRemark = itcRemarkOverride ?? r.itcRemark;
+    // Derive period from invoice date — not from user-selected month
+    const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
     return {
       batch_id: batchId,
       company_id: companyId,
@@ -314,21 +317,16 @@ export async function insertAcceptedInvoices(
       confidence_reasons: inv.confidence_reasons ?? [],
       line_items: inv.line_items,
       bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
-      // Status
       status: 'accepted',
       readiness: r.readiness,
       readiness_flags: r.flags,
-      // Period
-      financial_year: period.financial_year,
-      period_month: period.period_month,
-      period_label: period.period_label,
-      // ITC
+      financial_year: p.financial_year,
+      period_month: p.period_month,
+      period_label: p.period_label,
       itc_status: finalItcStatus,
       itc_remark: finalItcRemark,
-      // Non-GST conversion
       converted_to_nongst: convertedToNonGst ?? false,
       converted_nongst_ledger: convertedNonGstLedger ?? null,
-      // Audit
       accepted_at: now,
       accepted_by: user?.id ?? null,
     };
@@ -344,15 +342,17 @@ export async function insertRejectedInvoices(
   companyId: string,
   batchId: string,
   items: InvoiceToSave[],
-  period: FYPeriod,
+  financialYear: string,
   reason?: string,
 ): Promise<void> {
   if (!items.length) return;
   const user = (await getSupabase().auth.getUser()).data.user;
   const now = new Date().toISOString();
+  const { periodFromInvoiceDate } = await import('./fyPeriod');
 
   const rows = items.map(({ inv, filename }) => {
     const r = computeReadiness(inv);
+    const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
     return {
       batch_id: batchId,
       company_id: companyId,
@@ -382,9 +382,9 @@ export async function insertRejectedInvoices(
       status: 'rejected',
       readiness: r.readiness,
       readiness_flags: r.flags,
-      financial_year: period.financial_year,
-      period_month: period.period_month,
-      period_label: period.period_label,
+      financial_year: p.financial_year,
+      period_month: p.period_month,
+      period_label: p.period_label,
       itc_status: r.itcStatus,
       itc_remark: r.itcRemark,
       rejected_at: now,

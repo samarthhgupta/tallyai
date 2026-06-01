@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter, usePathname } from 'next/navigation';
+import { useCompany } from '@/lib/companyContext';
 
 const NAV = [
   { label: 'Upload', href: '/upload' },
@@ -21,18 +22,48 @@ const NAV = [
 export default function AppSidebar() {
   const router = useRouter();
   const pathname = usePathname();
+  const { company, clearCompany } = useCompany();
 
   const isActive = (href: string) =>
     href !== '#' && (pathname === href || pathname.startsWith(href + '/'));
 
+  const handleChangeCompany = () => {
+    clearCompany();
+    router.push('/select-company');
+  };
+
   return (
     <aside className="fixed top-0 left-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col z-20">
-      <div className="flex items-center gap-2 px-5 py-5 border-b border-gray-100">
+      {/* Logo */}
+      <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
         <div className="w-8 h-8 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
           <span className="text-white font-bold text-sm">T</span>
         </div>
         <span className="text-lg font-semibold text-gray-900">TallyAI</span>
       </div>
+
+      {/* Company context banner */}
+      {company ? (
+        <div className="px-4 py-3 bg-indigo-50 border-b border-indigo-100">
+          <p className="text-xs text-indigo-500 font-medium uppercase tracking-wider mb-0.5">Company</p>
+          <p className="text-sm font-semibold text-indigo-900 truncate leading-tight" title={company.name}>
+            {company.name}
+          </p>
+          <button
+            onClick={handleChangeCompany}
+            className="text-xs text-indigo-500 hover:text-indigo-700 mt-1 font-medium transition-colors"
+          >
+            Change →
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => router.push('/select-company')}
+          className="mx-4 my-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-medium hover:bg-amber-100 transition-colors text-left"
+        >
+          No company selected — click to select →
+        </button>
+      )}
 
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {NAV.map((item) => {
