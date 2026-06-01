@@ -304,12 +304,6 @@ export async function insertAcceptedInvoices(
 
   const { error } = await db().from('invoices').insert(rows);
   if (error) throw error;
-
-  // Update batch invoice count
-  await db()
-    .from('invoice_batches')
-    .update({ invoice_count: db().rpc('coalesce', {}) })
-    .eq('id', batchId);
 }
 
 // ─── Insert rejected invoices (+ archive) ────────────────────────────────────
