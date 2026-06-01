@@ -311,8 +311,8 @@ export default function UploadPage() {
       setQueue(items);
       setResult(data);
 
-      // Create batch in Supabase if authed + company selected
-      if (isAuthed && selectedCompanyId && financialYear) {
+      // Create batch in Supabase if company selected
+      if (selectedCompanyId && financialYear) {
         try {
           const bid = await createBatch(selectedCompanyId, files.length, financialYear);
           setBatchId(bid);
@@ -383,8 +383,8 @@ export default function UploadPage() {
       setItcPopup(null);
     };
 
-    // If not authed or no batch, just remove locally — no DB save
-    if (!isAuthed || !selectedCompanyId || !batchId || !financialYear) {
+    // If no company or batch, just remove locally — no DB save
+    if (!selectedCompanyId || !batchId || !financialYear) {
       removeFromQueue();
       setActionLoading(false);
       return;
@@ -454,7 +454,7 @@ export default function UploadPage() {
       setRejectPopup(null);
     };
 
-    if (!isAuthed || !selectedCompanyId || !batchId || !financialYear) {
+    if (!selectedCompanyId || !batchId || !financialYear) {
       removeFromQueue();
       return;
     }
