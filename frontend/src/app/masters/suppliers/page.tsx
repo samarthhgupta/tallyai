@@ -98,11 +98,7 @@ export default function SupplierMastersPage() {
       setFormError('Vendor Name is required.');
       return;
     }
-    // GSTIN optional — blank means unregistered supplier
-    if (form.vendor_gstin.trim() && !validateGstin(form.vendor_gstin)) {
-      setFormError('Invalid GSTIN format (must be 15 characters, e.g. 27AABCU9603R1ZX).');
-      return;
-    }
+    // GSTIN optional — blank means unregistered. Invalid format is allowed (flagged in table).
     if (!form.state_name.trim()) {
       setFormError('State Name is required.');
       return;
@@ -430,8 +426,8 @@ export default function SupplierMastersPage() {
                   {form.vendor_gstin.length > 0 && form.vendor_gstin.length < 15 && (
                     <p className="text-xs text-gray-400 mt-1">{15 - form.vendor_gstin.length} characters remaining</p>
                   )}
-                  {form.vendor_gstin.length === 15 && !validateGstin(form.vendor_gstin) && (
-                    <p className="text-xs text-red-500 mt-1">Invalid GSTIN format</p>
+                  {form.vendor_gstin.length > 0 && !validateGstin(form.vendor_gstin) && (
+                    <p className="text-xs text-amber-600 mt-1">⚠ Invalid GSTIN format — will be saved but flagged in the table</p>
                   )}
                   {!form.vendor_gstin && (
                     <p className="text-xs text-amber-600 mt-1">Will be treated as unregistered party</p>
@@ -519,8 +515,18 @@ export default function SupplierMastersPage() {
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                             Unregistered
                           </span>
-                        ) : (
+                        ) : validateGstin(s.vendor_gstin) ? (
                           <span className="font-mono text-gray-600">{s.vendor_gstin}</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="font-mono text-red-600">{s.vendor_gstin}</span>
+                            <span className="relative group cursor-default">
+                              <span className="w-4 h-4 rounded-full bg-red-100 text-red-600 text-[10px] font-bold flex items-center justify-center leading-none">i</span>
+                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-max max-w-[180px] bg-gray-900 text-white text-xs rounded px-2 py-1 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-10 whitespace-normal text-center">
+                                Invalid GSTIN format
+                              </span>
+                            </span>
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{s.state_name || '—'}</td>

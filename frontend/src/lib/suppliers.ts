@@ -160,11 +160,8 @@ export function bulkUpsertSuppliers(
       result.errors.push({ row: rowNum, gstin: gstin || '—', reason: 'Tally Ledger Name is required' });
       return;
     }
-    // GSTIN present → validate format
-    if (!unregistered && !validateGstin(gstin)) {
-      result.errors.push({ row: rowNum, gstin, reason: 'Invalid GSTIN format' });
-      return;
-    }
+    // GSTIN present but invalid format → import anyway, caller will display warning
+    // Only skip if ledger name or state is missing (those are structural requirements)
     if (!state) {
       result.errors.push({ row: rowNum, gstin: gstin || ledger, reason: 'State Name is required' });
       return;
