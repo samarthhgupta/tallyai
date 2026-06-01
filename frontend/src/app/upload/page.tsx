@@ -421,10 +421,10 @@ export default function UploadPage() {
       const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
       const companyName = selectedCompany?.name ?? null;
 
-      // Auto-learn vendor names: update supplier master with name from invoice
+      // Auto-learn vendor names: update supplier master with name from invoice (fire-and-forget)
       items.forEach(({ inv }) => {
         if (inv.vendor_gstin && inv.vendor_name) {
-          learnVendorName(selectedCompanyId, inv.vendor_gstin, inv.vendor_name);
+          learnVendorName(selectedCompanyId, inv.vendor_gstin, inv.vendor_name).catch(() => {});
         }
       });
 
