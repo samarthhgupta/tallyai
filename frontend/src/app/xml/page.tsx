@@ -300,16 +300,22 @@ export default function XmlGeneratorPage() {
       ]),
     ];
     const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Column widths
     ws['!cols'] = [
       { wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 },
       { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 },
     ];
-
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
-    XLSX.writeFile(wb, `${fileBase}_preview.xlsx`);
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${fileBase}_preview.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // ── Step 3: Generate and download XML ──
