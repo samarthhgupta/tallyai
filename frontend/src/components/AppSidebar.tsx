@@ -9,6 +9,7 @@ const NAV = [
     label: 'Masters',
     children: [
       { label: 'Supplier Master', href: '/masters/suppliers' },
+      { label: 'Stock Items', href: '/masters/stock-items' },
       { label: 'Duties & Taxes', href: '/masters/duties-taxes' },
     ],
   },
