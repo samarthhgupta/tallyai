@@ -1,20 +1,206 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
-import { loadCompanies, saveCompany, type LocalCompany } from '@/lib/companies';
-import { findDuplicate, recordInvoice, type InvoiceFingerprint } from '@/lib/invoiceHistory';
+import { getSession } from '@/lib/auth';
+import { getMyCompanies, type Company, computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
+import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
 import AppSidebar from '@/components/AppSidebar';
 import FYPeriodSelector, { useFYPeriod } from '@/components/FYPeriodSelector';
+import type { FYPeriod } from '@/lib/fyPeriod';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface QueueItem {
+  key: string;           // `${filename}:${idx}`
+  inv: ExtractedInvoice;
+  filename: string;
+  readiness: 'ready' | 'warning' | 'critical';
+  readinessFlags: string[];
+  itcWarning: boolean;   // true if ITC concern present
+}
+
+interface ITCItem {
+  key: string;
+  inv: ExtractedInvoice;
+  filename: string;
+  itcRemark: string;
+}
+
+// ─── ReadinessBadge ───────────────────────────────────────────────────────────
+
+function ReadinessBadge({ readiness, flags }: { readiness: QueueItem['readiness']; flags: string[] }) {
+  const cfg = {
+    ready:    { label: 'Ready',    cls: 'bg-green-100 text-green-700' },
+    warning:  { label: 'Warning',  cls: 'bg-amber-100 text-amber-700' },
+    critical: { label: 'Critical', cls: 'bg-red-100 text-red-700' },
+  }[readiness];
+
+  const [showFlags, setShowFlags] = useState(false);
+
+  return (
+    <span className="relative inline-flex items-center gap-1">
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.cls}`}>
+        {cfg.label}
+      </span>
+      {flags.length > 0 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowFlags((v) => !v); }}
+          className="text-gray-400 hover:text-gray-600"
+          title="Show details"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <circle cx="12" cy="12" r="10" strokeWidth="2" />
+            <path strokeLinecap="round" strokeWidth="2" d="M12 8v4m0 4h.01" />
+          </svg>
+        </button>
+      )}
+      {showFlags && (
+        <div className="absolute top-full left-0 mt-1 z-30 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3">
+          <p className="text-xs font-semibold text-gray-600 mb-1.5">
+            {readiness === 'critical' ? 'Must resolve before accepting:' : 'Warnings:'}
+          </p>
+          <ul className="space-y-1">
+            {flags.map((f, i) => (
+              <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+                <span className={readiness === 'critical' ? 'text-red-500' : 'text-amber-500'}>•</span>
+                {f}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ─── ITC Warning Popup ────────────────────────────────────────────────────────
+
+interface ITCPopupProps {
+  items: ITCItem[];
+  onProceed: (keys: string[]) => void;
+  onReview: () => void;
+}
+
+function ITCWarningPopup({ items, onProceed, onReview }: ITCPopupProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full mx-4 p-6">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+            <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900">ITC Eligibility Warning</h3>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {items.length === 1
+                ? 'This invoice contains GST but may not be eligible for Input Tax Credit.'
+                : `${items.length} invoices contain GST but may not be eligible for Input Tax Credit.`}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 space-y-2 max-h-48 overflow-y-auto">
+          {items.map((item) => (
+            <div key={item.key} className="text-xs">
+              <span className="font-medium text-gray-800">{item.inv.invoice_number || '(no number)'}</span>
+              <span className="text-gray-500 mx-1">·</span>
+              <span className="text-gray-600">{item.inv.vendor_name}</span>
+              <div className="text-amber-700 mt-0.5">{item.itcRemark}</div>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-sm text-gray-600 mb-5">
+          You can still accept and book these invoices. ITC status will be marked as
+          <strong className="text-amber-700"> Potentially Ineligible</strong> in the Purchase Register.
+        </p>
+
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => onProceed(items.map((i) => i.key))}
+            className="w-full px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors"
+          >
+            Proceed — Book with GST (ITC marked as Potentially Ineligible)
+          </button>
+          <button
+            onClick={onReview}
+            className="w-full px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Cancel — Review invoices first
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Reject Reason Popup ─────────────────────────────────────────────────────
+
+interface RejectPopupProps {
+  count: number;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}
+
+function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+        <h3 className="font-semibold text-gray-900 mb-1">
+          Reject {count} invoice{count !== 1 ? 's' : ''}?
+        </h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Rejected invoices will not enter the Purchase Register. A record will be kept for audit purposes.
+        </p>
+        <textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason for rejection (optional)"
+          rows={3}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none mb-4"
+        />
+        <div className="flex gap-2">
+          <button
+            onClick={() => onConfirm(reason.trim())}
+            className="flex-1 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors"
+          >
+            Reject {count} Invoice{count !== 1 ? 's' : ''}
+          </button>
+          <button
+            onClick={onCancel}
+            className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const [files, setFiles] = useState<File[]>([]);
+  const router = useRouter();
   const { period, update: updatePeriod } = useFYPeriod();
+
+  // Auth + company state
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [supabaseCompanies, setSupabaseCompanies] = useState<Company[]>([]);
+  const [localCompanies, setLocalCompanies] = useState<LocalCompany[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+
+  // File + extraction state
+  const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
@@ -22,48 +208,45 @@ export default function UploadPage() {
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Company state
-  const [companies, setCompanies] = useState<LocalCompany[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
-  const [savedBatchId, setSavedBatchId] = useState<string | null>(null);
-
-  const [rejectedInvoices, setRejectedInvoices] = useState<Set<string>>(new Set());
-  const [currentBatchKeys, setCurrentBatchKeys] = useState<Set<string>>(new Set());
+  // Upload Queue state
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [invoiceOverrides, setInvoiceOverrides] = useState<Map<string, ExtractedInvoice>>(new Map());
+  const [batchId, setBatchId] = useState<string | null>(null);
 
-  function handleInvoiceSave(key: string, updated: ExtractedInvoice) {
-    setInvoiceOverrides((prev) => new Map(prev).set(key, updated));
-  }
+  // Action state
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState('');
 
-  // Add-company form
-  const [showAddCompany, setShowAddCompany] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newGstin, setNewGstin] = useState('');
+  // Popups
+  const [itcPopup, setItcPopup] = useState<ITCItem[] | null>(null);
+  const [rejectPopup, setRejectPopup] = useState<string[] | null>(null); // keys to reject
 
+  // ── Auth + company load ──
   useEffect(() => {
-    const list = loadCompanies();
-    setCompanies(list);
-    if (list.length === 1) setSelectedCompanyId(list[0].id);
+    getSession().then(async (session) => {
+      if (session) {
+        setIsAuthed(true);
+        try {
+          const list = await getMyCompanies();
+          setSupabaseCompanies(list);
+          if (list.length === 1) setSelectedCompanyId(list[0].id);
+        } catch { /* ignore */ }
+      } else {
+        const list = loadCompanies();
+        setLocalCompanies(list);
+        if (list.length === 1) setSelectedCompanyId(list[0].id);
+      }
+    });
   }, []);
 
-  const handleAddCompany = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    const c = saveCompany(newName, newGstin);
-    const updated = loadCompanies();
-    setCompanies(updated);
-    setSelectedCompanyId(c.id);
-    setNewName('');
-    setNewGstin('');
-    setShowAddCompany(false);
-  };
+  const companies = isAuthed ? supabaseCompanies : localCompanies;
+  const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
 
+  // ── File handling ──
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
-
-  const isValidFile = (f: File) => {
-    const name = f.name.toLowerCase();
-    return ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'].some((ext) => name.endsWith(ext));
-  };
+  const isValidFile = (f: File) =>
+    ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'].some((e) => f.name.toLowerCase().endsWith(e));
 
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const valid = Array.from(incoming).filter(isValidFile);
@@ -76,7 +259,6 @@ export default function UploadPage() {
   }, []);
 
   const removeFile = (name: string) => setFiles((prev) => prev.filter((f) => f.name !== name));
-
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setDragging(true); }, []);
   const handleDragLeave = useCallback(() => setDragging(false), []);
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -88,32 +270,63 @@ export default function UploadPage() {
   };
 
   const formatBytes = (b: number) =>
-    b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / (1024 * 1024)).toFixed(1)} MB`;
+    b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
+  // ── Extraction ──
   const handleExtract = async () => {
     if (!files.length) return;
     setExtracting(true);
     setExtractError('');
     setResult(null);
-    setSavedBatchId(null);
+    setQueue([]);
+    setSelected(new Set());
+    setInvoiceOverrides(new Map());
+    setBatchId(null);
+    setActionError('');
+
     const urls: Record<string, string> = {};
     files.forEach((f) => { urls[f.name] = URL.createObjectURL(f); });
     setFileUrls(urls);
+
     try {
       const data = await extractInvoices(files);
-      const batchKeys = new Set<string>();
+
+      // Record to localStorage history (duplicate detection across sessions)
       data.file_results.forEach((fr) => {
         fr.invoices.forEach((inv) => {
           if (inv.invoice_number && !inv.duplicate_of) {
-            // Record to history for future sessions BEFORE rendering,
-            // but track the keys so we don't flag them as history duplicates right now
             recordInvoice(inv.invoice_number, inv.vendor_name, inv.invoice_date, inv.total);
-            batchKeys.add(`${inv.invoice_number}__${inv.vendor_name}`);
           }
         });
       });
-      setCurrentBatchKeys(batchKeys);
+
+      // Build queue items with readiness
+      const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
+      const companyName = selectedCompany?.name ?? null;
+      const items: QueueItem[] = [];
+      data.file_results.forEach((fr) => {
+        fr.invoices.forEach((inv, idx) => {
+          const r = computeReadiness(inv, companyGstin, companyName);
+          items.push({
+            key: `${fr.filename}:${idx}`,
+            inv,
+            filename: fr.filename,
+            readiness: r.readiness,
+            readinessFlags: r.flags,
+            itcWarning: r.itcStatus === 'potentially_ineligible',
+          });
+        });
+      });
+      setQueue(items);
       setResult(data);
+
+      // Create batch in Supabase if authed + company selected
+      if (isAuthed && selectedCompanyId && period) {
+        try {
+          const bid = await createBatch(selectedCompanyId, files.length, period);
+          setBatchId(bid);
+        } catch { /* non-fatal; accept will fail later */ }
+      }
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -121,87 +334,229 @@ export default function UploadPage() {
     }
   };
 
+  // ── Selection ──
+  const selectableKeys = queue.filter((q) => q.readiness !== 'critical').map((q) => q.key);
+
+  const toggleSelect = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const allSelected = selectableKeys.length > 0 && selectableKeys.every((k) => selected.has(k));
+  const someSelected = selectableKeys.some((k) => selected.has(k));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(selectableKeys));
+    }
+  };
+
+  const selectedCount = Array.from(selected).filter((k) => queue.some((q) => q.key === k)).length;
+  const selectedRejectCount = selectedCount; // same set used for reject
+
+  // ── Accept flow ──
+  const handleAcceptSelected = async () => {
+    if (!selected.size) return;
+
+    // Check for ITC warnings among selected
+    const itcItems: ITCItem[] = queue
+      .filter((q) => selected.has(q.key) && q.itcWarning)
+      .map((q) => ({
+        key: q.key,
+        inv: invoiceOverrides.get(q.key) ?? q.inv,
+        filename: q.filename,
+        itcRemark: computeReadiness(invoiceOverrides.get(q.key) ?? q.inv).itcRemark ?? 'ITC concern',
+      }));
+
+    if (itcItems.length > 0) {
+      setItcPopup(itcItems);
+      return;
+    }
+
+    await doAccept(Array.from(selected));
+  };
+
+  const doAccept = async (keys: string[], itcOverrides: Record<string, { status: string; remark: string }> = {}) => {
+    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+      setActionError('You must be logged in with a company selected to save to the Purchase Register.');
+      return;
+    }
+    setActionLoading(true);
+    setActionError('');
+    try {
+      const items: InvoiceToSave[] = keys
+        .map((key) => {
+          const q = queue.find((q) => q.key === key);
+          if (!q) return null;
+          const inv = invoiceOverrides.get(key) ?? q.inv;
+          const override = itcOverrides[key];
+          return {
+            inv,
+            filename: q.filename,
+            itcStatusOverride: override
+              ? (override.status as 'eligible' | 'potentially_ineligible' | 'not_applicable')
+              : undefined,
+            itcRemarkOverride: override?.remark,
+          } satisfies InvoiceToSave;
+        })
+        .filter(Boolean) as InvoiceToSave[];
+
+      const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
+      const companyName = selectedCompany?.name ?? null;
+
+      await insertAcceptedInvoices(selectedCompanyId, batchId, items, period, companyGstin, companyName);
+
+      // Remove accepted invoices from queue
+      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        keys.forEach((k) => next.delete(k));
+        return next;
+      });
+      setItcPopup(null);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleITCProceed = async (itcKeys: string[]) => {
+    const itcOverrides: Record<string, { status: string; remark: string }> = {};
+    itcKeys.forEach((key) => {
+      const q = queue.find((q) => q.key === key);
+      if (q) {
+        const r = computeReadiness(invoiceOverrides.get(key) ?? q.inv);
+        itcOverrides[key] = { status: 'potentially_ineligible', remark: r.itcRemark ?? '' };
+      }
+    });
+    await doAccept(Array.from(selected), itcOverrides);
+  };
+
+  // ── Reject flow ──
+  const handleRejectSelected = () => {
+    if (!selected.size) return;
+    setRejectPopup(Array.from(selected));
+  };
+
+  const doReject = async (keys: string[], reason: string) => {
+    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+      // Offline reject: just remove from queue
+      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
+      setSelected(new Set());
+      setRejectPopup(null);
+      return;
+    }
+    setActionLoading(true);
+    setActionError('');
+    try {
+      const items: InvoiceToSave[] = keys
+        .map((key) => {
+          const q = queue.find((q) => q.key === key);
+          if (!q) return null;
+          return { inv: invoiceOverrides.get(key) ?? q.inv, filename: q.filename };
+        })
+        .filter(Boolean) as InvoiceToSave[];
+
+      await insertRejectedInvoices(selectedCompanyId, batchId, items, period, reason || undefined);
+
+      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        keys.forEach((k) => next.delete(k));
+        return next;
+      });
+      setRejectPopup(null);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : 'Failed to save rejection record.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <AppSidebar />
 
+      {/* ITC Warning Popup */}
+      {itcPopup && (
+        <ITCWarningPopup
+          items={itcPopup}
+          onProceed={handleITCProceed}
+          onReview={() => setItcPopup(null)}
+        />
+      )}
+
+      {/* Reject Reason Popup */}
+      {rejectPopup && (
+        <RejectPopup
+          count={rejectPopup.length}
+          onConfirm={(reason) => doReject(rejectPopup, reason)}
+          onCancel={() => setRejectPopup(null)}
+        />
+      )}
+
       <main className="ml-60 flex-1 px-6 py-8">
         <div className="max-w-5xl">
-          {/* Upload card */}
+
+          {/* ── Upload Card ── */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Upload Invoices</h2>
-              {period && (
-                <FYPeriodSelector value={period} onChange={updatePeriod} />
-              )}
+              {period && <FYPeriodSelector value={period} onChange={updatePeriod} />}
             </div>
 
-            {/* Company selector + add */}
-            <div className="mb-5">
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-sm font-medium text-gray-700">Company</label>
-                <button
-                  type="button"
-                  onClick={() => setShowAddCompany((v) => !v)}
-                  className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-                >
-                  {showAddCompany ? 'Cancel' : '+ Add company'}
-                </button>
-              </div>
-
-              {showAddCompany && (
-                <form onSubmit={handleAddCompany} className="mb-3 bg-indigo-50 border border-indigo-200 rounded-lg p-4 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2 sm:col-span-1">
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Company Name *</label>
-                      <input
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        required
-                        autoFocus
-                        placeholder="e.g. Atul Udyog"
-                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                    <div className="col-span-2 sm:col-span-1">
-                      <label className="block text-xs font-medium text-gray-600 mb-1">GSTIN</label>
-                      <input
-                        value={newGstin}
-                        onChange={(e) => setNewGstin(e.target.value.toUpperCase())}
-                        placeholder="27AABCU9603R1ZX"
-                        maxLength={15}
-                        className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    </div>
-                  </div>
-                  <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors">
-                    Save Company
+            {/* Auth notice */}
+            {!isAuthed && (
+              <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center gap-3">
+                <svg className="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <p className="text-sm text-amber-800">
+                  You are not logged in. Extraction works, but invoices cannot be saved to the Purchase Register.{' '}
+                  <button onClick={() => router.push('/login')} className="font-semibold underline hover:no-underline">
+                    Sign in
                   </button>
-                </form>
-              )}
+                </p>
+              </div>
+            )}
 
-              <select
-                value={selectedCompanyId}
-                onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-              >
-                <option value="">— Select a company —</option>
-                {companies.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}{c.gstin ? ` · ${c.gstin}` : ''}
-                  </option>
-                ))}
-              </select>
-              {companies.length === 0 && (
-                <p className="text-xs text-gray-400 mt-1">Add a company above to enable invoice matching.</p>
+            {/* Company selector */}
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
+              {companies.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No companies found.{' '}
+                  <button onClick={() => router.push('/companies')} className="text-indigo-600 hover:underline font-medium">
+                    Add one →
+                  </button>
+                </p>
+              ) : (
+                <select
+                  value={selectedCompanyId}
+                  onChange={(e) => setSelectedCompanyId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">— Select a company —</option>
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.gstin ? ` · ${c.gstin}` : ''}
+                    </option>
+                  ))}
+                </select>
               )}
             </div>
 
             {/* Drop zone */}
             <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
+              onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${
                 dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
@@ -214,7 +569,7 @@ export default function UploadPage() {
               <p className="text-sm text-gray-600">
                 <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
               </p>
-              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX &bull; Multiple files &bull; Multi-invoice files supported</p>
+              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
             </div>
 
             {/* File list */}
@@ -235,7 +590,6 @@ export default function UploadPage() {
               </ul>
             )}
 
-            {/* Progress */}
             {extracting && (
               <div className="mt-4">
                 <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
@@ -245,12 +599,10 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Error */}
             {extractError && (
               <div className="mt-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm text-red-700">{extractError}</div>
             )}
 
-            {/* Action */}
             <div className="mt-4">
               <button
                 onClick={handleExtract}
@@ -272,101 +624,202 @@ export default function UploadPage() {
             </div>
           </div>
 
-          {/* Results */}
-          {result && (
-            <div className="space-y-8">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <h3 className="text-base font-semibold text-gray-900">
-                  Extraction Results
-                  <span className="ml-2 text-sm font-normal text-gray-500">
-                    {result.total_invoices} invoice{result.total_invoices !== 1 ? 's' : ''} found across {result.file_results.length} file{result.file_results.length !== 1 ? 's' : ''}
-                  </span>
-                </h3>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {selectedCompanyId && companies.find((c) => c.id === selectedCompanyId) && (
-                    <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">
-                      Matching against: <strong>{companies.find((c) => c.id === selectedCompanyId)?.name}</strong>
-                    </span>
-                  )}
-                  <button
-                    onClick={() => {
-                      const overridden = result.file_results.map((fr) => ({
-                        ...fr,
-                        invoices: fr.invoices.map((inv, idx) => invoiceOverrides.get(`${fr.filename}:${idx}`) ?? inv),
-                      }));
-                      downloadBulkExcel(overridden);
-                    }}
-                    className="inline-flex items-center gap-1.5 text-sm text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-md font-medium transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Download All (Excel)
-                  </button>
+          {/* ── Upload Queue ── */}
+          {result && queue.length > 0 && (
+            <div>
+              {/* Queue header + action bar */}
+              <div className="sticky top-0 z-10 bg-gray-50 pb-3 pt-1">
+                <div className="bg-white border border-gray-200 rounded-xl shadow-sm px-5 py-4">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    {/* Left: title + select-all */}
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-900">
+                          Upload Queue
+                          <span className="ml-2 text-gray-400 font-normal">
+                            {queue.length} invoice{queue.length !== 1 ? 's' : ''}
+                            {selectedCompany ? ` · ${selectedCompany.name}` : ''}
+                            {period ? ` · ${period.period_label}` : ''}
+                          </span>
+                        </h3>
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                          onChange={toggleSelectAll}
+                          className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm text-gray-600">Select All</span>
+                      </label>
+                    </div>
+
+                    {/* Right: action buttons */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {actionError && (
+                        <span className="text-xs text-red-600 max-w-xs">{actionError}</span>
+                      )}
+                      <button
+                        onClick={handleAcceptSelected}
+                        disabled={selectedCount === 0 || actionLoading}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        {actionLoading ? (
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                        Accept Selected ({selectedCount})
+                      </button>
+                      <button
+                        onClick={handleRejectSelected}
+                        disabled={selectedRejectCount === 0 || actionLoading}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 hover:bg-red-50 disabled:opacity-40 text-red-600 text-sm font-semibold rounded-lg transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        Reject Selected ({selectedRejectCount})
+                      </button>
+                      <button
+                        onClick={() => {
+                          const overridden = result.file_results.map((fr) => ({
+                            ...fr,
+                            invoices: fr.invoices.map((inv, idx) =>
+                              invoiceOverrides.get(`${fr.filename}:${idx}`) ?? inv
+                            ),
+                          }));
+                          downloadBulkExcel(overridden);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Excel
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {result.file_results.map((fr: FileResult) => {
-                const isSkipped = fr.error?.startsWith('Skipped (no invoice content)');
-                const isError = fr.error && !isSkipped;
-                return (
-                  <div key={fr.filename}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <span className="font-medium text-gray-800 text-sm">{fr.filename}</span>
-                      {isSkipped ? (
-                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">Skipped</span>
-                      ) : (
-                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
-                          {fr.invoices.length} invoice{fr.invoices.length !== 1 ? 's' : ''}
-                        </span>
-                      )}
+              {/* Invoice cards with checkboxes */}
+              <div className="space-y-4">
+                {queue.map((item) => {
+                  const inv = invoiceOverrides.get(item.key) ?? item.inv;
+                  const isSelected = selected.has(item.key);
+                  const isCritical = item.readiness === 'critical';
+                  const historyMatch = findDuplicate(inv.invoice_number, inv.vendor_name);
+
+                  return (
+                    <div key={item.key} className={`flex gap-3 items-start ${isCritical ? 'opacity-80' : ''}`}>
+                      {/* Checkbox column */}
+                      <div className="pt-4 pl-1 shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          disabled={isCritical}
+                          onChange={() => !isCritical && toggleSelect(item.key)}
+                          title={isCritical ? 'Resolve critical issues before accepting' : undefined}
+                          className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* Card + readiness badge */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <ReadinessBadge readiness={item.readiness} flags={item.readinessFlags} />
+                          {item.itcWarning && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                              </svg>
+                              ITC Risk
+                            </span>
+                          )}
+                          {isCritical && (
+                            <span className="text-xs text-red-600 font-medium">Edit required before accepting</span>
+                          )}
+                        </div>
+                        <InvoiceCard
+                          inv={inv}
+                          sourceUrl={fileUrls[item.filename]}
+                          company={selectedCompany ? { id: selectedCompany.id, name: selectedCompany.name, gstin: selectedCompany.gstin ?? '' } : undefined}
+                          historyMatch={historyMatch}
+                          isBatchNew={true}
+                          onReject={() => {
+                            setQueue((prev) => prev.filter((q) => q.key !== item.key));
+                            setSelected((prev) => { const n = new Set(prev); n.delete(item.key); return n; });
+                          }}
+                          onSave={(updated) => {
+                            setInvoiceOverrides((prev) => new Map(prev).set(item.key, updated));
+                            // Recompute readiness with updated invoice
+                            const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
+                            const r = computeReadiness(updated, companyGstin, selectedCompany?.name ?? null);
+                            setQueue((prev) =>
+                              prev.map((q) =>
+                                q.key === item.key
+                                  ? { ...q, readiness: r.readiness, readinessFlags: r.flags, itcWarning: r.itcStatus === 'potentially_ineligible' }
+                                  : q
+                              )
+                            );
+                          }}
+                        />
+                      </div>
                     </div>
-                    {isSkipped && (
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 flex items-center gap-3 mb-3">
-                        <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-600">No invoice content detected — file appears blank or is not an invoice document. No AI tokens were used.</p>
-                          {fileUrls[fr.filename] && (
-                            <a href={fileUrls[fr.filename]} target="_blank" rel="noopener noreferrer"
-                              className="text-xs text-indigo-600 hover:underline mt-0.5 inline-block">
-                              Open file to verify →
+                  );
+                })}
+              </div>
+
+              {/* File-level errors (skipped files etc.) */}
+              {result.file_results.some((fr) => fr.error) && (
+                <div className="mt-6 space-y-2">
+                  {result.file_results
+                    .filter((fr) => fr.error)
+                    .map((fr) => {
+                      const isSkipped = fr.error?.startsWith('Skipped');
+                      return (
+                        <div key={fr.filename} className={`rounded-lg px-4 py-3 text-sm flex items-start gap-2 ${isSkipped ? 'bg-gray-50 border border-gray-200 text-gray-600' : 'bg-red-50 border border-red-200 text-red-700'}`}>
+                          <span className="font-medium shrink-0">{fr.filename}:</span>
+                          <span>{fr.error}</span>
+                          {isSkipped && fileUrls[fr.filename] && (
+                            <a href={fileUrls[fr.filename]} target="_blank" rel="noopener noreferrer" className="ml-auto text-indigo-600 text-xs hover:underline shrink-0">
+                              Open →
                             </a>
                           )}
                         </div>
-                      </div>
-                    )}
-                    {isError && (
-                      <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700 mb-3">
-                        Error: {fr.error}
-                      </div>
-                    )}
-                    <div className="space-y-4">
-                      {fr.invoices
-                        .filter((_, idx) => !rejectedInvoices.has(`${fr.filename}:${idx}`))
-                        .map((inv: ExtractedInvoice, idx: number) => {
-                          const key = `${fr.filename}:${idx}`;
-                          const historyMatch = findDuplicate(inv.invoice_number, inv.vendor_name);
-                          return (
-                            <InvoiceCard
-                              key={key}
-                              inv={inv}
-                              sourceUrl={fileUrls[fr.filename]}
-                              company={companies.find((c) => c.id === selectedCompanyId)}
-                              historyMatch={historyMatch}
-                              isBatchNew={currentBatchKeys.has(`${inv.invoice_number}__${inv.vendor_name}`)}
-                              onReject={() => setRejectedInvoices((prev) => new Set(Array.from(prev).concat(key)))}
-                              onSave={(updated) => handleInvoiceSave(key, updated)}
-                            />
-                          );
-                        })}
-                    </div>
-                  </div>
-                );
-              })}
+                      );
+                    })}
+                </div>
+              )}
             </div>
           )}
+
+          {/* Empty queue (all actioned) */}
+          {result && queue.length === 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <p className="text-sm font-medium text-gray-900">All invoices have been actioned</p>
+              <p className="text-xs text-gray-400 mt-1">Accepted invoices are now in the Purchase Register.</p>
+              <button
+                onClick={() => router.push('/register')}
+                className="mt-4 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+              >
+                View Purchase Register →
+              </button>
+            </div>
+          )}
+
         </div>
       </main>
     </div>

@@ -204,6 +204,202 @@ export function computeReadiness(
   return { readiness, flags, itcStatus, itcRemark };
 }
 
+// ─── Create batch record only (no invoices yet) ──────────────────────────────
+
+export async function createBatch(
+  companyId: string,
+  fileCount: number,
+  period: FYPeriod,
+): Promise<string> {
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const { data, error } = await db()
+    .from('invoice_batches')
+    .insert({
+      company_id: companyId,
+      uploaded_by: user?.id,
+      file_count: fileCount,
+      invoice_count: 0,        // updated when invoices are inserted
+      financial_year: period.financial_year,
+      period_month: period.period_month,
+      period_label: period.period_label,
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return data.id as string;
+}
+
+// ─── Insert accepted invoices directly (no pending stage) ────────────────────
+
+export interface InvoiceToSave {
+  inv: ExtractedInvoice;
+  filename: string;
+  itcStatusOverride?: ITCStatus;
+  itcRemarkOverride?: string;
+  convertedToNonGst?: boolean;
+  convertedNonGstLedger?: string;
+}
+
+export async function insertAcceptedInvoices(
+  companyId: string,
+  batchId: string,
+  items: InvoiceToSave[],
+  period: FYPeriod,
+  companyGstin?: string | null,
+  companyName?: string | null,
+): Promise<void> {
+  if (!items.length) return;
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const now = new Date().toISOString();
+
+  const rows = items.map(({ inv, filename, itcStatusOverride, itcRemarkOverride, convertedToNonGst, convertedNonGstLedger }) => {
+    const r = computeReadiness(inv, companyGstin, companyName);
+    const finalItcStatus = itcStatusOverride ?? r.itcStatus;
+    const finalItcRemark = itcRemarkOverride ?? r.itcRemark;
+    return {
+      batch_id: batchId,
+      company_id: companyId,
+      filename,
+      original_filename: filename,
+      vendor_name: inv.vendor_name,
+      vendor_gstin: inv.vendor_gstin,
+      vendor_address: inv.vendor_address,
+      buyer_name: inv.buyer_name,
+      buyer_gstin: inv.buyer_gstin,
+      invoice_number: inv.invoice_number,
+      invoice_date: inv.invoice_date || null,
+      tax_type: inv.tax_type,
+      subtotal: inv.subtotal,
+      bill_discount_amount: inv.bill_discount_amount ?? 0,
+      bill_discount_percent: inv.bill_discount_percent ?? null,
+      cgst: inv.cgst,
+      sgst: inv.sgst,
+      igst: inv.igst,
+      charges: inv.charges ?? [],
+      round_off: inv.round_off,
+      total: inv.total,
+      confidence: inv.confidence,
+      confidence_reasons: inv.confidence_reasons ?? [],
+      line_items: inv.line_items,
+      bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
+      // Status
+      status: 'accepted',
+      readiness: r.readiness,
+      readiness_flags: r.flags,
+      // Period
+      financial_year: period.financial_year,
+      period_month: period.period_month,
+      period_label: period.period_label,
+      // ITC
+      itc_status: finalItcStatus,
+      itc_remark: finalItcRemark,
+      // Non-GST conversion
+      converted_to_nongst: convertedToNonGst ?? false,
+      converted_nongst_ledger: convertedNonGstLedger ?? null,
+      // Audit
+      accepted_at: now,
+      accepted_by: user?.id ?? null,
+    };
+  });
+
+  const { error } = await db().from('invoices').insert(rows);
+  if (error) throw error;
+
+  // Update batch invoice count
+  await db()
+    .from('invoice_batches')
+    .update({ invoice_count: db().rpc('coalesce', {}) })
+    .eq('id', batchId);
+}
+
+// ─── Insert rejected invoices (+ archive) ────────────────────────────────────
+
+export async function insertRejectedInvoices(
+  companyId: string,
+  batchId: string,
+  items: InvoiceToSave[],
+  period: FYPeriod,
+  reason?: string,
+): Promise<void> {
+  if (!items.length) return;
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const now = new Date().toISOString();
+
+  const rows = items.map(({ inv, filename }) => {
+    const r = computeReadiness(inv);
+    return {
+      batch_id: batchId,
+      company_id: companyId,
+      filename,
+      original_filename: filename,
+      vendor_name: inv.vendor_name,
+      vendor_gstin: inv.vendor_gstin,
+      vendor_address: inv.vendor_address,
+      buyer_name: inv.buyer_name,
+      buyer_gstin: inv.buyer_gstin,
+      invoice_number: inv.invoice_number,
+      invoice_date: inv.invoice_date || null,
+      tax_type: inv.tax_type,
+      subtotal: inv.subtotal,
+      bill_discount_amount: inv.bill_discount_amount ?? 0,
+      bill_discount_percent: inv.bill_discount_percent ?? null,
+      cgst: inv.cgst,
+      sgst: inv.sgst,
+      igst: inv.igst,
+      charges: inv.charges ?? [],
+      round_off: inv.round_off,
+      total: inv.total,
+      confidence: inv.confidence,
+      confidence_reasons: inv.confidence_reasons ?? [],
+      line_items: inv.line_items,
+      bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
+      status: 'rejected',
+      readiness: r.readiness,
+      readiness_flags: r.flags,
+      financial_year: period.financial_year,
+      period_month: period.period_month,
+      period_label: period.period_label,
+      itc_status: r.itcStatus,
+      itc_remark: r.itcRemark,
+      rejected_at: now,
+      rejected_by: user?.id ?? null,
+      rejection_reason: reason ?? null,
+    };
+  });
+
+  const { data: inserted, error } = await db()
+    .from('invoices')
+    .insert(rows)
+    .select('id, company_id, batch_id, invoice_number, vendor_name, vendor_gstin, invoice_date, total, original_filename, financial_year, period_month, period_label, readiness, readiness_flags');
+  if (error) throw error;
+
+  // Insert rejection archive rows
+  const archiveRows = (inserted ?? []).map((r: Record<string, unknown>) => ({
+    invoice_id: r.id,
+    company_id: r.company_id,
+    batch_id: r.batch_id,
+    rejected_by: user?.id ?? null,
+    rejected_at: now,
+    rejection_reason: reason ?? null,
+    invoice_number: r.invoice_number,
+    vendor_name: r.vendor_name,
+    vendor_gstin: r.vendor_gstin,
+    invoice_date: r.invoice_date,
+    total: r.total,
+    original_filename: r.original_filename,
+    financial_year: r.financial_year,
+    period_month: r.period_month,
+    period_label: r.period_label,
+    readiness: r.readiness,
+    readiness_flags: r.readiness_flags,
+  }));
+
+  if (archiveRows.length > 0) {
+    const { error: archErr } = await db().from('rejection_archive').insert(archiveRows);
+    if (archErr) throw archErr;
+  }
+}
+
 // ─── Save batch (updated to include period + readiness) ──────────────────────
 
 export async function saveBatchWithPeriod(
