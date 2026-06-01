@@ -11,6 +11,7 @@ import {
   deleteSupplier,
   bulkUpsertSuppliers,
   validateGstin,
+  isUnregistered,
   type SupplierMaster,
   type ImportResult,
 } from '@/lib/suppliers';
@@ -97,11 +98,8 @@ export default function SupplierMastersPage() {
       setFormError('Vendor Name is required.');
       return;
     }
-    if (!form.vendor_gstin.trim()) {
-      setFormError('GSTIN is required.');
-      return;
-    }
-    if (!validateGstin(form.vendor_gstin)) {
+    // GSTIN optional — blank means unregistered supplier
+    if (form.vendor_gstin.trim() && !validateGstin(form.vendor_gstin)) {
       setFormError('Invalid GSTIN format (must be 15 characters, e.g. 27AABCU9603R1ZX).');
       return;
     }
@@ -342,7 +340,7 @@ export default function SupplierMastersPage() {
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns (from Tally Sundry Creditors export):</p>
                 <p>• <strong>Tally Ledger Name</strong> — exact ledger name as in Tally</p>
-                <p>• <strong>GSTIN</strong> — 15-character GSTIN</p>
+                <p>• <strong>GSTIN</strong> — 15-character GSTIN (leave blank for unregistered parties)</p>
                 <p>• <strong>State Name</strong> — supplier's state</p>
                 <p className="mt-1 text-amber-700">Vendor Name will default to Tally Ledger Name and auto-update as invoices are processed.</p>
               </div>
@@ -418,7 +416,10 @@ export default function SupplierMastersPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Vendor GSTIN *</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Vendor GSTIN
+                    <span className="ml-1.5 text-gray-400 font-normal">(leave blank if unregistered)</span>
+                  </label>
                   <input
                     value={form.vendor_gstin}
                     onChange={(e) => setForm({ ...form, vendor_gstin: e.target.value.toUpperCase() })}
@@ -426,8 +427,14 @@ export default function SupplierMastersPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="27AABCU9603R1ZX"
                   />
+                  {form.vendor_gstin.length > 0 && form.vendor_gstin.length < 15 && (
+                    <p className="text-xs text-gray-400 mt-1">{15 - form.vendor_gstin.length} characters remaining</p>
+                  )}
                   {form.vendor_gstin.length === 15 && !validateGstin(form.vendor_gstin) && (
                     <p className="text-xs text-red-500 mt-1">Invalid GSTIN format</p>
+                  )}
+                  {!form.vendor_gstin && (
+                    <p className="text-xs text-amber-600 mt-1">Will be treated as unregistered party</p>
                   )}
                 </div>
                 <div>
@@ -507,7 +514,15 @@ export default function SupplierMastersPage() {
                           <p className="text-xs text-indigo-500 mt-0.5">Learned from invoice</p>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-mono text-gray-600 text-xs">{s.vendor_gstin || '—'}</td>
+                      <td className="px-4 py-3 text-xs">
+                        {isUnregistered(s) ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                            Unregistered
+                          </span>
+                        ) : (
+                          <span className="font-mono text-gray-600">{s.vendor_gstin}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">{s.state_name || '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{s.tally_ledger_name}</td>
                       <td className="px-4 py-3">
@@ -521,7 +536,14 @@ export default function SupplierMastersPage() {
                 </tbody>
               </table>
               <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100 flex items-center justify-between">
-                <span>{filtered.length} supplier{filtered.length !== 1 ? 's' : ''}{search && ` matching "${search}"`}</span>
+                <span>
+                  {filtered.length} supplier{filtered.length !== 1 ? 's' : ''}
+                  {search && ` matching "${search}"`}
+                  {!search && (() => {
+                    const unreg = filtered.filter(isUnregistered).length;
+                    return unreg > 0 ? ` · ${unreg} unregistered` : '';
+                  })()}
+                </span>
                 <span className="text-gray-300">Data is strictly isolated to {companyName}</span>
               </div>
             </div>
