@@ -6,6 +6,7 @@ import { extractInvoices } from '@/lib/extract';
 import { getSession } from '@/lib/auth';
 import { getMyCompanies, type Company, computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
 import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { learnVendorName } from '@/lib/suppliers';
 import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
@@ -382,12 +383,23 @@ export default function UploadPage() {
   };
 
   const doAccept = async (keys: string[], itcOverrides: Record<string, { status: string; remark: string }> = {}) => {
-    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
-      setActionError('You must be logged in with a company selected to save to the Purchase Register.');
-      return;
-    }
     setActionLoading(true);
     setActionError('');
+
+    // Remove from queue immediately regardless of Supabase outcome
+    const removeFromQueue = () => {
+      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
+      setSelected((prev) => { const n = new Set(prev); keys.forEach((k) => n.delete(k)); return n; });
+      setItcPopup(null);
+    };
+
+    // If not authed or no batch, just remove locally — no DB save
+    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+      removeFromQueue();
+      setActionLoading(false);
+      return;
+    }
+
     try {
       const items: InvoiceToSave[] = keys
         .map((key) => {
@@ -409,18 +421,18 @@ export default function UploadPage() {
       const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
       const companyName = selectedCompany?.name ?? null;
 
-      await insertAcceptedInvoices(selectedCompanyId, batchId, items, period, companyGstin, companyName);
-
-      // Remove accepted invoices from queue
-      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
-      setSelected((prev) => {
-        const next = new Set(prev);
-        keys.forEach((k) => next.delete(k));
-        return next;
+      // Auto-learn vendor names: update supplier master with name from invoice (fire-and-forget)
+      items.forEach(({ inv }) => {
+        if (inv.vendor_gstin && inv.vendor_name) {
+          learnVendorName(selectedCompanyId, inv.vendor_gstin, inv.vendor_name).catch(() => {});
+        }
       });
-      setItcPopup(null);
+
+      await insertAcceptedInvoices(selectedCompanyId, batchId, items, period, companyGstin, companyName);
+      removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register.');
+      removeFromQueue(); // still remove from queue even if DB save failed
     } finally {
       setActionLoading(false);
     }
@@ -445,11 +457,15 @@ export default function UploadPage() {
   };
 
   const doReject = async (keys: string[], reason: string) => {
-    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
-      // Offline reject: just remove from queue
+    // Remove from queue immediately regardless of DB outcome
+    const removeFromQueue = () => {
       setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
       setSelected(new Set());
       setRejectPopup(null);
+    };
+
+    if (!isAuthed || !selectedCompanyId || !batchId || !period) {
+      removeFromQueue();
       return;
     }
     setActionLoading(true);
@@ -464,16 +480,10 @@ export default function UploadPage() {
         .filter(Boolean) as InvoiceToSave[];
 
       await insertRejectedInvoices(selectedCompanyId, batchId, items, period, reason || undefined);
-
-      setQueue((prev) => prev.filter((q) => !keys.includes(q.key)));
-      setSelected((prev) => {
-        const next = new Set(prev);
-        keys.forEach((k) => next.delete(k));
-        return next;
-      });
-      setRejectPopup(null);
+      removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save rejection record.');
+      removeFromQueue(); // still remove from queue even if DB save failed
     } finally {
       setActionLoading(false);
     }
@@ -512,21 +522,6 @@ export default function UploadPage() {
               <h2 className="text-lg font-semibold text-gray-900">Upload Invoices</h2>
               {period && <FYPeriodSelector value={period} onChange={updatePeriod} />}
             </div>
-
-            {/* Auth notice */}
-            {!isAuthed && (
-              <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center gap-3">
-                <svg className="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                </svg>
-                <p className="text-sm text-amber-800">
-                  You are not logged in. Extraction works, but invoices cannot be saved to the Purchase Register.{' '}
-                  <button onClick={() => router.push('/login')} className="font-semibold underline hover:no-underline">
-                    Sign in
-                  </button>
-                </p>
-              </div>
-            )}
 
             {/* Company selector */}
             <div className="mb-5">
@@ -603,10 +598,16 @@ export default function UploadPage() {
               <div className="mt-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm text-red-700">{extractError}</div>
             )}
 
+            {!selectedCompanyId && files.length > 0 && (
+              <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                Please select a company before extracting.
+              </p>
+            )}
+
             <div className="mt-4">
               <button
                 onClick={handleExtract}
-                disabled={!files.length || extracting}
+                disabled={!files.length || extracting || !selectedCompanyId}
                 className="px-6 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {extracting ? (

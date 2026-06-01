@@ -7,28 +7,29 @@ import { getSession } from '@/lib/auth';
 import { getMyCompanies, type Company } from '@/lib/db';
 import { loadCompanies, type LocalCompany } from '@/lib/companies';
 import {
-  loadSuppliers,
-  addSupplier,
-  updateSupplier,
-  deleteSupplier,
-  bulkUpsertSuppliers,
-  validateGstin,
-  normaliseGstin,
-  deriveStateFromGstin,
-  isUnregistered,
-  type SupplierMaster,
-  type ImportResult,
-} from '@/lib/suppliers';
+  loadStockItems,
+  addStockItem,
+  updateStockItem,
+  deleteStockItem,
+  bulkUpsertStockItems,
+  type StockItemMaster,
+  type StockItemImportResult,
+} from '@/lib/stockItems';
 
-const EMPTY_FORM = { tally_ledger_name: '', vendor_gstin: '' };
-type Tab = 'list' | 'import';
 type AnyCompany = Company | LocalCompany;
+type Tab = 'list' | 'import';
 
-export default function SupplierMastersPage() {
+const EMPTY_FORM = {
+  tally_item_name: '',
+  alias_name: '',
+  unit: '',
+  hsn_code: '',
+};
+
+export default function StockItemsPage() {
   const [companies, setCompanies] = useState<AnyCompany[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
-  const [companyState, setCompanyState] = useState('');
-  const [suppliers, setSuppliers] = useState<SupplierMaster[]>([]);
+  const [items, setItems] = useState<StockItemMaster[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<Tab>('list');
@@ -40,10 +41,9 @@ export default function SupplierMastersPage() {
   const [saving, setSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importResult, setImportResult] = useState<StockItemImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
-  // Load companies — Supabase if authed, localStorage fallback
   useEffect(() => {
     getSession().then(async (s) => {
       if (s) {
@@ -58,22 +58,11 @@ export default function SupplierMastersPage() {
     });
   }, []);
 
-  // When company changes, derive its state from GSTIN
-  useEffect(() => {
-    if (!selectedCompanyId) return;
-    const company = companies.find((c) => c.id === selectedCompanyId);
-    const gstin = company && 'gstin' in company ? (company.gstin ?? '') : '';
-    const state = gstin ? (deriveStateFromGstin(gstin) ?? '') : '';
-    setCompanyState(state);
-    setImportResult(null);
-  }, [selectedCompanyId, companies]);
-
   const refresh = useCallback(async () => {
     if (!selectedCompanyId) return;
     setLoading(true);
     try {
-      const list = await loadSuppliers(selectedCompanyId);
-      setSuppliers(list);
+      setItems(await loadStockItems(selectedCompanyId));
     } finally {
       setLoading(false);
     }
@@ -90,9 +79,14 @@ export default function SupplierMastersPage() {
     setTab('list');
   };
 
-  const openEdit = (s: SupplierMaster) => {
-    setEditingId(s.id);
-    setForm({ tally_ledger_name: s.tally_ledger_name, vendor_gstin: s.vendor_gstin });
+  const openEdit = (item: StockItemMaster) => {
+    setEditingId(item.id);
+    setForm({
+      tally_item_name: item.tally_item_name,
+      alias_name: item.alias_name ?? '',
+      unit: item.unit ?? '',
+      hsn_code: item.hsn_code ?? '',
+    });
     setFormError('');
     setShowForm(true);
     setTab('list');
@@ -100,27 +94,22 @@ export default function SupplierMastersPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.tally_ledger_name) {
-      setFormError('Tally Ledger Name is required.');
-      return;
-    }
+    if (!form.tally_item_name) { setFormError('Tally Stock Item Name is required.'); return; }
     setSaving(true);
     setFormError('');
     try {
+      const params = {
+        tally_item_name: form.tally_item_name, // stored exactly as typed
+        alias_name: form.alias_name || undefined,
+        unit: form.unit || undefined,
+        hsn_code: form.hsn_code || undefined,
+      };
       if (editingId) {
-        await updateSupplier(editingId, {
-          tally_ledger_name: form.tally_ledger_name,
-          vendor_gstin: form.vendor_gstin,
-        }, companyState);
+        await updateStockItem(editingId, params);
       } else {
-        await addSupplier(selectedCompanyId, {
-          tally_ledger_name: form.tally_ledger_name,
-          vendor_gstin: form.vendor_gstin,
-          companyState,
-        });
+        await addStockItem(selectedCompanyId, params);
       }
       setShowForm(false);
-      setForm(EMPTY_FORM);
       setEditingId(null);
       await refresh();
     } catch (err: unknown) {
@@ -131,9 +120,9 @@ export default function SupplierMastersPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete supplier "${name}"?`)) return;
+    if (!confirm(`Delete stock item "${name}"?`)) return;
     try {
-      await deleteSupplier(id);
+      await deleteStockItem(id);
       await refresh();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to delete.');
@@ -143,15 +132,15 @@ export default function SupplierMastersPage() {
   // ── Excel template download ──────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Tally Ledger Name', 'GSTIN'],
-      ['ABC Enterprises Pvt Ltd', '27AABCU9603R1ZX'],
-      ['XYZ Traders', '29AADCB2230M1ZV'],
-      ['Local Supplier (Unregistered)', ''],
+      ['Tally Stock Item Name', 'Alias Name', 'Unit', 'HSN Code'],
+      ['A4 Copier Paper Ream', 'A4 Paper', 'BOX', '48025590'],
+      ['Ball Pen Blue 10 Pcs', 'Ball Pen Blue', 'PKT', '96081010'],
+      ['Stapler Machine', '', 'NOS', '83050000'],
     ]);
-    ws['!cols'] = [{ wch: 40 }, { wch: 20 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Supplier Master');
-    XLSX.writeFile(wb, 'TallyAI_Supplier_Master_Template.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
+    XLSX.writeFile(wb, 'TallyAI_StockItem_Master_Template.xlsx');
   };
 
   // ── Excel import ─────────────────────────────────────────────────────────
@@ -166,15 +155,15 @@ export default function SupplierMastersPage() {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-      // Find header row
       let headerIdx = 0;
       for (let i = 0; i < Math.min(5, raw.length); i++) {
         const row = raw[i].map((c) => String(c).toLowerCase());
-        if (row.some((c) => c.includes('gstin') || c.includes('ledger'))) {
+        if (row.some((c) => c.includes('tally') || c.includes('item') || c.includes('stock'))) {
           headerIdx = i;
           break;
         }
       }
+
       const headers = raw[headerIdx].map((h) => String(h).toLowerCase().trim());
       const colIdx = (patterns: string[]) => {
         for (const p of patterns) {
@@ -184,26 +173,29 @@ export default function SupplierMastersPage() {
         return -1;
       };
 
-      const ledgerCol = colIdx(['tally ledger name', 'ledger name', 'ledger', 'name', 'particulars']);
-      const gstinCol = colIdx(['gstin/uin', 'gstin', 'gst', 'tin']);
+      const nameCol = colIdx(['tally stock item', 'tally item', 'stock item', 'item name', 'name', 'particulars']);
+      const aliasCol = colIdx(['alias', 'description', 'invoice description', 'invoice item']);
+      const unitCol = colIdx(['unit', 'uom', 'u/m']);
+      const hsnCol = colIdx(['hsn', 'hsn code', 'hsn/sac']);
 
-      if (ledgerCol === -1) {
-        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '—', reason: 'Could not find Tally Ledger Name column' }] });
+      if (nameCol === -1) {
+        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '—', reason: 'Could not find Tally Stock Item Name column' }] });
         return;
       }
 
       const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
-
       const rows = dataRows.map((r) => ({
-        tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed — preserve exactly
-        vendor_gstin: gstinCol !== -1 ? String(r[gstinCol] ?? '') : '',
+        tally_item_name: String(r[nameCol] ?? ''), // NOT trimmed
+        alias_name: aliasCol !== -1 ? String(r[aliasCol] ?? '') : '',
+        unit: unitCol !== -1 ? String(r[unitCol] ?? '') : '',
+        hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
       }));
 
-      const result = await bulkUpsertSuppliers(selectedCompanyId, rows, companyState);
+      const result = await bulkUpsertStockItems(selectedCompanyId, rows);
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
-      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '—', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
+      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '—', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -212,43 +204,29 @@ export default function SupplierMastersPage() {
 
   // ── Excel export ─────────────────────────────────────────────────────────
   const exportToExcel = () => {
-    const rows = suppliers.map((s) => ({
-      'Tally Ledger Name': s.tally_ledger_name,
-      'GSTIN': s.vendor_gstin || 'UNREGISTERED',
-      'Vendor Name': s.vendor_name,
-      'State': s.state_name,
-      'Status': s.is_unregistered ? 'Unregistered' : s.gstin_valid ? 'Registered' : 'Invalid GSTIN',
+    const rows = items.map((s) => ({
+      'Tally Stock Item Name': s.tally_item_name,
+      'Alias Name': s.alias_name ?? '',
+      'Unit': s.unit ?? '',
+      'HSN Code': s.hsn_code ?? '',
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 35 }, { wch: 20 }, { wch: 16 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Supplier Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
     const company = companies.find((c) => c.id === selectedCompanyId);
-    XLSX.writeFile(wb, `SupplierMaster_${company?.name ?? 'export'}.xlsx`);
+    XLSX.writeFile(wb, `StockItems_${company?.name ?? 'export'}.xlsx`);
   };
 
-  // ── Preview: derived state for current GSTIN input ───────────────────────
-  const previewGstin = normaliseGstin(form.vendor_gstin);
-  const previewState = previewGstin
-    ? (deriveStateFromGstin(previewGstin) ?? null)
-    : null;
-  const previewUnregistered = !previewGstin;
-  const previewInvalid = previewGstin && !validateGstin(previewGstin);
-
-  // ── Filtered list ─────────────────────────────────────────────────────────
-  const filtered = suppliers.filter((s) => {
+  const filtered = items.filter((s) => {
     const q = search.toLowerCase();
-    return (
-      !q ||
-      s.vendor_name.toLowerCase().includes(q) ||
-      s.vendor_gstin.toLowerCase().includes(q) ||
-      s.tally_ledger_name.toLowerCase().includes(q) ||
-      s.state_name.toLowerCase().includes(q)
-    );
+    return !q ||
+      s.tally_item_name.toLowerCase().includes(q) ||
+      (s.alias_name ?? '').toLowerCase().includes(q) ||
+      (s.hsn_code ?? '').toLowerCase().includes(q);
   });
 
   const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
-  const unregCount = filtered.filter(isUnregistered).length;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -259,9 +237,9 @@ export default function SupplierMastersPage() {
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Supplier Master</h1>
+              <h1 className="text-xl font-semibold text-gray-900">Stock Item Master</h1>
               <p className="text-sm text-gray-500 mt-0.5">
-                Maps vendor GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
+                Maps invoice item descriptions to exact Tally stock item names.
               </p>
             </div>
             <div className="flex gap-2">
@@ -281,7 +259,7 @@ export default function SupplierMastersPage() {
               </button>
               <button onClick={openAdd} disabled={!selectedCompanyId}
                 className="px-3 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
-                + Add Supplier
+                + Add Item
               </button>
             </div>
           </div>
@@ -299,13 +277,10 @@ export default function SupplierMastersPage() {
                 {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             )}
-            {companyState && (
-              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-md">{companyState}</span>
-            )}
-            {selectedCompanyId && suppliers.length > 0 && tab === 'list' && (
+            {selectedCompanyId && items.length > 0 && tab === 'list' && (
               <>
                 <input value={search} onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search suppliers…"
+                  placeholder="Search items…"
                   className="ml-auto text-sm border border-gray-300 rounded-md px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 <button onClick={exportToExcel} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -322,18 +297,19 @@ export default function SupplierMastersPage() {
             <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Import Suppliers from Excel</h2>
+                  <h2 className="text-sm font-semibold text-gray-900">Import Stock Items from Excel</h2>
                   <p className="text-xs text-gray-500 mt-0.5">Into: <span className="font-medium text-gray-700">{companyName}</span></p>
                 </div>
                 <button onClick={() => setTab('list')} className="text-sm text-gray-400 hover:text-gray-600">✕ Close</button>
               </div>
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
-                <p className="font-semibold">Expected columns (from Tally Sundry Creditors export):</p>
-                <p>• <strong>Tally Ledger Name</strong> — exact ledger name as in Tally</p>
-                <p>• <strong>GSTIN</strong> — 15-character GSTIN (blank or "UNREGISTERED" for unregistered parties)</p>
-                <p className="mt-1 text-amber-700">State is derived automatically from GSTIN. No state column needed.</p>
-                <p className="text-amber-700">Ledger names are stored exactly as in your file — no changes are made.</p>
+                <p className="font-semibold">Expected columns (from Tally stock item list export):</p>
+                <p>• <strong>Tally Stock Item Name</strong> — exact item name as in Tally (required)</p>
+                <p>• <strong>Alias Name</strong> — how this item appears on invoices (optional)</p>
+                <p>• <strong>Unit</strong> — e.g. NOS, KG, BOX (optional)</p>
+                <p>• <strong>HSN Code</strong> — optional, not required for XML generation</p>
+                <p className="mt-1 text-amber-700">Item names are stored exactly as in your file — no changes are made.</p>
               </div>
 
               <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
@@ -349,7 +325,7 @@ export default function SupplierMastersPage() {
                 <div className="mt-4 space-y-3">
                   {(importResult.inserted > 0 || importResult.updated > 0) && (
                     <div className="flex gap-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm">
-                      {importResult.inserted > 0 && <span className="text-green-700 font-medium">✓ {importResult.inserted} new supplier{importResult.inserted !== 1 ? 's' : ''} added</span>}
+                      {importResult.inserted > 0 && <span className="text-green-700 font-medium">✓ {importResult.inserted} new item{importResult.inserted !== 1 ? 's' : ''} added</span>}
                       {importResult.updated > 0 && <span className="text-blue-700 font-medium">↻ {importResult.updated} existing record{importResult.updated !== 1 ? 's' : ''} updated</span>}
                     </div>
                   )}
@@ -358,7 +334,7 @@ export default function SupplierMastersPage() {
                       <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.identifier}</span> — {e.reason}</p>
+                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.item}</span> — {e.reason}</p>
                         ))}
                       </div>
                     </div>
@@ -368,50 +344,52 @@ export default function SupplierMastersPage() {
             </div>
           )}
 
-          {/* ── Manual add/edit form ── */}
+          {/* ── Manual form ── */}
           {showForm && tab === 'list' && (
             <form onSubmit={handleSubmit} className="mb-6 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
               <h2 className="text-sm font-semibold text-gray-900 mb-4">
-                {editingId ? 'Edit Supplier' : 'Add Supplier'}
+                {editingId ? 'Edit Stock Item' : 'Add Stock Item'}
               </h2>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally Ledger Name *</label>
-                  <input value={form.tally_ledger_name}
-                    onChange={(e) => setForm({ ...form, tally_ledger_name: e.target.value })}
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally Stock Item Name *</label>
+                  <input value={form.tally_item_name}
+                    onChange={(e) => setForm({ ...form, tally_item_name: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="e.g. ABC Traders" />
-                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered — case, spaces and all.</p>
+                    placeholder="e.g. A4 Copier Paper Ream" />
+                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered — must match Tally.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    GSTIN
-                    <span className="ml-1.5 text-gray-400 font-normal">(leave blank if unregistered)</span>
+                    Alias Name
+                    <span className="ml-1 text-gray-400 font-normal">(how it appears on invoice)</span>
                   </label>
-                  <input value={form.vendor_gstin}
-                    onChange={(e) => setForm({ ...form, vendor_gstin: e.target.value.toUpperCase() })}
-                    maxLength={15}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="27AABCU9603R1ZX" />
+                  <input value={form.alias_name}
+                    onChange={(e) => setForm({ ...form, alias_name: e.target.value })}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="e.g. A4 Paper" />
                 </div>
-                {/* Auto-derived state — read only */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">State <span className="font-normal text-gray-400">(auto-derived)</span></label>
-                  <div className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 min-h-[38px] flex items-center">
-                    {previewUnregistered
-                      ? <span className="text-amber-600">{companyState || 'Set company GSTIN to derive'} <span className="text-xs text-gray-400">(company state — unregistered)</span></span>
-                      : previewState
-                        ? <span className="text-green-700">{previewState}</span>
-                        : previewInvalid
-                          ? <span className="text-amber-600">Could not derive — invalid GSTIN</span>
-                          : <span className="text-gray-400">Enter GSTIN to derive</span>
-                    }
-                  </div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Unit
+                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input value={form.unit}
+                    onChange={(e) => setForm({ ...form, unit: e.target.value.toUpperCase() })}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="NOS / KG / MTR / BOX" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    HSN Code
+                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input value={form.hsn_code}
+                    onChange={(e) => setForm({ ...form, hsn_code: e.target.value })}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="e.g. 48025590" />
                 </div>
               </div>
-              {previewInvalid && (
-                <p className="text-xs text-amber-600 mt-2">⚠ Invalid GSTIN format — supplier will be saved but flagged</p>
-              )}
               {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
                 <button type="submit" disabled={saving}
@@ -419,80 +397,53 @@ export default function SupplierMastersPage() {
                   {saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add'}
                 </button>
                 <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
-                  Cancel
-                </button>
+                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
               </div>
             </form>
           )}
 
-          {/* ── Supplier table ── */}
+          {/* ── Table ── */}
           {!selectedCompanyId ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
-              <p className="text-sm">Select a company to view its supplier master.</p>
+              <p className="text-sm">Select a company to view its stock item master.</p>
             </div>
           ) : loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : filtered.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
-              <p className="text-sm">{suppliers.length === 0 ? 'No suppliers yet. Import from Excel or add manually.' : 'No suppliers match your search.'}</p>
+              <p className="text-sm">{items.length === 0 ? 'No stock items yet. Import from Excel or add manually.' : 'No items match your search.'}</p>
             </div>
           ) : (
             <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Ledger Name</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">GSTIN</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">State</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Vendor Name</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Item Name</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Alias / Invoice Description</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Unit</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">HSN</th>
                     <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((s) => (
                     <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_ledger_name}</td>
-                      <td className="px-4 py-3 text-xs">
-                        {isUnregistered(s) ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Unregistered</span>
-                        ) : !s.gstin_valid ? (
-                          <span className="inline-flex items-center gap-1">
-                            <span className="font-mono text-red-600">{s.vendor_gstin}</span>
-                            <span className="relative group cursor-default">
-                              <span className="w-4 h-4 rounded-full bg-red-100 text-red-600 text-[10px] font-bold flex items-center justify-center">i</span>
-                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-max bg-gray-900 text-white text-xs rounded px-2 py-1 opacity-0 group-hover:opacity-100 pointer-events-none z-10">
-                                Invalid GSTIN format
-                              </span>
-                            </span>
-                          </span>
-                        ) : (
-                          <span className="font-mono text-gray-600">{s.vendor_gstin}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{s.state_name || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-gray-700">
-                        {s.vendor_name}
-                        {s.vendor_name !== s.tally_ledger_name && (
-                          <span className="ml-1.5 text-indigo-400 text-[10px]">learned</span>
-                        )}
-                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_item_name}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">—</span>}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '—'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.hsn_code || '—'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
                           <button onClick={() => openEdit(s)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>
-                          <button onClick={() => handleDelete(s.id, s.tally_ledger_name)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                          <button onClick={() => handleDelete(s.id, s.tally_item_name)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100 flex items-center justify-between">
-                <span>
-                  {filtered.length} supplier{filtered.length !== 1 ? 's' : ''}
-                  {!search && unregCount > 0 && ` · ${unregCount} unregistered`}
-                  {search && ` matching "${search}"`}
-                </span>
+              <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100 flex justify-between">
+                <span>{filtered.length} item{filtered.length !== 1 ? 's' : ''}{search && ` matching "${search}"`}</span>
                 <span className="text-gray-300">Isolated to {companyName}</span>
               </div>
             </div>

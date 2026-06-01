@@ -12,6 +12,8 @@ export interface Company {
   id: string;
   name: string;
   gstin: string | null;
+  tally_company_name: string | null; // exact name in Tally — used in XML header
+  state_name: string | null;         // auto-derived from GSTIN
   tally_url: string | null;
   tally_port: number;
   state_code: string | null;
@@ -25,7 +27,7 @@ const db = () => getSupabase() as any;
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
     .from('companies')
-    .select('id, name, gstin, tally_url, tally_port, state_code')
+    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code')
     .order('name');
   if (error) throw error;
   return (data ?? []) as Company[];
@@ -33,19 +35,49 @@ export async function getMyCompanies(): Promise<Company[]> {
 
 export async function createCompany(params: {
   name: string;
-  gstin?: string;
+  gstin: string;              // mandatory — needed to derive state
+  tally_company_name: string; // mandatory — needed for XML header
   tally_url?: string;
   tally_port?: number;
 }): Promise<Company> {
   const user = (await getSupabase().auth.getUser()).data.user;
-  const stateCode = params.gstin?.slice(0, 2) ?? null;
+  const stateCode = params.gstin.slice(0, 2);
+  // Import deriveStateFromGstin inline to avoid circular deps
+  const { deriveStateFromGstin } = await import('./suppliers');
+  const stateName = deriveStateFromGstin(params.gstin) ?? '';
   const { data, error } = await db()
     .from('companies')
-    .insert({ ...params, state_code: stateCode, created_by: user?.id })
+    .insert({
+      ...params,
+      state_code: stateCode,
+      state_name: stateName,
+      created_by: user?.id,
+      updated_at: new Date().toISOString(),
+    })
     .select()
     .single();
   if (error) throw error;
   return data as Company;
+}
+
+export async function updateCompany(
+  id: string,
+  params: {
+    name?: string;
+    gstin?: string;
+    tally_company_name?: string;
+    tally_url?: string;
+    tally_port?: number;
+  },
+): Promise<void> {
+  const updates: Record<string, unknown> = { ...params, updated_at: new Date().toISOString() };
+  if (params.gstin) {
+    updates.state_code = params.gstin.slice(0, 2);
+    const { deriveStateFromGstin } = await import('./suppliers');
+    updates.state_name = deriveStateFromGstin(params.gstin) ?? '';
+  }
+  const { error } = await db().from('companies').update(updates).eq('id', id);
+  if (error) throw error;
 }
 
 // ─── Save extraction results ──────────────────────────────────────────────────
@@ -583,6 +615,25 @@ export async function rejectInvoices(
       .insert(archiveRows);
     if (archiveErr) throw archiveErr;
   }
+}
+
+// ─── Delete invoices ─────────────────────────────────────────────────────────
+
+// Delete a single invoice by ID (cascades to rejection_archive)
+export async function deleteInvoice(invoiceId: string): Promise<void> {
+  const { error } = await db().from('invoices').delete().eq('id', invoiceId);
+  if (error) throw error;
+}
+
+// Delete ALL invoices for a company (all statuses — for test data cleanup)
+export async function deleteAllCompanyInvoices(companyId: string): Promise<number> {
+  const { data, error } = await db()
+    .from('invoices')
+    .delete()
+    .eq('company_id', companyId)
+    .select('id');
+  if (error) throw error;
+  return (data ?? []).length;
 }
 
 // ─── Purchase Register ────────────────────────────────────────────────────────
