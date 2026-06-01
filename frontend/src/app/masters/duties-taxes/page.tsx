@@ -43,7 +43,7 @@ function groupByComponent(rows: DutiesTaxesMaster[]): Map<string, DutiesTaxesMas
 }
 
 export default function DutiesTaxesPage() {
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
   const router = useRouter();
   const [records, setRecords] = useState<DutiesTaxesMaster[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,10 +58,11 @@ export default function DutiesTaxesPage() {
   const [ledgerAutoFilled, setLedgerAutoFilled] = useState(false);
 
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (!session && !company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;

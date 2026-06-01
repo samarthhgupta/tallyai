@@ -192,7 +192,7 @@ function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
 
 export default function UploadPage() {
   const router = useRouter();
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
   const [financialYear, setFinancialYear] = useState<string>(currentFY);
 
   // Auth state
@@ -223,11 +223,12 @@ export default function UploadPage() {
 
   // ── Auth check ──
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (session) setIsAuthed(true);
       else if (!company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   const selectedCompany = company;
   const selectedCompanyId = company?.id ?? '';

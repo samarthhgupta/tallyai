@@ -26,7 +26,7 @@ const EMPTY_FORM = {
 };
 
 export default function ExpenseLedgersPage() {
-  const { company } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
   const router = useRouter();
   const [ledgers, setLedgers] = useState<ExpenseLedgerMaster[]>([]);
   const [loading, setLoading] = useState(false);
@@ -44,10 +44,11 @@ export default function ExpenseLedgersPage() {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
+    if (companyLoading) return;
     getSession().then((session) => {
       if (!session && !company) router.replace('/select-company');
     });
-  }, [company, router]);
+  }, [company, companyLoading, router]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;
