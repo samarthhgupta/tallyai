@@ -82,6 +82,38 @@ export interface Company {
   gstin?: string;
 }
 
+export type InvoiceStatus = 'pending_review' | 'accepted' | 'rejected';
+export type InvoiceReadiness = 'ready' | 'warning' | 'critical';
+export type ITCStatus = 'eligible' | 'potentially_ineligible' | 'not_applicable';
+
+// Stored invoice row from Supabase (superset of ExtractedInvoice)
+export interface StoredInvoice extends ExtractedInvoice {
+  id: string;
+  batch_id: string | null;
+  company_id: string;
+  filename: string;
+  original_filename: string | null;
+  upload_date: string | null;
+  upload_time: string | null;
+  status: InvoiceStatus;
+  readiness: InvoiceReadiness;
+  readiness_flags: string[] | null;
+  financial_year: string | null;
+  period_month: string | null;
+  period_label: string | null;
+  itc_status: ITCStatus | null;
+  itc_remark: string | null;
+  accepted_at: string | null;
+  accepted_by: string | null;
+  rejected_at: string | null;
+  rejected_by: string | null;
+  rejection_reason: string | null;
+  converted_to_nongst: boolean;
+  converted_nongst_ledger: string | null;
+  supplier_master_id: string | null;
+  ledger_master_id: string | null;
+}
+
 export interface HsnRow {
   hsn: string;
   gst_percent: number;
