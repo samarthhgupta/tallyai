@@ -51,7 +51,7 @@ export async function createCompany(params: {
       ...params,
       state_code: stateCode,
       state_name: stateName,
-      created_by: user?.id,
+      created_by: user?.id ?? null,
       updated_at: new Date().toISOString(),
     })
     .select()
@@ -94,7 +94,7 @@ export async function saveBatch(
     .from('invoice_batches')
     .insert({
       company_id: companyId,
-      uploaded_by: user?.id,
+      uploaded_by: user?.id ?? null,
       file_count: fileResults.length,
       invoice_count: totalInvoices,
     })
@@ -248,7 +248,7 @@ export async function createBatch(
     .from('invoice_batches')
     .insert({
       company_id: companyId,
-      uploaded_by: user?.id,
+      uploaded_by: user?.id ?? null,
       file_count: fileCount,
       invoice_count: 0,
       financial_year: financialYear,
@@ -442,7 +442,7 @@ export async function saveBatchWithPeriod(
     .from('invoice_batches')
     .insert({
       company_id: companyId,
-      uploaded_by: user?.id,
+      uploaded_by: user?.id ?? null,
       file_count: fileResults.length,
       invoice_count: totalInvoices,
       financial_year: period.financial_year,

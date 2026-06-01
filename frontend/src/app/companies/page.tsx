@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { getSession } from '@/lib/auth';
 import { getMyCompanies, createCompany, updateCompany, type Company } from '@/lib/db';
 import { validateGstin, deriveStateFromGstin } from '@/lib/suppliers';
 import AppSidebar from '@/components/AppSidebar';
@@ -33,7 +34,12 @@ export default function CompaniesPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    getSession().then((s) => {
+      if (!s) { router.replace('/login'); return; }
+      load();
+    });
+  }, [router, load]);
 
   const openAdd = () => {
     setEditingId(null);
