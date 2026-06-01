@@ -5,49 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getMyCompanies, createCompany, type Company } from '@/lib/db';
 import { signOut } from '@/lib/auth';
-
-function Sidebar({ active }: { active: string }) {
-  const router = useRouter();
-  return (
-    <aside className="fixed top-0 left-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col z-20">
-      <div className="flex items-center gap-2 px-5 py-5 border-b border-gray-100">
-        <div className="w-8 h-8 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
-          <span className="text-white font-bold text-sm">T</span>
-        </div>
-        <span className="text-lg font-semibold text-gray-900">TallyAI</span>
-      </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {[
-          { label: 'Upload', href: '/upload' },
-          { label: 'Companies', href: '/companies' },
-          { label: 'History', href: '#', disabled: true },
-        ].map((item) => (
-          <button
-            key={item.label}
-            onClick={() => !item.disabled && router.push(item.href)}
-            className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium ${
-              active === item.label
-                ? 'bg-indigo-50 text-indigo-700'
-                : item.disabled
-                ? 'text-gray-400 cursor-not-allowed'
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            {item.label}{item.disabled && <span className="text-xs ml-1">(soon)</span>}
-          </button>
-        ))}
-      </nav>
-      <div className="px-3 pb-4">
-        <button
-          onClick={() => signOut().then(() => router.replace('/login'))}
-          className="w-full text-left px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-50"
-        >
-          Sign out
-        </button>
-      </div>
-    </aside>
-  );
-}
+import AppSidebar from '@/components/AppSidebar';
 
 export default function CompaniesPage() {
   const router = useRouter();
@@ -101,7 +59,7 @@ export default function CompaniesPage() {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Sidebar active="Companies" />
+      <AppSidebar />
       <main className="ml-60 flex-1 px-6 py-8">
         <div className="max-w-3xl">
           <div className="flex items-center justify-between mb-6">

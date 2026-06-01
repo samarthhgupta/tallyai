@@ -1,47 +1,20 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { extractInvoices } from '@/lib/extract';
 import { loadCompanies, saveCompany, type LocalCompany } from '@/lib/companies';
 import { findDuplicate, recordInvoice, type InvoiceFingerprint } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
-
-// ─── Sidebar ──────────────────────────────────────────────────────────────────
-
-function Sidebar() {
-  const router = useRouter();
-  return (
-    <aside className="fixed top-0 left-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col z-20">
-      <div className="flex items-center gap-2 px-5 py-5 border-b border-gray-100">
-        <div className="w-8 h-8 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
-          <span className="text-white font-bold text-sm">T</span>
-        </div>
-        <span className="text-lg font-semibold text-gray-900">TallyAI</span>
-      </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        <div className="w-full text-left px-3 py-2 rounded-md text-sm font-medium bg-indigo-50 text-indigo-700">
-          Upload
-        </div>
-        <button onClick={() => router.push('/companies')}
-          className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-gray-600 hover:bg-gray-50">
-          Companies
-        </button>
-        <div className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-gray-400 cursor-not-allowed">
-          History <span className="text-xs">(coming soon)</span>
-        </div>
-      </nav>
-    </aside>
-  );
-}
+import AppSidebar from '@/components/AppSidebar';
+import FYPeriodSelector, { useFYPeriod } from '@/components/FYPeriodSelector';
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
+  const { period, update: updatePeriod } = useFYPeriod();
   const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
@@ -150,13 +123,18 @@ export default function UploadPage() {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Sidebar />
+      <AppSidebar />
 
       <main className="ml-60 flex-1 px-6 py-8">
         <div className="max-w-5xl">
           {/* Upload card */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload Invoices</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Upload Invoices</h2>
+              {period && (
+                <FYPeriodSelector value={period} onChange={updatePeriod} />
+              )}
+            </div>
 
             {/* Company selector + add */}
             <div className="mb-5">
