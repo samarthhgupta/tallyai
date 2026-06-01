@@ -310,14 +310,7 @@ export default function UploadPage() {
       });
       setQueue(items);
       setResult(data);
-
-      // Create batch in Supabase if company selected
-      if (selectedCompanyId && financialYear) {
-        try {
-          const bid = await createBatch(selectedCompanyId, files.length, financialYear);
-          setBatchId(bid);
-        } catch { /* non-fatal; accept will fail later */ }
-      }
+      // Batch is created lazily at accept time, not here
     } catch (err: unknown) {
       setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
     } finally {
@@ -383,14 +376,20 @@ export default function UploadPage() {
       setItcPopup(null);
     };
 
-    // If no company or batch, just remove locally — no DB save
-    if (!selectedCompanyId || !batchId || !financialYear) {
-      removeFromQueue();
+    if (!selectedCompanyId || !financialYear) {
+      setActionError('No company or financial year selected.');
       setActionLoading(false);
       return;
     }
 
     try {
+      // Create batch now if not yet created
+      let activeBatchId = batchId;
+      if (!activeBatchId) {
+        activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
+        setBatchId(activeBatchId);
+      }
+
       const items: InvoiceToSave[] = keys
         .map((key) => {
           const q = queue.find((q) => q.key === key);
@@ -418,11 +417,11 @@ export default function UploadPage() {
         }
       });
 
-      await insertAcceptedInvoices(selectedCompanyId, batchId, items, financialYear, companyGstin, companyName);
+      await insertAcceptedInvoices(selectedCompanyId, activeBatchId, items, financialYear, companyGstin, companyName);
       removeFromQueue();
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register.');
-      removeFromQueue(); // still remove from queue even if DB save failed
+      setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register. Please try again.');
+      // Do NOT remove from queue on failure — user can retry
     } finally {
       setActionLoading(false);
     }
@@ -454,13 +453,19 @@ export default function UploadPage() {
       setRejectPopup(null);
     };
 
-    if (!selectedCompanyId || !batchId || !financialYear) {
-      removeFromQueue();
+    if (!selectedCompanyId || !financialYear) {
+      setActionError('No company or financial year selected.');
       return;
     }
     setActionLoading(true);
     setActionError('');
     try {
+      let activeBatchId = batchId;
+      if (!activeBatchId) {
+        activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
+        setBatchId(activeBatchId);
+      }
+
       const items: InvoiceToSave[] = keys
         .map((key) => {
           const q = queue.find((q) => q.key === key);
@@ -469,11 +474,11 @@ export default function UploadPage() {
         })
         .filter(Boolean) as InvoiceToSave[];
 
-      await insertRejectedInvoices(selectedCompanyId, batchId, items, financialYear, reason || undefined);
+      await insertRejectedInvoices(selectedCompanyId, activeBatchId, items, financialYear, reason || undefined);
       removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save rejection record.');
-      removeFromQueue(); // still remove from queue even if DB save failed
+      // Do NOT remove from queue on failure — user can retry
     } finally {
       setActionLoading(false);
     }
@@ -618,7 +623,7 @@ export default function UploadPage() {
                     {/* Right: action buttons */}
                     <div className="flex items-center gap-2 flex-wrap">
                       {actionError && (
-                        <span className="text-xs text-red-600 max-w-xs">{actionError}</span>
+                        <span className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 max-w-xs">{actionError}</span>
                       )}
                       <button
                         onClick={handleAcceptSelected}
