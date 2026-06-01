@@ -585,6 +585,25 @@ export async function rejectInvoices(
   }
 }
 
+// ─── Delete invoices ─────────────────────────────────────────────────────────
+
+// Delete a single invoice by ID (cascades to rejection_archive)
+export async function deleteInvoice(invoiceId: string): Promise<void> {
+  const { error } = await db().from('invoices').delete().eq('id', invoiceId);
+  if (error) throw error;
+}
+
+// Delete ALL invoices for a company (all statuses — for test data cleanup)
+export async function deleteAllCompanyInvoices(companyId: string): Promise<number> {
+  const { data, error } = await db()
+    .from('invoices')
+    .delete()
+    .eq('company_id', companyId)
+    .select('id');
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
 // ─── Purchase Register ────────────────────────────────────────────────────────
 
 export interface RegisterFilters {

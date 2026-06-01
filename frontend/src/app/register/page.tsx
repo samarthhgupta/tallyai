@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, getPurchaseRegister, type Company } from '@/lib/db';
+import { getMyCompanies, getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, type Company } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -64,6 +64,11 @@ export default function PurchaseRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Delete state
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false);
+
   // ── Auth check ──
   useEffect(() => {
     getSession().then(async (session) => {
@@ -123,9 +128,74 @@ export default function PurchaseRegisterPage() {
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId);
 
+  // ── Delete handlers ──
+  const handleDeleteInvoice = async (id: string, label: string) => {
+    if (!confirm(`Delete invoice "${label}"?\n\nThis cannot be undone.`)) return;
+    setDeletingId(id);
+    try {
+      await deleteInvoice(id);
+      setInvoices((prev) => prev.filter((inv) => inv.id !== id));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete invoice.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    setDeleteAllLoading(true);
+    try {
+      const count = await deleteAllCompanyInvoices(selectedCompanyId);
+      setInvoices([]);
+      setShowDeleteAll(false);
+      setError('');
+      alert(`Deleted ${count} invoice${count !== 1 ? 's' : ''} for ${selectedCompany?.name}.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete invoices.');
+    } finally {
+      setDeleteAllLoading(false);
+    }
+  };
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <AppSidebar />
+
+      {/* ── Delete All confirmation modal ── */}
+      {showDeleteAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Delete all data for {selectedCompany?.name}?</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  This will permanently delete <strong>all {invoices.length} invoices</strong> (accepted, rejected, and pending) for this company. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={handleDeleteAll}
+                disabled={deleteAllLoading}
+                className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+              >
+                {deleteAllLoading ? 'Deleting…' : 'Yes, delete all'}
+              </button>
+              <button
+                onClick={() => setShowDeleteAll(false)}
+                className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="ml-60 flex-1 px-6 py-8">
         <div className="max-w-7xl">
@@ -136,15 +206,28 @@ export default function PurchaseRegisterPage() {
               <h1 className="text-xl font-semibold text-gray-900">Purchase Register</h1>
               <p className="text-sm text-gray-500 mt-0.5">All accepted invoices · source of truth for Tally export and GST returns</p>
             </div>
-            <button
-              onClick={() => router.push('/upload')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Upload Invoices
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedCompanyId && invoices.length > 0 && (
+                <button
+                  onClick={() => setShowDeleteAll(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 hover:bg-red-50 text-red-600 text-sm font-medium rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete All
+                </button>
+              )}
+              <button
+                onClick={() => router.push('/upload')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Upload Invoices
+              </button>
+            </div>
           </div>
 
           {/* ── Filters ── */}
@@ -312,6 +395,7 @@ export default function PurchaseRegisterPage() {
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">IGST</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">ITC</th>
+                      <th className="px-4 py-3 w-12" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -361,6 +445,25 @@ export default function PurchaseRegisterPage() {
                               <p className="text-xs text-gray-400 mt-0.5 leading-tight max-w-[120px]">{inv.itc_remark}</p>
                             )}
                           </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
+                              disabled={deletingId === inv.id}
+                              title="Delete this invoice"
+                              className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
+                            >
+                              {deletingId === inv.id ? (
+                                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -383,6 +486,7 @@ export default function PurchaseRegisterPage() {
                         {totalIGST > 0 ? formatINR(totalIGST) : <span className="text-gray-300">—</span>}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums font-bold text-gray-900">₹{formatINR(grandTotal)}</td>
+                      <td className="px-4 py-3" />
                       <td className="px-4 py-3" />
                     </tr>
                   </tfoot>
