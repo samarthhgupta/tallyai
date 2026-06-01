@@ -327,3 +327,170 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
     warnings: allWarnings,
   };
 }
+
+// ─── Preview builder ──────────────────────────────────────────────────────────
+// Returns one row per ledger entry per invoice — used for the review table and
+// Excel export. Amounts match exactly what will go into the XML.
+
+export interface PreviewRow {
+  invoice_number: string;
+  invoice_date: string;
+  vendor_name: string;        // as on invoice
+  party_ledger: string;       // tally_ledger_name from supplier master
+  ledger_type: 'Party' | 'Purchase' | 'CGST' | 'SGST' | 'IGST' | 'Expense' | 'Round Off';
+  tally_ledger_name: string;  // exact ledger name that goes into Tally
+  amount: number;             // positive = debit, negative = credit
+  status: 'OK' | 'Skipped';
+  skip_reason?: string;
+  warning?: string;
+}
+
+export function buildTallyPreview(input: XmlGeneratorInput): PreviewRow[] {
+  const rows: PreviewRow[] = [];
+
+  for (const inv of input.invoices) {
+    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+    if (!supplier) {
+      rows.push({
+        invoice_number: inv.invoice_number,
+        invoice_date: inv.invoice_date,
+        vendor_name: inv.vendor_name,
+        party_ledger: '—',
+        ledger_type: 'Party',
+        tally_ledger_name: '— NOT FOUND IN MASTER —',
+        amount: -inv.total,
+        status: 'Skipped',
+        skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master`,
+      });
+      continue;
+    }
+
+    const partyLedger = supplier.tally_ledger_name;
+    const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0);
+    let skipReason: string | undefined;
+
+    // Party credit
+    rows.push({
+      invoice_number: inv.invoice_number,
+      invoice_date: inv.invoice_date,
+      vendor_name: inv.vendor_name,
+      party_ledger: partyLedger,
+      ledger_type: 'Party',
+      tally_ledger_name: partyLedger,
+      amount: -inv.total,
+      status: 'OK',
+    });
+
+    // Purchase rows per HSN rate
+    for (const row of hsnRows) {
+      const purchaseLedger = findPurchaseLedger(input.purchaseLedgers, row.gst_percent);
+      if (!purchaseLedger) {
+        skipReason = `No purchase ledger mapped for GST rate ${row.gst_percent}%`;
+      }
+      rows.push({
+        invoice_number: inv.invoice_number,
+        invoice_date: inv.invoice_date,
+        vendor_name: inv.vendor_name,
+        party_ledger: partyLedger,
+        ledger_type: 'Purchase',
+        tally_ledger_name: purchaseLedger ?? `— NO LEDGER FOR ${row.gst_percent}% GST —`,
+        amount: row.taxable,
+        status: purchaseLedger ? 'OK' : 'Skipped',
+        skip_reason: purchaseLedger ? undefined : skipReason,
+      });
+    }
+
+    // Tax rows
+    if (inv.tax_type === 'cgst_sgst') {
+      const cgstTotal = hsnRows.reduce((s, r) => s + r.cgst, 0);
+      if (cgstTotal > 0) {
+        const cgstRate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
+        const cgstLedger = findTaxLedger(input.dutiesTaxes, 'CGST', cgstRate);
+        if (!cgstLedger && !skipReason) skipReason = 'No CGST ledger configured';
+        rows.push({
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          vendor_name: inv.vendor_name,
+          party_ledger: partyLedger,
+          ledger_type: 'CGST',
+          tally_ledger_name: cgstLedger ?? '— NO CGST LEDGER —',
+          amount: cgstTotal,
+          status: cgstLedger ? 'OK' : 'Skipped',
+          skip_reason: cgstLedger ? undefined : 'No CGST ledger configured in Duties & Taxes master',
+        });
+      }
+      const sgstTotal = hsnRows.reduce((s, r) => s + r.sgst, 0);
+      if (sgstTotal > 0) {
+        const sgstRate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
+        const sgstLedger = findTaxLedger(input.dutiesTaxes, 'SGST', sgstRate);
+        rows.push({
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          vendor_name: inv.vendor_name,
+          party_ledger: partyLedger,
+          ledger_type: 'SGST',
+          tally_ledger_name: sgstLedger ?? '— NO SGST LEDGER —',
+          amount: sgstTotal,
+          status: sgstLedger ? 'OK' : 'Skipped',
+          skip_reason: sgstLedger ? undefined : 'No SGST ledger configured in Duties & Taxes master',
+        });
+      }
+    } else {
+      const igstTotal = hsnRows.reduce((s, r) => s + r.igst, 0);
+      if (igstTotal > 0) {
+        const igstRate = hsnRows[0]?.gst_percent ?? 0;
+        const igstLedger = findTaxLedger(input.dutiesTaxes, 'IGST', igstRate);
+        rows.push({
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          vendor_name: inv.vendor_name,
+          party_ledger: partyLedger,
+          ledger_type: 'IGST',
+          tally_ledger_name: igstLedger ?? '— NO IGST LEDGER —',
+          amount: igstTotal,
+          status: igstLedger ? 'OK' : 'Skipped',
+          skip_reason: igstLedger ? undefined : 'No IGST ledger configured in Duties & Taxes master',
+        });
+      }
+    }
+
+    // Extra charges
+    if (inv.charges) {
+      for (const charge of inv.charges) {
+        if (!charge.amount || charge.amount === 0) continue;
+        const expLedger = findExpenseLedger(input.expenseLedgers, charge.description);
+        rows.push({
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          vendor_name: inv.vendor_name,
+          party_ledger: partyLedger,
+          ledger_type: 'Expense',
+          tally_ledger_name: expLedger ?? `— NO LEDGER FOR "${charge.description}" —`,
+          amount: charge.amount,
+          status: 'OK',
+          warning: expLedger ? undefined : `No expense ledger mapped for "${charge.description}" — excluded from XML`,
+        });
+      }
+    }
+
+    // Round off
+    if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
+      const roundLedger =
+        findExpenseLedger(input.expenseLedgers, 'Round Off') ??
+        findExpenseLedger(input.expenseLedgers, 'Rounding Off') ??
+        null;
+      rows.push({
+        invoice_number: inv.invoice_number,
+        invoice_date: inv.invoice_date,
+        vendor_name: inv.vendor_name,
+        party_ledger: partyLedger,
+        ledger_type: 'Round Off',
+        tally_ledger_name: roundLedger ?? '(auto-balanced by Tally)',
+        amount: inv.round_off,
+        status: 'OK',
+      });
+    }
+  }
+
+  return rows;
+}
