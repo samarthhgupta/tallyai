@@ -12,7 +12,7 @@ const NAV = [
       { label: 'Ledger Master', href: '/masters/ledgers' },
     ],
   },
-  { label: 'Purchase Register', href: '#', disabled: true },
+  { label: 'Purchase Register', href: '/register' },
 ];
 
 export default function AppSidebar() {
@@ -58,20 +58,21 @@ export default function AppSidebar() {
               </div>
             );
           }
+          const disabled = Boolean('disabled' in item && (item as { disabled?: boolean }).disabled);
           return (
             <button
               key={item.label}
-              onClick={() => !item.disabled && router.push(item.href)}
+              onClick={() => !disabled && router.push(item.href)}
               className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium ${
                 isActive(item.href)
                   ? 'bg-indigo-50 text-indigo-700'
-                  : item.disabled
+                  : disabled
                   ? 'text-gray-400 cursor-not-allowed'
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
             >
               {item.label}
-              {item.disabled && <span className="text-xs ml-1 font-normal">(soon)</span>}
+              {disabled && <span className="text-xs ml-1 font-normal">(soon)</span>}
             </button>
           );
         })}
