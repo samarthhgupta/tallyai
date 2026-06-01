@@ -6,6 +6,7 @@ import { extractInvoices } from '@/lib/extract';
 import { getSession } from '@/lib/auth';
 import { getMyCompanies, type Company, computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
 import { loadCompanies, type LocalCompany } from '@/lib/companies';
+import { learnVendorName } from '@/lib/suppliers';
 import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
@@ -419,6 +420,13 @@ export default function UploadPage() {
 
       const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
       const companyName = selectedCompany?.name ?? null;
+
+      // Auto-learn vendor names: update supplier master with name from invoice
+      items.forEach(({ inv }) => {
+        if (inv.vendor_gstin && inv.vendor_name) {
+          learnVendorName(selectedCompanyId, inv.vendor_gstin, inv.vendor_name);
+        }
+      });
 
       await insertAcceptedInvoices(selectedCompanyId, batchId, items, period, companyGstin, companyName);
       removeFromQueue();
