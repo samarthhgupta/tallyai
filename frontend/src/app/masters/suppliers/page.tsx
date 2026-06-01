@@ -45,7 +45,8 @@ export default function SupplierMastersPage() {
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
-      if (!session && !company) router.replace('/select-company');
+      if (!session) { router.replace('/login'); return; }
+      if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
 

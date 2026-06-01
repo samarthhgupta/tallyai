@@ -2,6 +2,7 @@
 
 import { useRouter, usePathname } from 'next/navigation';
 import { useCompany } from '@/lib/companyContext';
+import { signOut } from '@/lib/auth';
 
 const NAV = [
   { label: 'Upload', href: '/upload' },
@@ -30,6 +31,12 @@ export default function AppSidebar() {
   const handleChangeCompany = () => {
     clearCompany();
     router.push('/select-company');
+  };
+
+  const handleSignOut = async () => {
+    clearCompany();
+    await signOut();
+    router.push('/login');
   };
 
   return (
@@ -65,7 +72,7 @@ export default function AppSidebar() {
         </button>
       )}
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto" style={{paddingBottom: '0'}}>
         {NAV.map((item) => {
           if ('children' in item && item.children) {
             const sectionActive = item.children.some((c) => isActive(c.href));
@@ -111,6 +118,16 @@ export default function AppSidebar() {
           );
         })}
       </nav>
+
+      {/* Sign out */}
+      <div className="px-3 py-3 border-t border-gray-100">
+        <button
+          onClick={handleSignOut}
+          className="w-full text-left px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+        >
+          Sign out
+        </button>
+      </div>
     </aside>
   );
 }

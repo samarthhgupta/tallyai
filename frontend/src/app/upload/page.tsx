@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { getSession } from '@/lib/auth';
 import { extractInvoices } from '@/lib/extract';
 import { computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
 import { learnVendorName } from '@/lib/suppliers';
@@ -223,8 +224,11 @@ export default function UploadPage() {
   // ── Auth check ──
   useEffect(() => {
     if (companyLoading) return;
-    if (!company) { router.replace('/select-company'); return; }
-    setIsAuthed(true);
+    getSession().then((session) => {
+      if (!session) { router.replace('/login'); return; }
+      if (!company) { router.replace('/select-company'); return; }
+      setIsAuthed(true);
+    });
   }, [company, companyLoading, router]);
 
   const selectedCompany = company;

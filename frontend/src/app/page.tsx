@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCompany } from '@/lib/companyContext';
+import { getSession } from '@/lib/auth';
 
 export default function HomePage() {
   const router = useRouter();
@@ -10,7 +11,10 @@ export default function HomePage() {
 
   useEffect(() => {
     if (loading) return;
-    router.replace(company ? '/upload' : '/select-company');
+    getSession().then((session) => {
+      if (!session) { router.replace('/login'); return; }
+      router.replace(company ? '/upload' : '/select-company');
+    });
   }, [loading, company, router]);
 
   return (

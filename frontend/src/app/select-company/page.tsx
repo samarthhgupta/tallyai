@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getSession } from '@/lib/auth';
 import { getMyCompanies, type Company } from '@/lib/db';
 import { useCompany } from '@/lib/companyContext';
 import { deriveStateFromGstin } from '@/lib/suppliers';
@@ -14,11 +15,18 @@ export default function SelectCompanyPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getMyCompanies()
-      .then((list) => setCompanies(list))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load companies'))
-      .finally(() => setLoading(false));
-  }, []);
+    getSession().then(async (session) => {
+      if (!session) { router.replace('/login'); return; }
+      try {
+        const list = await getMyCompanies();
+        setCompanies(list);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Failed to load companies');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }, [router]);
 
   const handleSelect = (c: Company) => {
     setCompany(c);
