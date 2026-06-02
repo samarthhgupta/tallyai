@@ -3,13 +3,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices } from '@/lib/db';
+import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister } from '@/lib/db';
+import type { RejectedRecord } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
 import { getFYList, currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
+import InvoiceDetailPanel from '@/components/InvoiceDetailPanel';
 
 // ─── ITC Status badge ─────────────────────────────────────────────────────────
 
@@ -45,6 +47,20 @@ function SummaryCard({ label, value, sub }: { label: string; value: string; sub?
   );
 }
 
+// ─── Date formatter ───────────────────────────────────────────────────────────
+
+function fmtDateTime(dt: string | null | undefined): string {
+  if (!dt) return '—';
+  try {
+    return new Date(dt).toLocaleString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return dt;
+  }
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function PurchaseRegisterPage() {
@@ -61,6 +77,14 @@ export default function PurchaseRegisterPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
+
+  // Detail panel
+  const [detailInvoice, setDetailInvoice] = useState<StoredInvoice | null>(null);
+
+  // Voided invoices overlay
+  const [showRejected, setShowRejected] = useState(false);
+  const [rejectedRecords, setRejectedRecords] = useState<RejectedRecord[]>([]);
+  const [loadingRejected, setLoadingRejected] = useState(false);
 
   // ── Auth check ──
   useEffect(() => {
@@ -92,6 +116,25 @@ export default function PurchaseRegisterPage() {
   useEffect(() => {
     fetchRegister();
   }, [fetchRegister]);
+
+  // ── Fetch rejected register ──
+  const fetchRejected = useCallback(async () => {
+    if (!company?.id) return;
+    setLoadingRejected(true);
+    try {
+      const data = await getRejectedRegister(company.id, selectedFY || undefined);
+      setRejectedRecords(data);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load voided invoices.');
+    } finally {
+      setLoadingRejected(false);
+    }
+  }, [company?.id, selectedFY]);
+
+  const handleShowRejected = () => {
+    setShowRejected(true);
+    fetchRejected();
+  };
 
   // ── Totals ──
   const totalTaxable = invoices.reduce((s, inv) => {
@@ -140,9 +183,122 @@ export default function PurchaseRegisterPage() {
     }
   };
 
+  // Suppress unused import warning
+  void getFYList;
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <AppSidebar />
+
+      {/* ── Detail Panel ── */}
+      {detailInvoice && (
+        <InvoiceDetailPanel
+          invoice={detailInvoice}
+          onClose={() => setDetailInvoice(null)}
+          onSaved={(updated) => {
+            setInvoices((prev) => prev.map((i) => i.id === updated.id ? updated : i));
+            setDetailInvoice(updated);
+          }}
+          onDeleted={() => {
+            setInvoices((prev) => prev.filter((i) => i.id !== detailInvoice.id));
+            setDetailInvoice(null);
+          }}
+          onMovedToRejected={() => {
+            setInvoices((prev) => prev.filter((i) => i.id !== detailInvoice.id));
+            setDetailInvoice(null);
+          }}
+        />
+      )}
+
+      {/* ── Voided Invoices Overlay ── */}
+      {showRejected && (
+        <div className="fixed inset-0 z-50 bg-white flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Voided Invoices</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {selectedCompany?.name}{selectedFY ? ` · ${selectedFY}` : ''}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowRejected(false)}
+              className="text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-auto px-6 py-5">
+            {loadingRejected ? (
+              <div className="flex justify-center py-16">
+                <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
+              </div>
+            ) : rejectedRecords.length === 0 ? (
+              <div className="text-center py-16">
+                <p className="text-sm font-medium text-gray-700">No voided invoices found</p>
+                <p className="text-xs text-gray-400 mt-1">Invoices moved to rejected will appear here.</p>
+              </div>
+            ) : (
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-8">#</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice #</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Vendor</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">GSTIN</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Period</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reason</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Voided On</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Voided By</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {rejectedRecords.map((rec, idx) => (
+                        <tr key={rec.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-gray-400 text-xs tabular-nums">{idx + 1}</td>
+                          <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
+                            {rec.invoice_number || <span className="text-gray-400">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700 max-w-[160px] truncate" title={rec.vendor_name ?? undefined}>
+                            {rec.vendor_name || '—'}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-gray-500 text-xs whitespace-nowrap">
+                            {rec.vendor_gstin || <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">
+                            {rec.invoice_date || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                            {rec.period_label || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap">
+                            {rec.total != null ? `₹${formatINR(rec.total)}` : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 text-xs max-w-[160px] truncate" title={rec.rejection_reason ?? undefined}>
+                            {rec.rejection_reason || <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">
+                            {fmtDateTime(rec.rejected_at)}
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                            {rec.moved_by_email || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Delete All confirmation modal ── */}
       {showDeleteAll && (
@@ -235,6 +391,22 @@ export default function PurchaseRegisterPage() {
                 <option value="not_applicable">Not Applicable</option>
               </select>
             </div>
+
+            {/* Voided Invoices button */}
+            {selectedCompanyId && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">&nbsp;</label>
+                <button
+                  onClick={handleShowRejected}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1.036 7.255A2 2 0 008.028 17h7.944a2 2 0 001.992-1.745L19 8" />
+                  </svg>
+                  Voided Invoices
+                </button>
+              </div>
+            )}
 
             {selectedCompanyId && (
               <div className="ml-auto text-xs text-gray-400 self-end pb-1.5">
@@ -334,7 +506,7 @@ export default function PurchaseRegisterPage() {
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">IGST</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">ITC</th>
-                      <th className="px-4 py-3 w-12" />
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -385,23 +557,31 @@ export default function PurchaseRegisterPage() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <button
-                              onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
-                              disabled={deletingId === inv.id}
-                              title="Delete this invoice"
-                              className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
-                            >
-                              {deletingId === inv.id ? (
-                                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                                </svg>
-                              ) : (
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              )}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setDetailInvoice(inv)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium border border-indigo-200 hover:border-indigo-400 rounded px-2 py-1 transition-colors whitespace-nowrap"
+                              >
+                                View Details
+                              </button>
+                              <button
+                                onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
+                                disabled={deletingId === inv.id}
+                                title="Delete this invoice"
+                                className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
+                              >
+                                {deletingId === inv.id ? (
+                                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                  </svg>
+                                ) : (
+                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                )}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
