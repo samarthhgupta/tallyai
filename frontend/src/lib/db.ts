@@ -34,6 +34,16 @@ export async function getMyCompanies(): Promise<Company[]> {
   return (data ?? []) as Company[];
 }
 
+export async function getCompany(companyId: string): Promise<Company> {
+  const { data, error } = await db()
+    .from('companies')
+    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config')
+    .eq('id', companyId)
+    .single();
+  if (error) throw error;
+  return data as Company;
+}
+
 export async function createCompany(params: {
   name: string;
   gstin: string;              // mandatory — needed to derive state

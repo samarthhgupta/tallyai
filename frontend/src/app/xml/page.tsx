@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, savePurchaseLedgerConfig } from '@/lib/db';
+import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems } from '@/lib/stockItems';
@@ -169,7 +169,7 @@ async function loadMasters(companyId: string) {
 
 export default function XmlGeneratorPage() {
   const router = useRouter();
-  const { company, setCompany, loading: companyLoading } = useCompany();
+  const { company, loading: companyLoading } = useCompany();
 
   const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
@@ -200,12 +200,14 @@ export default function XmlGeneratorPage() {
     });
   }, [company, companyLoading, router]);
 
-  // Load saved purchase ledger config when company changes
+  // Load purchase ledger config fresh from DB when company changes
   useEffect(() => {
-    if (!company) return;
-    if (company.purchase_ledger_config && company.purchase_ledger_config.length > 0) {
-      setPurchaseLedgers(company.purchase_ledger_config);
-    }
+    if (!company?.id) return;
+    getCompany(company.id).then((fresh) => {
+      if (fresh.purchase_ledger_config && fresh.purchase_ledger_config.length > 0) {
+        setPurchaseLedgers(fresh.purchase_ledger_config);
+      }
+    }).catch(() => {});
   }, [company?.id]);
 
   // Load invoices on company/FY change — also clear preview
@@ -228,14 +230,10 @@ export default function XmlGeneratorPage() {
 
   const selectedCompany = company;
 
-  // Use current form state; fall back to saved company config if form is empty
-  const effectiveLedgers = useMemo(() => {
-    const fromForm = purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== '');
-    if (fromForm.length > 0) return fromForm;
-    return (company?.purchase_ledger_config ?? []).filter((p) => p.tally_ledger_name.trim() !== '');
-  }, [purchaseLedgers, company?.purchase_ledger_config]);
-
-  const validLedgers = effectiveLedgers;
+  const validLedgers = useMemo(
+    () => purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== ''),
+    [purchaseLedgers],
+  );
 
   const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
     .replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -433,8 +431,6 @@ export default function XmlGeneratorPage() {
                   setMappingSaved(false);
                   try {
                     await savePurchaseLedgerConfig(company.id, purchaseLedgers);
-                    // Update company in context + localStorage so mappings persist immediately
-                    setCompany({ ...company, purchase_ledger_config: purchaseLedgers });
                     setMappingSaved(true);
                     setTimeout(() => setMappingSaved(false), 3000);
                   } finally {
