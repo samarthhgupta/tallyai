@@ -169,7 +169,7 @@ async function loadMasters(companyId: string) {
 
 export default function XmlGeneratorPage() {
   const router = useRouter();
-  const { company, loading: companyLoading } = useCompany();
+  const { company, setCompany, loading: companyLoading } = useCompany();
 
   const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
@@ -228,10 +228,14 @@ export default function XmlGeneratorPage() {
 
   const selectedCompany = company;
 
-  const validLedgers = useMemo(
-    () => purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== ''),
-    [purchaseLedgers],
-  );
+  // Use current form state; fall back to saved company config if form is empty
+  const effectiveLedgers = useMemo(() => {
+    const fromForm = purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== '');
+    if (fromForm.length > 0) return fromForm;
+    return (company?.purchase_ledger_config ?? []).filter((p) => p.tally_ledger_name.trim() !== '');
+  }, [purchaseLedgers, company?.purchase_ledger_config]);
+
+  const validLedgers = effectiveLedgers;
 
   const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
     .replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -424,11 +428,13 @@ export default function XmlGeneratorPage() {
               <button
                 disabled={savingMapping || !company?.id}
                 onClick={async () => {
-                  if (!company?.id) return;
+                  if (!company) return;
                   setSavingMapping(true);
                   setMappingSaved(false);
                   try {
                     await savePurchaseLedgerConfig(company.id, purchaseLedgers);
+                    // Update company in context + localStorage so mappings persist immediately
+                    setCompany({ ...company, purchase_ledger_config: purchaseLedgers });
                     setMappingSaved(true);
                     setTimeout(() => setMappingSaved(false), 3000);
                   } finally {
