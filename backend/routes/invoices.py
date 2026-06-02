@@ -709,7 +709,8 @@ def compute_confidence(inv: dict) -> float:
     return max(0.0, min(1.0, score))
 
 
-MAX_PAGES = 8       # max pages sent per Claude call
+MAX_PAGES_PER_CHUNK = 8   # max image pages sent per Claude call (vision limit)
+MAX_NATIVE_PAGES = 200    # cap for native-text PDFs (text is cheap in context)
 DPI = 120           # DPI for scanned pages — higher than text PDFs for legibility
 JPEG_QUALITY = 75   # JPEG compression — keeps each page under ~200 KB
 
@@ -727,12 +728,13 @@ def _pdf_native_text(file_bytes: bytes) -> list[dict]:
     """
     Extract text from a native (text-based) PDF page by page.
     Sends all page text in a single text block — fast and accurate.
+    No page limit since text is cheap in the context window.
     """
     import fitz
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     pages_text = []
-    for i, page in enumerate(list(doc)[:MAX_PAGES]):
+    for i, page in enumerate(list(doc)[:MAX_NATIVE_PAGES]):
         text = page.get_text("text").strip()
         if text:
             pages_text.append(f"--- Page {i + 1} ---\n{text}")
@@ -742,59 +744,85 @@ def _pdf_native_text(file_bytes: bytes) -> list[dict]:
     return [{"type": "text", "text": f"Invoice document text:\n\n{combined}"}]
 
 
-def _pdf_scanned_images(file_bytes: bytes) -> list[dict]:
-    """
-    Render scanned PDF pages as JPEG images for Claude vision.
-    """
+def _render_page_to_b64(page) -> str:
+    """Render a single PDF page to a base64 JPEG string."""
     import fitz
     from PIL import Image
 
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    content_parts = []
+    mat = fitz.Matrix(DPI / 72, DPI / 72)
+    pix = page.get_pixmap(matrix=mat)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return base64.standard_b64encode(buf.getvalue()).decode()
 
-    for page in list(doc)[:MAX_PAGES]:
-        mat = fitz.Matrix(DPI / 72, DPI / 72)
-        pix = page.get_pixmap(matrix=mat)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-        b64 = base64.standard_b64encode(buf.getvalue()).decode()
-        content_parts.append({
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-        })
+
+def _pdf_scanned_images_chunked(file_bytes: bytes) -> list[list[dict]]:
+    """
+    Render scanned PDF pages as JPEG images, chunked into groups of MAX_PAGES_PER_CHUNK.
+    Returns a list of content-part lists — one per chunk — to be sent in separate Claude calls.
+    """
+    import fitz
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages = list(doc)
+    chunks: list[list[dict]] = []
+
+    for start in range(0, len(pages), MAX_PAGES_PER_CHUNK):
+        chunk_pages = pages[start:start + MAX_PAGES_PER_CHUNK]
+        content_parts = []
+        for page in chunk_pages:
+            b64 = _render_page_to_b64(page)
+            content_parts.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+            })
+        chunks.append(content_parts)
 
     doc.close()
-    return content_parts
+    return chunks
 
 
 def _pdf_to_content(file_bytes: bytes) -> list[dict]:
     """
     Auto-detect PDF type and choose the right extraction method.
-    - Native PDF (has selectable text) → extract text directly
-    - Scanned PDF (image pages) → render as JPEG images for vision
+    - Native PDF (has selectable text) → extract text directly (no page limit)
+    - Scanned PDF (image pages) → first chunk only; chunked path handled separately
     Mixed PDFs (some text, some scanned) are treated as scanned.
     """
     import fitz
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = list(doc)[:MAX_PAGES]
+    pages = list(doc)[:MAX_PAGES_PER_CHUNK]
     scanned_pages = sum(1 for p in pages if _is_scanned_page(p))
     doc.close()
 
     is_scanned = scanned_pages > len(pages) / 2  # majority scanned → treat as scan
 
     logger.info(
-        "PDF type detected: %s (%d/%d pages scanned)",
+        "PDF type detected: %s (%d/%d sample pages scanned)",
         "scanned" if is_scanned else "native",
         scanned_pages,
         len(pages),
     )
 
     if is_scanned:
-        return _pdf_scanned_images(file_bytes)
+        # Return first chunk only — caller must use _pdf_scanned_images_chunked for full doc
+        chunks = _pdf_scanned_images_chunked(file_bytes)
+        return chunks[0] if chunks else []
     else:
         return _pdf_native_text(file_bytes)
+
+
+def _is_scanned_pdf(file_bytes: bytes) -> bool:
+    """Return True if the majority of sample pages in the PDF are scanned (image-only)."""
+    import fitz
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages = list(doc)[:MAX_PAGES_PER_CHUNK]
+    scanned = sum(1 for p in pages if _is_scanned_page(p))
+    doc.close()
+    return scanned > len(pages) / 2
 
 
 def _image_to_content(file_bytes: bytes, media_type: str) -> list[dict]:
@@ -863,7 +891,7 @@ def _prescreen_pdf(file_bytes: bytes) -> None:
     import fitz
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
-    pages = list(doc)[:MAX_PAGES]
+    pages = list(doc)[:MAX_PAGES_PER_CHUNK]
 
     if not pages:
         doc.close()
@@ -910,62 +938,32 @@ def _prescreen_text(text: str) -> None:
 
 
 
-async def _build_content_parts(upload: UploadFile) -> list[dict]:
-    """
-    Read an UploadFile, run a blank/content pre-screen, and return Claude content parts.
-    Raises BlankDocumentError before touching Claude if the file has no useful content.
-    """
-    file_bytes = await upload.read()
-    filename = (upload.filename or "").lower()
-    content_type = (upload.content_type or "").lower()
-
-    if filename.endswith(".pdf") or "pdf" in content_type:
-        _prescreen_pdf(file_bytes)
-        return _pdf_to_content(file_bytes)
-    elif filename.endswith(".png") or "png" in content_type:
-        _prescreen_image(file_bytes)
-        return _image_to_content(file_bytes, "image/png")
-    elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type:
-        _prescreen_image(file_bytes)
-        return _image_to_content(file_bytes, "image/jpeg")
-    elif filename.endswith(".docx"):
-        parts = _docx_to_text(file_bytes)
-        _prescreen_text(parts[0]["text"])
-        return parts
-    elif filename.endswith(".doc"):
-        parts = _doc_to_text(file_bytes)
-        _prescreen_text(parts[0]["text"])
-        return parts
-    else:
-        try:
-            text = file_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            text = ""
-        _prescreen_text(text)
-        return [{"type": "text", "text": text}]
-
-
-async def _extract_invoices_from_file(
-    upload: UploadFile, client: anthropic.Anthropic, batch_id: str = ""
-) -> tuple[list[dict], Optional[str]]:
-    """
-    Extract invoices from a single file.
-    Returns (invoices_list, error_or_None).
-    """
+def _parse_claude_json(raw_text: str) -> tuple[list[dict], Optional[str]]:
+    """Parse Claude's response into a list of invoice dicts. Returns (invoices, error)."""
     import json
 
     try:
-        content_parts = await _build_content_parts(upload)
-    except BlankDocumentError as exc:
-        logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
-        return [], f"Skipped (no invoice content): {exc}"
-    except Exception as exc:
-        logger.exception("Failed to process file %s", upload.filename)
-        return [], f"Could not process file: {exc}"
+        invoices = json.loads(raw_text)
+        if not isinstance(invoices, list):
+            invoices = [invoices]
+        return invoices, None
+    except json.JSONDecodeError:
+        start = raw_text.find("[")
+        end = raw_text.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            try:
+                invoices = json.loads(raw_text[start : end + 1])
+                if not isinstance(invoices, list):
+                    invoices = [invoices]
+                return invoices, None
+            except json.JSONDecodeError:
+                pass
+        return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
 
+
+def _call_claude_extract(client: anthropic.Anthropic, content_parts: list[dict], system_prompt: str, chunk_label: str = "") -> tuple[list[dict], Optional[str]]:
+    """Send content_parts to Claude and return parsed invoices."""
     try:
-        system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
-        t0 = time.monotonic()
         response = client.messages.create(
             model="claude-opus-4-5",
             max_tokens=8192,
@@ -979,37 +977,106 @@ async def _extract_invoices_from_file(
             ],
         )
         raw_text = response.content[0].text.strip()
-        # Warn if Claude hit the token limit — response may be truncated
         if response.stop_reason == "max_tokens":
-            logger.warning(
-                "Claude hit max_tokens for %s — response may be truncated (%d chars)",
-                upload.filename, len(raw_text),
-            )
+            logger.warning("Claude hit max_tokens%s — response may be truncated (%d chars)", chunk_label, len(raw_text))
     except Exception as exc:
-        logger.exception("Claude API call failed for %s", upload.filename)
+        logger.exception("Claude API call failed%s", chunk_label)
         return [], f"Claude API error: {exc}"
 
-    try:
-        invoices = json.loads(raw_text)
-        if not isinstance(invoices, list):
-            invoices = [invoices]
-    except json.JSONDecodeError:
-        # Claude sometimes wraps output in markdown fences or adds commentary.
-        # Most robust recovery: find the outermost JSON array by locating the
-        # first '[' and the last ']' in the response and parsing that slice.
-        start = raw_text.find("[")
-        end = raw_text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                invoices = json.loads(raw_text[start : end + 1])
-                if not isinstance(invoices, list):
-                    invoices = [invoices]
-            except json.JSONDecodeError:
-                return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
-        else:
-            return [], f"No JSON array found in Claude response: {raw_text[:200]}"
+    return _parse_claude_json(raw_text)
 
-    # Normalise HSN codes, correct rates, detect missed discounts, then score
+
+async def _extract_invoices_from_file(
+    upload: UploadFile, client: anthropic.Anthropic, batch_id: str = ""
+) -> tuple[list[dict], Optional[str]]:
+    """
+    Extract invoices from a single file.
+    For scanned PDFs with many pages, processes in chunks of MAX_PAGES_PER_CHUNK
+    and merges all results. Returns (invoices_list, error_or_None).
+    """
+    file_bytes = await upload.read()
+    filename = (upload.filename or "").lower()
+    content_type = (upload.content_type or "").lower()
+    is_pdf = filename.endswith(".pdf") or "pdf" in content_type
+
+    t0 = time.monotonic()
+
+    # For scanned PDFs: chunk into groups of MAX_PAGES_PER_CHUNK and call Claude per chunk
+    if is_pdf:
+        try:
+            _prescreen_pdf(file_bytes)
+        except BlankDocumentError as exc:
+            logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
+            return [], f"Skipped (no invoice content): {exc}"
+        except Exception as exc:
+            logger.exception("Failed to process file %s", upload.filename)
+            return [], f"Could not process file: {exc}"
+
+        if _is_scanned_pdf(file_bytes):
+            chunks = _pdf_scanned_images_chunked(file_bytes)
+            logger.info("Scanned PDF %s: %d pages → %d chunks", upload.filename, sum(len(c) for c in chunks), len(chunks))
+            system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
+            all_invoices: list[dict] = []
+            first_error: Optional[str] = None
+            for i, chunk in enumerate(chunks):
+                chunk_label = f" (chunk {i+1}/{len(chunks)} of {upload.filename})"
+                invs, err = _call_claude_extract(client, chunk, system_prompt, chunk_label)
+                if err and not invs:
+                    if first_error is None:
+                        first_error = err
+                    logger.warning("Chunk %d/%d failed: %s", i+1, len(chunks), err)
+                all_invoices.extend(invs)
+
+            if not all_invoices and first_error:
+                return [], first_error
+
+            for inv in all_invoices:
+                inv = normalize_hsn_codes(inv)
+                inv = correct_line_item_rates(inv)
+                inv = detect_bill_discount_from_total(inv)
+                inv["confidence"] = compute_confidence(inv)
+
+            processing_ms = int((time.monotonic() - t0) * 1000)
+            log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown", invoices=all_invoices, processing_ms=processing_ms)
+            return all_invoices, None
+
+    # Non-PDF or native-text PDF: single Claude call
+    try:
+        if is_pdf:
+            content_parts = _pdf_native_text(file_bytes)
+        elif filename.endswith(".png") or "png" in content_type:
+            _prescreen_image(file_bytes)
+            content_parts = _image_to_content(file_bytes, "image/png")
+        elif filename.endswith((".jpg", ".jpeg")) or "jpeg" in content_type:
+            _prescreen_image(file_bytes)
+            content_parts = _image_to_content(file_bytes, "image/jpeg")
+        elif filename.endswith(".docx"):
+            parts = _docx_to_text(file_bytes)
+            _prescreen_text(parts[0]["text"])
+            content_parts = parts
+        elif filename.endswith(".doc"):
+            parts = _doc_to_text(file_bytes)
+            _prescreen_text(parts[0]["text"])
+            content_parts = parts
+        else:
+            try:
+                text = file_bytes.decode("utf-8", errors="ignore")
+            except Exception:
+                text = ""
+            _prescreen_text(text)
+            content_parts = [{"type": "text", "text": text}]
+    except BlankDocumentError as exc:
+        logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
+        return [], f"Skipped (no invoice content): {exc}"
+    except Exception as exc:
+        logger.exception("Failed to process file %s", upload.filename)
+        return [], f"Could not process file: {exc}"
+
+    system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
+    invoices, err = _call_claude_extract(client, content_parts, system_prompt, f" ({upload.filename})")
+    if err and not invoices:
+        return [], err
+
     for inv in invoices:
         inv = normalize_hsn_codes(inv)
         inv = correct_line_item_rates(inv)
@@ -1017,12 +1084,7 @@ async def _extract_invoices_from_file(
         inv["confidence"] = compute_confidence(inv)
 
     processing_ms = int((time.monotonic() - t0) * 1000)
-    log_extraction(
-        batch_id=batch_id,
-        file_name=upload.filename or "unknown",
-        invoices=invoices,
-        processing_ms=processing_ms,
-    )
+    log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown", invoices=invoices, processing_ms=processing_ms)
 
     return invoices, None
 
