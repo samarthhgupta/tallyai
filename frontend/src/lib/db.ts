@@ -257,7 +257,7 @@ export async function createBatch(
     })
     .select('id')
     .single();
-  if (error) throw error;
+  if (error) throw new Error(`createBatch failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
   return data.id as string;
 }
 
@@ -333,7 +333,7 @@ export async function insertAcceptedInvoices(
   });
 
   const { error } = await db().from('invoices').insert(rows);
-  if (error) throw error;
+  if (error) throw new Error(`insertAcceptedInvoices failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
 }
 
 // ─── Insert rejected invoices (+ archive) ────────────────────────────────────
