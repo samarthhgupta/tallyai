@@ -69,6 +69,37 @@ function norm(s: string): string {
   return (s ?? '').toLowerCase().trim();
 }
 
+// Fuzzy word-overlap match — handles "SAVIK AGENCIES - (2022 Onwards)" vs "Savik Agencies"
+function fuzzyNameMatch(a: string, b: string): boolean {
+  const na = norm(a);
+  const nb = norm(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  // Word overlap: strip punctuation, check if significant words overlap
+  const words = (s: string) =>
+    s.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+  const wa = words(na);
+  const wb = words(nb);
+  if (!wa.length || !wb.length) return false;
+  const shorter = wa.length <= wb.length ? wa : wb;
+  const longer  = wa.length <= wb.length ? wb : wa;
+  const hits = shorter.filter((w) => longer.some((lw) => lw.includes(w) || w.includes(lw)));
+  return hits.length / shorter.length >= 0.6;
+}
+
+// Best fuzzy supplier suggestion (for UI display when exact match fails)
+export function suggestSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorName: string): SupplierMaster | null {
+  return suppliers.find((s) => fuzzyNameMatch(s.vendor_name, vendorName) || fuzzyNameMatch(s.tally_ledger_name, vendorName)) ?? null;
+}
+
+// Best fuzzy expense ledger suggestion
+export function suggestExpenseLedger(expenseLedgers: ExpenseLedgerMaster[], description: string): ExpenseLedgerMaster | null {
+  return expenseLedgers.find((l) =>
+    (l.expense_keyword && fuzzyNameMatch(l.expense_keyword, description)) ||
+    fuzzyNameMatch(l.tally_ledger_name, description)
+  ) ?? null;
+}
+
 // ─── Master lookups (in-memory, no async) ────────────────────────────────────
 
 function findSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorName: string): SupplierMaster | null {
@@ -77,9 +108,12 @@ function findSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorN
     const byGstin = suppliers.find((s) => norm(s.vendor_gstin ?? '') === g);
     if (byGstin) return byGstin;
   }
-  // fallback: match by normalised vendor name
+  // Exact name match
   const vn = norm(vendorName);
-  return suppliers.find((s) => norm(s.vendor_name) === vn || norm(s.tally_ledger_name) === vn) ?? null;
+  const exact = suppliers.find((s) => norm(s.vendor_name) === vn || norm(s.tally_ledger_name) === vn);
+  if (exact) return exact;
+  // Fuzzy match — handles name variations like "SAVIK AGENCIES - (2022 Onwards)" vs "Savik Agencies"
+  return suggestSupplier(suppliers, gstin, vendorName);
 }
 
 function findTaxLedger(
@@ -105,16 +139,20 @@ function findPurchaseLedger(purchaseLedgers: PurchaseLedgerEntry[], gst_percent:
 
 function findExpenseLedger(expenseLedgers: ExpenseLedgerMaster[], description: string): string | null {
   const q = norm(description);
-  const byKeyword = expenseLedgers.find(
-    (l) => l.expense_keyword && norm(l.expense_keyword) === q,
-  );
+  // Exact keyword
+  const byKeyword = expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === q);
   if (byKeyword) return byKeyword.tally_ledger_name;
+  // Partial keyword
   const partial = expenseLedgers.find(
     (l) => l.expense_keyword && (q.includes(norm(l.expense_keyword)) || norm(l.expense_keyword).includes(q)),
   );
   if (partial) return partial.tally_ledger_name;
+  // Exact ledger name
   const byName = expenseLedgers.find((l) => norm(l.tally_ledger_name) === q);
-  return byName?.tally_ledger_name ?? null;
+  if (byName) return byName.tally_ledger_name;
+  // Fuzzy match
+  const fuzzy = suggestExpenseLedger(expenseLedgers, description);
+  return fuzzy?.tally_ledger_name ?? null;
 }
 
 // ─── Single voucher builder ───────────────────────────────────────────────────
