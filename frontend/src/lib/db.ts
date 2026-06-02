@@ -17,6 +17,7 @@ export interface Company {
   tally_url: string | null;
   tally_port: number;
   state_code: string | null;
+  purchase_ledger_config: { gst_percent: number | null; tally_ledger_name: string }[] | null;
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -27,7 +28,7 @@ const db = () => getSupabase() as any;
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
     .from('companies')
-    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code')
+    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config')
     .order('name');
   if (error) throw error;
   return (data ?? []) as Company[];
@@ -77,6 +78,17 @@ export async function updateCompany(
     updates.state_name = deriveStateFromGstin(params.gstin) ?? '';
   }
   const { error } = await db().from('companies').update(updates).eq('id', id);
+  if (error) throw error;
+}
+
+export async function savePurchaseLedgerConfig(
+  companyId: string,
+  config: { gst_percent: number | null; tally_ledger_name: string }[],
+): Promise<void> {
+  const { error } = await db()
+    .from('companies')
+    .update({ purchase_ledger_config: config })
+    .eq('id', companyId);
   if (error) throw error;
 }
 

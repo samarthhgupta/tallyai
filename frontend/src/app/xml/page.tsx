@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister } from '@/lib/db';
+import { getPurchaseRegister, savePurchaseLedgerConfig } from '@/lib/db';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems } from '@/lib/stockItems';
@@ -178,6 +178,8 @@ export default function XmlGeneratorPage() {
   const [purchaseLedgers, setPurchaseLedgers] = useState<PurchaseLedgerEntry[]>([
     { gst_percent: null, tally_ledger_name: '' },
   ]);
+  const [savingMapping, setSavingMapping] = useState(false);
+  const [mappingSaved, setMappingSaved] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[] | null>(null);
@@ -197,6 +199,14 @@ export default function XmlGeneratorPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  // Load saved purchase ledger config when company changes
+  useEffect(() => {
+    if (!company) return;
+    if (company.purchase_ledger_config && company.purchase_ledger_config.length > 0) {
+      setPurchaseLedgers(company.purchase_ledger_config);
+    }
+  }, [company?.id]);
 
   // Load invoices on company/FY change — also clear preview
   useEffect(() => {
@@ -402,14 +412,37 @@ export default function XmlGeneratorPage() {
                 />
               ))}
             </div>
-            <button
-              onClick={() =>
-                setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])
-              }
-              className="mt-3 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
-            >
-              + Add row
-            </button>
+            <div className="flex items-center gap-4 mt-3">
+              <button
+                onClick={() =>
+                  setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])
+                }
+                className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+              >
+                + Add row
+              </button>
+              <button
+                disabled={savingMapping || !company?.id}
+                onClick={async () => {
+                  if (!company?.id) return;
+                  setSavingMapping(true);
+                  setMappingSaved(false);
+                  try {
+                    await savePurchaseLedgerConfig(company.id, purchaseLedgers);
+                    setMappingSaved(true);
+                    setTimeout(() => setMappingSaved(false), 3000);
+                  } finally {
+                    setSavingMapping(false);
+                  }
+                }}
+                className="text-sm px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+              >
+                {savingMapping ? 'Saving…' : 'Save Mapping'}
+              </button>
+              {mappingSaved && (
+                <span className="text-xs text-green-600 font-medium">✓ Saved — will load automatically next time</span>
+              )}
+            </div>
           </div>
         </div>
 
