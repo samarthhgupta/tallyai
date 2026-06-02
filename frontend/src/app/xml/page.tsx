@@ -77,8 +77,19 @@ function PurchaseLedgerRow({
 
 // ─── Preview table ────────────────────────────────────────────────────────────
 
-function PreviewTable({ rows }: { rows: PreviewRow[] }) {
-  // Group by invoice for zebra striping across invoices
+function PreviewTable({
+  rows,
+  expenseLedgers,
+  suppliers,
+  onMapExpense,
+  onMapSupplier,
+}: {
+  rows: PreviewRow[];
+  expenseLedgers: { tally_ledger_name: string }[];
+  suppliers: { tally_ledger_name: string; vendor_name: string }[];
+  onMapExpense: (description: string, ledgerName: string) => void;
+  onMapSupplier: (vendorName: string, ledgerName: string) => void;
+}) {
   const invoiceOrder: string[] = [];
   const seen = new Set<string>();
   rows.forEach((r) => {
@@ -106,10 +117,16 @@ function PreviewTable({ rows }: { rows: PreviewRow[] }) {
         <tbody className="divide-y divide-gray-100">
           {rows.map((row, i) => {
             const invIdx = invoiceIndex.get(row.invoice_number) ?? 0;
-            const bg = row.status === 'Skipped'
+            const isUnmappedExpense = row.ledger_type === 'Expense' && row.warning?.includes('No expense ledger');
+            const isUnmappedSupplier = row.ledger_type === 'Party' && row.status === 'Skipped';
+            const bg = (row.status === 'Skipped' || isUnmappedExpense)
               ? 'bg-red-50'
               : invIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60';
             const amountColor = row.amount < 0 ? 'text-red-600' : 'text-gray-900';
+            // Extract charge description from placeholder text
+            const chargeDesc = isUnmappedExpense
+              ? row.tally_ledger_name.replace(/^— NO LEDGER FOR "|" —$/g, '').replace(/^— NO LEDGER FOR "(.+)" —$/, '$1')
+              : '';
 
             return (
               <tr key={i} className={bg}>
@@ -127,8 +144,36 @@ function PreviewTable({ rows }: { rows: PreviewRow[] }) {
                     {row.ledger_type}
                   </span>
                 </td>
-                <td className="px-4 py-2.5 font-mono text-xs max-w-[260px]">
-                  {row.status === 'Skipped' ? (
+                <td className="px-4 py-2.5 font-mono text-xs max-w-[300px]">
+                  {isUnmappedExpense ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-red-500 text-xs shrink-0">"{chargeDesc}" →</span>
+                      <select
+                        defaultValue=""
+                        onChange={(e) => e.target.value && onMapExpense(chargeDesc, e.target.value)}
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]"
+                      >
+                        <option value="">Pick ledger…</option>
+                        {expenseLedgers.map((l) => (
+                          <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : isUnmappedSupplier ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-red-500 text-xs shrink-0">"{row.vendor_name}" →</span>
+                      <select
+                        defaultValue=""
+                        onChange={(e) => e.target.value && onMapSupplier(row.vendor_name, e.target.value)}
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]"
+                      >
+                        <option value="">Pick ledger…</option>
+                        {suppliers.map((s) => (
+                          <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : row.status === 'Skipped' ? (
                     <span className="text-red-600 font-semibold">{row.tally_ledger_name}</span>
                   ) : (
                     <span className="text-gray-900">{row.tally_ledger_name}</span>
@@ -138,12 +183,8 @@ function PreviewTable({ rows }: { rows: PreviewRow[] }) {
                   {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </td>
                 <td className="px-4 py-2.5 text-xs max-w-[200px]">
-                  {row.skip_reason && (
-                    <span className="text-red-600">{row.skip_reason}</span>
-                  )}
-                  {row.warning && !row.skip_reason && (
-                    <span className="text-amber-600">{row.warning}</span>
-                  )}
+                  {row.skip_reason && <span className="text-red-600">{row.skip_reason}</span>}
+                  {row.warning && !row.skip_reason && <span className="text-amber-600">{row.warning}</span>}
                 </td>
               </tr>
             );
@@ -175,6 +216,7 @@ export default function XmlGeneratorPage() {
   const [selectedFY, setSelectedFY] = useState<string>(currentFY);
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [cachedMasters, setCachedMasters] = useState<Awaited<ReturnType<typeof loadMasters>> | null>(null);
 
   const [purchaseLedgers, setPurchaseLedgers] = useState<PurchaseLedgerEntry[]>([
     { gst_percent: null, tally_ledger_name: '' },
@@ -277,6 +319,7 @@ export default function XmlGeneratorPage() {
     setResolvedKeys(new Set());
     try {
       const masters = await loadMasters(company!.id);
+      setCachedMasters(masters);
       const rows = buildTallyPreview({
         invoices,
         ...masters,
@@ -570,7 +613,27 @@ export default function XmlGeneratorPage() {
               </div>
 
               {/* Table */}
-              <PreviewTable rows={previewRows} />
+              <PreviewTable
+                rows={previewRows}
+                expenseLedgers={cachedMasters?.expenseLedgers ?? []}
+                suppliers={cachedMasters?.suppliers ?? []}
+                onMapExpense={async (description, ledgerName) => {
+                  if (!company?.id) return;
+                  try {
+                    await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description });
+                    // Re-run preview to reflect the new mapping
+                    handlePreview();
+                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                }}
+                onMapSupplier={async (vendorName, ledgerName) => {
+                  if (!company?.id) return;
+                  try {
+                    const inv = invoices.find((i) => i.vendor_name === vendorName);
+                    await addSupplier(company.id, { vendor_name: vendorName, vendor_gstin: inv?.vendor_gstin ?? '', tally_ledger_name: ledgerName });
+                    handlePreview();
+                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                }}
+              />
             </div>
           )}
         </div>
