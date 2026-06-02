@@ -397,7 +397,7 @@ export async function insertRejectedInvoices(
     .from('invoices')
     .insert(rows)
     .select('id, company_id, batch_id, invoice_number, vendor_name, vendor_gstin, invoice_date, total, original_filename, financial_year, period_month, period_label, readiness, readiness_flags');
-  if (error) throw error;
+  if (error) throw new Error(`insertRejectedInvoices failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
 
   // Insert rejection archive rows
   const archiveRows = (inserted ?? []).map((r: Record<string, unknown>) => ({
@@ -422,7 +422,7 @@ export async function insertRejectedInvoices(
 
   if (archiveRows.length > 0) {
     const { error: archErr } = await db().from('rejection_archive').insert(archiveRows);
-    if (archErr) throw archErr;
+    if (archErr) throw new Error(`rejection_archive insert failed: ${archErr.message} (code: ${archErr.code}, details: ${archErr.details})`);
   }
 }
 
