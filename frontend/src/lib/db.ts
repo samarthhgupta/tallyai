@@ -17,6 +17,9 @@ export interface Company {
   tally_url: string | null;
   tally_port: number;
   state_code: string | null;
+  purchase_ledger_config: { gst_percent: number | null; tally_ledger_name: string }[] | null;
+  voucher_mode: 'accounting_only' | 'inventory' | null;
+  discount_ledger_name: string | null; // Tally ledger for bill-level discounts (P&L)
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -24,13 +27,50 @@ export interface Company {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
+const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name';
+
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
     .from('companies')
-    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code')
+    .select(COMPANY_SELECT)
     .order('name');
   if (error) throw error;
   return (data ?? []) as Company[];
+}
+
+export async function getCompany(id: string): Promise<Company> {
+  const { data, error } = await db()
+    .from('companies')
+    .select(COMPANY_SELECT)
+    .eq('id', id)
+    .single();
+  if (error) throw error;
+  return data as Company;
+}
+
+export async function savePurchaseLedgerConfig(
+  companyId: string,
+  config: { gst_percent: number | null; tally_ledger_name: string }[],
+): Promise<void> {
+  const { error } = await db()
+    .from('companies')
+    .update({ purchase_ledger_config: config, updated_at: new Date().toISOString() })
+    .eq('id', companyId);
+  if (error) throw error;
+}
+
+export async function saveCompanyVoucherSettings(
+  companyId: string,
+  params: {
+    voucher_mode?: 'accounting_only' | 'inventory';
+    discount_ledger_name?: string | null;
+  },
+): Promise<void> {
+  const { error } = await db()
+    .from('companies')
+    .update({ ...params, updated_at: new Date().toISOString() })
+    .eq('id', companyId);
+  if (error) throw error;
 }
 
 export async function createCompany(params: {
@@ -68,6 +108,8 @@ export async function updateCompany(
     tally_company_name?: string;
     tally_url?: string;
     tally_port?: number;
+    voucher_mode?: 'accounting_only' | 'inventory';
+    discount_ledger_name?: string | null;
   },
 ): Promise<void> {
   const updates: Record<string, unknown> = { ...params, updated_at: new Date().toISOString() };
