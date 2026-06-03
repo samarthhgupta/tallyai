@@ -743,14 +743,9 @@ export async function updateAcceptedInvoice(
     itc_remark?: string | null;
   },
 ): Promise<void> {
-  const user = (await getSupabase().auth.getUser()).data.user;
   const { error } = await db()
     .from('invoices')
-    .update({
-      ...patch,
-      last_modified_at: new Date().toISOString(),
-      last_modified_by: user?.id ?? null,
-    })
+    .update(patch)
     .eq('id', id);
   if (error) throw new Error(`${error.message}${error.details ? ` — ${error.details}` : ''}`);
 }
@@ -791,7 +786,6 @@ export async function moveAcceptedToRejected(
       rejected_by: user?.id ?? null,
       rejected_at: now,
       rejection_reason: reason ?? null,
-      moved_by_email: user?.email ?? null,
       invoice_number: inv.invoice_number,
       vendor_name: inv.vendor_name,
       vendor_gstin: inv.vendor_gstin,
@@ -803,7 +797,6 @@ export async function moveAcceptedToRejected(
       period_label: inv.period_label,
       readiness: inv.readiness,
       readiness_flags: inv.readiness_flags,
-      itc_status: inv.itc_status,
     });
   if (archErr) throw new Error(`Archive insert failed: ${archErr.message}${archErr.details ? ` — ${archErr.details}` : ''}`);
 
