@@ -420,7 +420,10 @@ export default function UploadPage() {
       await insertAcceptedInvoices(selectedCompanyId, activeBatchId, items, financialYear, companyGstin, companyName);
       removeFromQueue();
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : 'Failed to save to Purchase Register. Please try again.');
+      const msg = err instanceof Error
+        ? err.message
+        : (err as { message?: string })?.message ?? 'Failed to save to Purchase Register. Please try again.';
+      setActionError(msg);
       // Do NOT remove from queue on failure — user can retry
     } finally {
       setActionLoading(false);

@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, getCompany, savePurchaseLedgerConfig } from '@/lib/db';
+import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -144,19 +144,29 @@ function PreviewTable({
                   {isUnmappedExpense ? (
                     <div className="flex items-center gap-1.5">
                       <span className="text-red-500 text-xs shrink-0">"{chargeDesc}" →</span>
-                      <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(chargeDesc, e.target.value)}
-                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => e.target.value && onMapExpense(chargeDesc, e.target.value)}
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]"
+                      >
                         <option value="">Pick ledger…</option>
-                        {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                        {expenseLedgers.map((l) => (
+                          <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>
+                        ))}
                       </select>
                     </div>
                   ) : isUnmappedSupplier ? (
                     <div className="flex items-center gap-1.5">
                       <span className="text-red-500 text-xs shrink-0">"{row.vendor_name}" →</span>
-                      <select defaultValue="" onChange={(e) => e.target.value && onMapSupplier(row.vendor_name, e.target.value)}
-                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => e.target.value && onMapSupplier(row.vendor_name, e.target.value)}
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]"
+                      >
                         <option value="">Pick ledger…</option>
-                        {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
+                        {suppliers.map((s) => (
+                          <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>
+                        ))}
                       </select>
                     </div>
                   ) : isUnmappedStockItem ? (
@@ -545,7 +555,9 @@ export default function XmlGeneratorPage() {
             </div>
             <div className="flex items-center gap-4 mt-3">
               <button
-                onClick={() => setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])}
+                onClick={() =>
+                  setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])
+                }
                 className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
               >
                 + Add row
@@ -554,12 +566,15 @@ export default function XmlGeneratorPage() {
                 disabled={savingMapping || !company?.id}
                 onClick={async () => {
                   if (!company) return;
-                  setSavingMapping(true); setMappingSaved(false);
+                  setSavingMapping(true);
+                  setMappingSaved(false);
                   try {
                     await savePurchaseLedgerConfig(company.id, purchaseLedgers);
                     setMappingSaved(true);
                     setTimeout(() => setMappingSaved(false), 3000);
-                  } finally { setSavingMapping(false); }
+                  } finally {
+                    setSavingMapping(false);
+                  }
                 }}
                 className="text-sm px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors"
               >
