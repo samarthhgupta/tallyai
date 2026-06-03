@@ -752,7 +752,7 @@ export async function updateAcceptedInvoice(
       last_modified_by: user?.id ?? null,
     })
     .eq('id', id);
-  if (error) throw error;
+  if (error) throw new Error(`${error.message}${error.details ? ` — ${error.details}` : ''}`);
 }
 
 // ─── Move accepted invoice to rejected ───────────────────────────────────────
