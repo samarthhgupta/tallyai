@@ -12,12 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: supabase/setup-cli@v1
         with:
-          node-version: '20'
+          version: latest
 
       - name: Run migrations
         env:
-          NEXT_PUBLIC_SUPABASE_URL: https://idstdsuvxqzoankfgde.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node .claude/hooks/run-migrations.mjs
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase db push --project-ref idstdsuvxqzoankfgde
