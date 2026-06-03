@@ -817,8 +817,8 @@ export interface RejectedRecord {
   financial_year: string | null;
   rejection_reason: string | null;
   rejected_at: string | null;
-  moved_by_email: string | null;
-  itc_status: string | null;
+  moved_by_email?: string | null;
+  itc_status?: string | null;
 }
 
 export async function getRejectedRegister(
@@ -827,13 +827,13 @@ export async function getRejectedRegister(
 ): Promise<RejectedRecord[]> {
   let q = db()
     .from('rejection_archive')
-    .select('id, invoice_id, company_id, invoice_number, vendor_name, vendor_gstin, invoice_date, total, period_label, financial_year, rejection_reason, rejected_at, moved_by_email, itc_status')
+    .select('id, invoice_id, company_id, invoice_number, vendor_name, vendor_gstin, invoice_date, total, period_label, financial_year, rejection_reason, rejected_at')
     .eq('company_id', companyId)
     .order('rejected_at', { ascending: false });
 
   if (financialYear) q = q.eq('financial_year', financialYear);
 
   const { data, error } = await q;
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data ?? []) as RejectedRecord[];
 }
