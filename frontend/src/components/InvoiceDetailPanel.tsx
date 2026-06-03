@@ -298,7 +298,7 @@ export default function InvoiceDetailPanel({
       <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
 
       {/* Panel */}
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl bg-white shadow-2xl flex flex-col overflow-hidden">
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-5xl bg-white shadow-2xl flex flex-col overflow-hidden">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
@@ -865,8 +865,8 @@ export default function InvoiceDetailPanel({
 
       {/* ── Move to Rejected Modal ── */}
       {showRejectModal && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-gray-900 mb-1">Move to Rejected Archive</h3>
             <p className="text-sm text-gray-500 mb-4">
               {invoice.invoice_number || '—'} · {invoice.vendor_name}
