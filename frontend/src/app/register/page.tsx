@@ -77,6 +77,7 @@ export default function PurchaseRegisterPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
 
   // Detail panel
   const [detailInvoice, setDetailInvoice] = useState<StoredInvoice | null>(null);
@@ -174,6 +175,7 @@ export default function PurchaseRegisterPage() {
       const count = await deleteAllCompanyInvoices(selectedCompanyId);
       setInvoices([]);
       setShowDeleteAll(false);
+      setDeleteAllConfirmText('');
       setError('');
       alert(`Deleted ${count} invoice${count !== 1 ? 's' : ''} for ${selectedCompany?.name}.`);
     } catch (err: unknown) {
@@ -317,16 +319,28 @@ export default function PurchaseRegisterPage() {
                 </p>
               </div>
             </div>
+            <div className="mt-4 mb-2">
+              <p className="text-sm text-gray-600 mb-2">
+                Type <strong>{selectedCompany?.name}</strong> to confirm:
+              </p>
+              <input
+                type="text"
+                value={deleteAllConfirmText}
+                onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+                placeholder={selectedCompany?.name ?? ''}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
             <div className="flex gap-2 mt-2">
               <button
                 onClick={handleDeleteAll}
-                disabled={deleteAllLoading}
-                className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                disabled={deleteAllLoading || deleteAllConfirmText.trim().toLowerCase() !== (selectedCompany?.name ?? '').toLowerCase()}
+                className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
               >
                 {deleteAllLoading ? 'Deleting…' : 'Yes, delete all'}
               </button>
               <button
-                onClick={() => setShowDeleteAll(false)}
+                onClick={() => { setShowDeleteAll(false); setDeleteAllConfirmText(''); }}
                 className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Cancel
@@ -348,7 +362,7 @@ export default function PurchaseRegisterPage() {
             <div className="flex items-center gap-2">
               {selectedCompanyId && invoices.length > 0 && (
                 <button
-                  onClick={() => setShowDeleteAll(true)}
+                  onClick={() => { setShowDeleteAll(true); setDeleteAllConfirmText(''); }}
                   className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 hover:bg-red-50 text-red-600 text-sm font-medium rounded-lg transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
