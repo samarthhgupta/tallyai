@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs any unapplied Supabase migrations in order.
-// Tracks applied migrations in a _migrations table.
+// Uses the Supabase Management API with service role key.
 import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -16,66 +16,26 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '../../supabase/migrations');
 
-async function sql(query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
+// Extract project ref from URL
+const projectRef = SUPABASE_URL.replace('https://', '').split('.')[0];
+
+async function runSql(query) {
+  const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'apikey': SERVICE_KEY,
       'Authorization': `Bearer ${SERVICE_KEY}`,
     },
     body: JSON.stringify({ query }),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`SQL error: ${text}`);
+    throw new Error(`SQL error (${res.status}): ${text}`);
   }
   return res.json();
 }
 
-async function sqlDirect(query) {
-  // Use pg REST endpoint for DDL statements
-  const res = await fetch(`${SUPABASE_URL}/pg`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': SERVICE_KEY,
-      'Authorization': `Bearer ${SERVICE_KEY}`,
-    },
-    body: JSON.stringify({ query }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`SQL error: ${text}`);
-  }
-  return res.json().catch(() => ({}));
-}
-
 async function runMigrations() {
-  // Bootstrap migrations tracking table via Supabase SQL editor API
-  const bootstrapUrl = `${SUPABASE_URL}/rest/v1/`;
-
-  // Use the management API to run SQL
-  const baseUrl = SUPABASE_URL.replace('https://', '');
-  const projectRef = baseUrl.split('.')[0];
-  const mgmtBase = `https://api.supabase.com/v1/projects/${projectRef}/database/query`;
-
-  async function runSql(query) {
-    const res = await fetch(mgmtBase, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-      },
-      body: JSON.stringify({ query }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`SQL error (${res.status}): ${text}`);
-    }
-    return res.json();
-  }
-
   // Create tracking table
   await runSql(`
     CREATE TABLE IF NOT EXISTS _migrations (
@@ -85,8 +45,9 @@ async function runMigrations() {
   `);
 
   // Get already-applied migrations
-  const applied = await runSql(`SELECT filename FROM _migrations ORDER BY filename;`);
-  const appliedSet = new Set((applied.rows || []).map(r => r.filename || r[0]));
+  const result = await runSql(`SELECT filename FROM _migrations ORDER BY filename;`);
+  const rows = result.rows || result || [];
+  const appliedSet = new Set(rows.map(r => r.filename || r[0]));
 
   // Read migration files
   const files = readdirSync(MIGRATIONS_DIR)
@@ -102,7 +63,7 @@ async function runMigrations() {
     const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
     console.log(`  → Applying ${file}…`);
     await runSql(sql);
-    await runSql(`INSERT INTO _migrations (filename) VALUES ('${file.replace(/'/g, "''")}');`);
+    await runSql(`INSERT INTO _migrations (filename) VALUES ('${file.replace(/'/g, "''")}') ON CONFLICT DO NOTHING;`);
     console.log(`  ✓ ${file} applied`);
     count++;
   }
