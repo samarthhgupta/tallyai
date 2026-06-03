@@ -664,7 +664,7 @@ export async function rejectInvoices(
 // Delete a single invoice by ID (cascades to rejection_archive)
 export async function deleteInvoice(invoiceId: string): Promise<void> {
   const { error } = await db().from('invoices').delete().eq('id', invoiceId);
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 }
 
 // Delete ALL invoices for a company (all statuses — for test data cleanup)
@@ -674,7 +674,7 @@ export async function deleteAllCompanyInvoices(companyId: string): Promise<numbe
     .delete()
     .eq('company_id', companyId)
     .select('id');
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data ?? []).length;
 }
 
@@ -769,7 +769,7 @@ export async function moveAcceptedToRejected(
     .select('*')
     .eq('id', invoiceId)
     .single();
-  if (fetchErr) throw fetchErr;
+  if (fetchErr) throw new Error(`Fetch failed: ${fetchErr.message}`);
 
   const { error: updateErr } = await db()
     .from('invoices')
@@ -780,7 +780,7 @@ export async function moveAcceptedToRejected(
       rejection_reason: reason ?? null,
     })
     .eq('id', invoiceId);
-  if (updateErr) throw updateErr;
+  if (updateErr) throw new Error(`Update failed: ${updateErr.message}${updateErr.details ? ` — ${updateErr.details}` : ''}`);
 
   const { error: archErr } = await db()
     .from('rejection_archive')
@@ -805,7 +805,8 @@ export async function moveAcceptedToRejected(
       readiness_flags: inv.readiness_flags,
       itc_status: inv.itc_status,
     });
-  if (archErr) throw archErr;
+  if (archErr) throw new Error(`Archive insert failed: ${archErr.message}${archErr.details ? ` — ${archErr.details}` : ''}`);
+
 }
 
 // ─── Rejected Register ────────────────────────────────────────────────────────
