@@ -18,6 +18,8 @@ export interface Company {
   tally_port: number;
   state_code: string | null;
   purchase_ledger_config: { gst_percent: number | null; tally_ledger_name: string }[] | null;
+  voucher_mode: 'accounting_only' | 'inventory' | null;
+  discount_ledger_name: string | null; // Tally ledger for bill-level discounts (P&L)
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -25,23 +27,50 @@ export interface Company {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
+const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name';
+
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
     .from('companies')
-    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config')
+    .select(COMPANY_SELECT)
     .order('name');
   if (error) throw error;
   return (data ?? []) as Company[];
 }
 
-export async function getCompany(companyId: string): Promise<Company> {
+export async function getCompany(id: string): Promise<Company> {
   const { data, error } = await db()
     .from('companies')
-    .select('id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config')
-    .eq('id', companyId)
+    .select(COMPANY_SELECT)
+    .eq('id', id)
     .single();
   if (error) throw error;
   return data as Company;
+}
+
+export async function savePurchaseLedgerConfig(
+  companyId: string,
+  config: { gst_percent: number | null; tally_ledger_name: string }[],
+): Promise<void> {
+  const { error } = await db()
+    .from('companies')
+    .update({ purchase_ledger_config: config, updated_at: new Date().toISOString() })
+    .eq('id', companyId);
+  if (error) throw error;
+}
+
+export async function saveCompanyVoucherSettings(
+  companyId: string,
+  params: {
+    voucher_mode?: 'accounting_only' | 'inventory';
+    discount_ledger_name?: string | null;
+  },
+): Promise<void> {
+  const { error } = await db()
+    .from('companies')
+    .update({ ...params, updated_at: new Date().toISOString() })
+    .eq('id', companyId);
+  if (error) throw error;
 }
 
 export async function createCompany(params: {
@@ -79,6 +108,8 @@ export async function updateCompany(
     tally_company_name?: string;
     tally_url?: string;
     tally_port?: number;
+    voucher_mode?: 'accounting_only' | 'inventory';
+    discount_ledger_name?: string | null;
   },
 ): Promise<void> {
   const updates: Record<string, unknown> = { ...params, updated_at: new Date().toISOString() };
@@ -88,17 +119,6 @@ export async function updateCompany(
     updates.state_name = deriveStateFromGstin(params.gstin) ?? '';
   }
   const { error } = await db().from('companies').update(updates).eq('id', id);
-  if (error) throw error;
-}
-
-export async function savePurchaseLedgerConfig(
-  companyId: string,
-  config: { gst_percent: number | null; tally_ledger_name: string }[],
-): Promise<void> {
-  const { error } = await db()
-    .from('companies')
-    .update({ purchase_ledger_config: config })
-    .eq('id', companyId);
   if (error) throw error;
 }
 
@@ -685,4 +705,141 @@ export async function getPurchaseRegister(
   const { data, error } = await q;
   if (error) throw error;
   return (data ?? []) as StoredInvoice[];
+}
+
+// ─── Get single invoice ───────────────────────────────────────────────────────
+
+export async function getInvoiceById(id: string): Promise<StoredInvoice> {
+  const { data, error } = await db().from('invoices').select('*').eq('id', id).single();
+  if (error) throw error;
+  return data as StoredInvoice;
+}
+
+// ─── Update accepted invoice ──────────────────────────────────────────────────
+
+export async function updateAcceptedInvoice(
+  id: string,
+  patch: {
+    vendor_name?: string;
+    vendor_gstin?: string | null;
+    buyer_name?: string | null;
+    buyer_gstin?: string | null;
+    invoice_number?: string;
+    invoice_date?: string | null;
+    tax_type?: 'cgst_sgst' | 'igst';
+    subtotal?: number;
+    bill_discount_amount?: number;
+    bill_discount_percent?: number | null;
+    cgst?: number;
+    sgst?: number;
+    igst?: number;
+    round_off?: number;
+    total?: number;
+    line_items?: unknown;
+    charges?: unknown;
+    readiness?: string;
+    readiness_flags?: string[];
+    itc_status?: string | null;
+    itc_remark?: string | null;
+  },
+): Promise<void> {
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const { error } = await db()
+    .from('invoices')
+    .update({
+      ...patch,
+      last_modified_at: new Date().toISOString(),
+      last_modified_by: user?.id ?? null,
+    })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+// ─── Move accepted invoice to rejected ───────────────────────────────────────
+
+export async function moveAcceptedToRejected(
+  invoiceId: string,
+  reason?: string,
+): Promise<void> {
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const now = new Date().toISOString();
+
+  const { data: inv, error: fetchErr } = await db()
+    .from('invoices')
+    .select('*')
+    .eq('id', invoiceId)
+    .single();
+  if (fetchErr) throw fetchErr;
+
+  const { error: updateErr } = await db()
+    .from('invoices')
+    .update({
+      status: 'rejected',
+      rejected_at: now,
+      rejected_by: user?.id ?? null,
+      rejection_reason: reason ?? null,
+    })
+    .eq('id', invoiceId);
+  if (updateErr) throw updateErr;
+
+  const { error: archErr } = await db()
+    .from('rejection_archive')
+    .insert({
+      invoice_id: invoiceId,
+      company_id: inv.company_id,
+      batch_id: inv.batch_id,
+      rejected_by: user?.id ?? null,
+      rejected_at: now,
+      rejection_reason: reason ?? null,
+      moved_by_email: user?.email ?? null,
+      invoice_number: inv.invoice_number,
+      vendor_name: inv.vendor_name,
+      vendor_gstin: inv.vendor_gstin,
+      invoice_date: inv.invoice_date,
+      total: inv.total,
+      original_filename: inv.original_filename,
+      financial_year: inv.financial_year,
+      period_month: inv.period_month,
+      period_label: inv.period_label,
+      readiness: inv.readiness,
+      readiness_flags: inv.readiness_flags,
+      itc_status: inv.itc_status,
+    });
+  if (archErr) throw archErr;
+}
+
+// ─── Rejected Register ────────────────────────────────────────────────────────
+
+export interface RejectedRecord {
+  id: string;
+  invoice_id: string;
+  company_id: string;
+  invoice_number: string | null;
+  vendor_name: string | null;
+  vendor_gstin: string | null;
+  invoice_date: string | null;
+  total: number | null;
+  period_label: string | null;
+  financial_year: string | null;
+  rejection_reason: string | null;
+  rejected_at: string | null;
+  moved_by_email: string | null;
+  itc_status: string | null;
+}
+
+export async function getRejectedRegister(
+  companyId: string,
+  financialYear?: string,
+): Promise<RejectedRecord[]> {
+  let q = db()
+    .from('rejection_archive')
+    .select('id, invoice_id, company_id, invoice_number, vendor_name, vendor_gstin, invoice_date, total, period_label, financial_year, rejection_reason, rejected_at, moved_by_email, itc_status')
+    .eq('company_id', companyId)
+    .order('rejected_at', { ascending: false });
+
+  if (financialYear) q = q.eq('financial_year', financialYear);
+
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as RejectedRecord[];
 }

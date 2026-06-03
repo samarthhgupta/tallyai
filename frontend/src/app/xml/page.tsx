@@ -6,13 +6,12 @@ import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
-import { addExpenseLedger } from '@/lib/expenseLedgers';
-import { loadStockItems } from '@/lib/stockItems';
-import { loadExpenseLedgers } from '@/lib/expenseLedgers';
-import { generateTallyXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
+import { loadStockItems, addStockItem } from '@/lib/stockItems';
+import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
+import { generateTallyXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
-import { getFYList, currentFY } from '@/lib/fyPeriod';
+import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import * as XLSX from 'xlsx';
@@ -29,6 +28,8 @@ const LEDGER_TYPE_COLORS: Record<PreviewRow['ledger_type'], string> = {
   IGST:       'bg-cyan-100 text-cyan-700',
   Expense:    'bg-orange-100 text-orange-700',
   'Round Off':'bg-gray-100 text-gray-600',
+  Inventory:  'bg-indigo-100 text-indigo-700',
+  Discount:   'bg-pink-100 text-pink-700',
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -81,22 +82,23 @@ function PreviewTable({
   rows,
   expenseLedgers,
   suppliers,
+  stockItems,
   onMapExpense,
   onMapSupplier,
+  onMapStockItem,
 }: {
   rows: PreviewRow[];
   expenseLedgers: { tally_ledger_name: string }[];
   suppliers: { tally_ledger_name: string; vendor_name: string }[];
+  stockItems: { tally_item_name: string }[];
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
+  onMapStockItem: (description: string, tallyItemName: string) => void;
 }) {
   const invoiceOrder: string[] = [];
   const seen = new Set<string>();
   rows.forEach((r) => {
-    if (!seen.has(r.invoice_number)) {
-      seen.add(r.invoice_number);
-      invoiceOrder.push(r.invoice_number);
-    }
+    if (!seen.has(r.invoice_number)) { seen.add(r.invoice_number); invoiceOrder.push(r.invoice_number); }
   });
   const invoiceIndex = new Map(invoiceOrder.map((n, i) => [n, i]));
 
@@ -109,7 +111,7 @@ function PreviewTable({
             <th className="px-4 py-3 text-left whitespace-nowrap">Date</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Vendor (Invoice)</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Type</th>
-            <th className="px-4 py-3 text-left whitespace-nowrap">Tally Ledger Name</th>
+            <th className="px-4 py-3 text-left whitespace-nowrap">Tally Name / Details</th>
             <th className="px-4 py-3 text-right whitespace-nowrap">Amount (₹)</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Notes</th>
           </tr>
@@ -119,26 +121,20 @@ function PreviewTable({
             const invIdx = invoiceIndex.get(row.invoice_number) ?? 0;
             const isUnmappedExpense = row.ledger_type === 'Expense' && row.warning?.includes('No expense ledger');
             const isUnmappedSupplier = row.ledger_type === 'Party' && row.status === 'Skipped';
-            const bg = (row.status === 'Skipped' || isUnmappedExpense)
-              ? 'bg-red-50'
-              : invIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60';
+            const isUnmappedStockItem = row.ledger_type === 'Inventory' && row.status === 'Skipped';
+            const hasIssue = row.status === 'Skipped' || isUnmappedExpense;
+            const bg = hasIssue ? 'bg-red-50' : invIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60';
             const amountColor = row.amount < 0 ? 'text-red-600' : 'text-gray-900';
-            // Extract charge description from placeholder text
             const chargeDesc = isUnmappedExpense
-              ? row.tally_ledger_name.replace(/^— NO LEDGER FOR "|" —$/g, '').replace(/^— NO LEDGER FOR "(.+)" —$/, '$1')
+              ? row.tally_ledger_name.replace(/^— NO LEDGER FOR "(.+)" —$/, '$1')
               : '';
+            const itemDesc = isUnmappedStockItem ? (row.item_description ?? '') : '';
 
             return (
               <tr key={i} className={bg}>
-                <td className="px-4 py-2.5 font-mono text-xs text-gray-600 whitespace-nowrap">
-                  {row.invoice_number}
-                </td>
-                <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">
-                  {row.invoice_date}
-                </td>
-                <td className="px-4 py-2.5 text-gray-700 max-w-[180px] truncate" title={row.vendor_name}>
-                  {row.vendor_name}
-                </td>
+                <td className="px-4 py-2.5 font-mono text-xs text-gray-600 whitespace-nowrap">{row.invoice_number}</td>
+                <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">{row.invoice_date}</td>
+                <td className="px-4 py-2.5 text-gray-700 max-w-[160px] truncate" title={row.vendor_name}>{row.vendor_name}</td>
                 <td className="px-4 py-2.5 whitespace-nowrap">
                   <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${LEDGER_TYPE_COLORS[row.ledger_type]}`}>
                     {row.ledger_type}
@@ -173,8 +169,26 @@ function PreviewTable({
                         ))}
                       </select>
                     </div>
+                  ) : isUnmappedStockItem ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-red-500 text-xs shrink-0">"{itemDesc}" →</span>
+                      <select defaultValue="" onChange={(e) => e.target.value && onMapStockItem(itemDesc, e.target.value)}
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]">
+                        <option value="">Pick stock item…</option>
+                        {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
+                      </select>
+                    </div>
                   ) : row.status === 'Skipped' ? (
                     <span className="text-red-600 font-semibold">{row.tally_ledger_name}</span>
+                  ) : row.ledger_type === 'Inventory' ? (
+                    <div>
+                      <div className="font-medium text-gray-900">{row.tally_ledger_name}</div>
+                      {row.qty != null && (
+                        <div className="text-gray-400 text-xs">
+                          {row.qty} {row.uom} × ₹{row.rate?.toFixed(2)}{row.disc_percent ? ` − ${row.disc_percent}%` : ''}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-gray-900">{row.tally_ledger_name}</span>
                   )}
@@ -224,20 +238,16 @@ export default function XmlGeneratorPage() {
   const [savingMapping, setSavingMapping] = useState(false);
   const [mappingSaved, setMappingSaved] = useState(false);
 
-  // Unresolved items needing accountant review
-  interface UnresolvedSupplier {
-    vendor_name: string;
-    vendor_gstin: string | null;
-    suggested: string;   // suggested tally_ledger_name
-    chosen: string;      // accountant's selection
-  }
-  interface UnresolvedCharge {
-    description: string;
-    suggested: string;
-    chosen: string;
-  }
+  // Voucher mode loaded from DB
+  const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
+
+  // Unresolved items (suppliers, expense charges, stock items)
+  interface UnresolvedSupplier { vendor_name: string; vendor_gstin: string | null; suggested: string; chosen: string; }
+  interface UnresolvedCharge { description: string; suggested: string; chosen: string; }
+  interface UnresolvedStockItem { description: string; suggested: string; chosen: string; }
   const [unresolvedSuppliers, setUnresolvedSuppliers] = useState<UnresolvedSupplier[]>([]);
   const [unresolvedCharges, setUnresolvedCharges] = useState<UnresolvedCharge[]>([]);
+  const [unresolvedStockItems, setUnresolvedStockItems] = useState<UnresolvedStockItem[]>([]);
   const [resolvingMasters, setResolvingMasters] = useState<Record<string, boolean>>({});
   const [resolvedKeys, setResolvedKeys] = useState<Set<string>>(new Set());
 
@@ -260,13 +270,14 @@ export default function XmlGeneratorPage() {
     });
   }, [company, companyLoading, router]);
 
-  // Load purchase ledger config fresh from DB when company changes
+  // Load purchase ledger config + voucher mode fresh from DB when company changes
   useEffect(() => {
     if (!company?.id) return;
     getCompany(company.id).then((fresh) => {
       if (fresh.purchase_ledger_config && fresh.purchase_ledger_config.length > 0) {
         setPurchaseLedgers(fresh.purchase_ledger_config);
       }
+      if (fresh.voucher_mode) setVoucherMode(fresh.voucher_mode);
     }).catch(() => {});
   }, [company?.id]);
 
@@ -283,10 +294,7 @@ export default function XmlGeneratorPage() {
       .finally(() => setLoadingInvoices(false));
   }, [company?.id, selectedFY]);
 
-  useEffect(() => {
-    setPreviewRows(null);
-    setXmlBlob(null);
-  }, [purchaseLedgers]);
+  useEffect(() => { setPreviewRows(null); setXmlBlob(null); }, [purchaseLedgers]);
 
   const selectedCompany = company;
 
@@ -316,57 +324,65 @@ export default function XmlGeneratorPage() {
     setXmlBlob(null);
     setUnresolvedSuppliers([]);
     setUnresolvedCharges([]);
+    setUnresolvedStockItems([]);
     setResolvedKeys(new Set());
     try {
       const masters = await loadMasters(company!.id);
       setCachedMasters(masters);
+      const fresh = await getCompany(company!.id);
+      const mode = fresh.voucher_mode ?? 'accounting_only';
+      setVoucherMode(mode);
       const rows = buildTallyPreview({
-        invoices,
-        ...masters,
+        invoices, ...masters,
         purchaseLedgers: validLedgers,
         tallyCompanyName: company!.tally_company_name!,
+        voucherMode: mode,
+        discountLedgerName: fresh.discount_ledger_name,
       });
       setPreviewRows(rows);
 
-      // Find unresolved suppliers — invoices where supplier not found in master
+      // Detect unresolved suppliers
       const seenVendors = new Set<string>();
-      const newUnresolvedSuppliers: UnresolvedSupplier[] = [];
+      const newSuppliers: UnresolvedSupplier[] = [];
       for (const inv of invoices) {
         const key = (inv.vendor_gstin ?? '') + '|' + inv.vendor_name;
         if (seenVendors.has(key)) continue;
         seenVendors.add(key);
-        const isUnresolved = rows.some(
-          (r) => r.vendor_name === inv.vendor_name && r.ledger_type === 'Party' && r.status === 'Skipped'
-        );
-        if (isUnresolved) {
-          const suggestion = suggestSupplier(masters.suppliers, inv.vendor_gstin ?? null, inv.vendor_name);
-          newUnresolvedSuppliers.push({
-            vendor_name: inv.vendor_name,
-            vendor_gstin: inv.vendor_gstin ?? null,
-            suggested: suggestion?.tally_ledger_name ?? '',
-            chosen: suggestion?.tally_ledger_name ?? '',
-          });
+        if (rows.some((r) => r.vendor_name === inv.vendor_name && r.ledger_type === 'Party' && r.status === 'Skipped')) {
+          const sug = suggestSupplier(masters.suppliers, inv.vendor_gstin ?? null, inv.vendor_name);
+          newSuppliers.push({ vendor_name: inv.vendor_name, vendor_gstin: inv.vendor_gstin ?? null, suggested: sug?.tally_ledger_name ?? '', chosen: sug?.tally_ledger_name ?? '' });
         }
       }
-      setUnresolvedSuppliers(newUnresolvedSuppliers);
+      setUnresolvedSuppliers(newSuppliers);
 
-      // Find unresolved expense charges
+      // Detect unresolved expense charges
       const seenCharges = new Set<string>();
-      const newUnresolvedCharges: UnresolvedCharge[] = [];
+      const newCharges: UnresolvedCharge[] = [];
       for (const row of rows) {
         if (row.ledger_type === 'Expense' && row.warning?.includes('No expense ledger')) {
-          const desc = row.tally_ledger_name.replace(/^— NO LEDGER FOR "|" —$/g, '');
+          const desc = row.tally_ledger_name.replace(/^— NO LEDGER FOR "(.+)" —$/, '$1');
           if (seenCharges.has(desc)) continue;
           seenCharges.add(desc);
-          const suggestion = suggestExpenseLedger(masters.expenseLedgers, desc);
-          newUnresolvedCharges.push({
-            description: desc,
-            suggested: suggestion?.tally_ledger_name ?? '',
-            chosen: suggestion?.tally_ledger_name ?? '',
-          });
+          const sug = suggestExpenseLedger(masters.expenseLedgers, desc);
+          newCharges.push({ description: desc, suggested: sug?.tally_ledger_name ?? '', chosen: sug?.tally_ledger_name ?? '' });
         }
       }
-      setUnresolvedCharges(newUnresolvedCharges);
+      setUnresolvedCharges(newCharges);
+
+      // Detect unresolved stock items (inventory mode only)
+      if (mode === 'inventory') {
+        const seenItems = new Set<string>();
+        const newItems: UnresolvedStockItem[] = [];
+        for (const row of rows) {
+          if (row.ledger_type === 'Inventory' && row.status === 'Skipped' && row.item_description) {
+            if (seenItems.has(row.item_description)) continue;
+            seenItems.add(row.item_description);
+            const sug = suggestStockItem(masters.stockItems, row.item_description);
+            newItems.push({ description: row.item_description, suggested: sug?.tally_item_name ?? '', chosen: sug?.tally_item_name ?? '' });
+          }
+        }
+        setUnresolvedStockItems(newItems);
+      }
 
     } catch (e: unknown) {
       setPreviewError(e instanceof Error ? e.message : 'Preview failed');
@@ -419,11 +435,14 @@ export default function XmlGeneratorPage() {
     setXmlBlob(null);
     try {
       const masters = await loadMasters(company!.id);
+      const fresh = await getCompany(company!.id);
       const output = generateTallyXml({
         invoices,
         ...masters,
         purchaseLedgers: validLedgers,
         tallyCompanyName: selectedCompany!.tally_company_name!,
+        voucherMode: fresh.voucher_mode ?? 'accounting_only',
+        discountLedgerName: fresh.discount_ledger_name,
       });
       const blob = new Blob([output.xml], { type: 'application/xml' });
       setXmlBlob(blob);
@@ -499,6 +518,21 @@ export default function XmlGeneratorPage() {
             </div>
           )}
 
+          {/* Voucher mode */}
+          <div className="border-t border-gray-100 pt-4 mb-4">
+            <p className="text-xs font-semibold text-gray-600 mb-2">Voucher Mode</p>
+            <div className="flex gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="voucherMode" value="accounting_only" checked={voucherMode === 'accounting_only'} onChange={() => setVoucherMode('accounting_only')} className="accent-indigo-600" />
+                <span className="text-sm text-gray-700">Accounting only <span className="text-xs text-gray-400">(HSN-aggregated, no stock items)</span></span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="voucherMode" value="inventory" checked={voucherMode === 'inventory'} onChange={() => setVoucherMode('inventory')} className="accent-indigo-600" />
+                <span className="text-sm text-gray-700">Inventory <span className="text-xs text-gray-400">(item-level qty, rate, discount)</span></span>
+              </label>
+            </div>
+          </div>
+
           {/* Purchase ledger mapping */}
           <div className="border-t border-gray-100 pt-4">
             <p className="text-xs font-semibold text-gray-600 mb-1">Purchase Ledger Mapping</p>
@@ -546,9 +580,7 @@ export default function XmlGeneratorPage() {
               >
                 {savingMapping ? 'Saving…' : 'Save Mapping'}
               </button>
-              {mappingSaved && (
-                <span className="text-xs text-green-600 font-medium">✓ Saved — will load automatically next time</span>
-              )}
+              {mappingSaved && <span className="text-xs text-green-600 font-medium">✓ Saved</span>}
             </div>
           </div>
         </div>
@@ -617,11 +649,11 @@ export default function XmlGeneratorPage() {
                 rows={previewRows}
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 suppliers={cachedMasters?.suppliers ?? []}
+                stockItems={cachedMasters?.stockItems ?? []}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   try {
                     await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description });
-                    // Re-run preview to reflect the new mapping
                     handlePreview();
                   } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
                 }}
@@ -633,24 +665,29 @@ export default function XmlGeneratorPage() {
                     handlePreview();
                   } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
                 }}
+                onMapStockItem={async (description, tallyItemName) => {
+                  if (!company?.id) return;
+                  try {
+                    await addStockItem(company.id, { tally_item_name: tallyItemName, alias_name: description });
+                    handlePreview();
+                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                }}
               />
             </div>
           )}
         </div>
 
-        {/* ── Resolve Unmapped ── */}
-        {(unresolvedSuppliers.length > 0 || unresolvedCharges.length > 0) && (
+        {/* ── Resolve Unmapped Items ── */}
+        {(unresolvedSuppliers.length > 0 || unresolvedCharges.length > 0 || unresolvedStockItems.length > 0) && (
           <div className="bg-white border border-amber-200 rounded-xl p-6 mb-5">
             <div className="flex items-center gap-2 mb-4">
               <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
               <h2 className="text-sm font-semibold text-gray-800">Resolve Unmapped Items</h2>
-              <span className="text-xs text-gray-500">Confirm or fix the mapping, then save to master — these won't need to be resolved again.</span>
+              <span className="text-xs text-gray-500">Confirm or fix, then save to master — won't need to resolve again.</span>
             </div>
-
             <div className="space-y-4">
-              {/* Unresolved suppliers */}
               {unresolvedSuppliers.map((us, i) => {
                 const key = `supplier:${us.vendor_name}`;
                 const saved = resolvedKeys.has(key);
@@ -664,44 +701,24 @@ export default function XmlGeneratorPage() {
                       </div>
                       <div className="flex items-center gap-1 text-gray-400 pt-4">→</div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Tally Ledger Name (save to Supplier Master)</p>
-                        <input
-                          value={us.chosen}
-                          onChange={(e) => setUnresolvedSuppliers((prev) => prev.map((s, j) => j === i ? { ...s, chosen: e.target.value } : s))}
-                          placeholder="Type exact Tally ledger name..."
-                          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Tally Ledger Name</p>
+                        <input value={us.chosen} onChange={(e) => setUnresolvedSuppliers((p) => p.map((s, j) => j === i ? { ...s, chosen: e.target.value } : s))}
+                          placeholder="Exact Tally ledger name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                         {us.suggested && us.suggested !== us.chosen && (
-                          <button onClick={() => setUnresolvedSuppliers((prev) => prev.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))}
-                            className="text-xs text-indigo-600 mt-1 hover:underline">
-                            Use suggestion: "{us.suggested}"
-                          </button>
+                          <button onClick={() => setUnresolvedSuppliers((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{us.suggested}"</button>
                         )}
                       </div>
                       <div className="pt-4">
-                        {saved ? (
-                          <span className="text-xs text-green-600 font-semibold">✓ Saved</span>
-                        ) : (
-                          <button
-                            disabled={!us.chosen.trim() || resolvingMasters[key]}
-                            onClick={async () => {
-                              if (!company?.id || !us.chosen.trim()) return;
-                              setResolvingMasters((p) => ({ ...p, [key]: true }));
-                              try {
-                                await addSupplier(company.id, {
-                                  vendor_name: us.vendor_name,
-                                  vendor_gstin: us.vendor_gstin ?? '',
-                                  tally_ledger_name: us.chosen.trim(),
-                                });
-                                setResolvedKeys((p) => new Set(p).add(key));
-                              } catch (e: unknown) {
-                                alert(e instanceof Error ? e.message : 'Failed to save');
-                              } finally {
-                                setResolvingMasters((p) => ({ ...p, [key]: false }));
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors"
-                          >
+                        {saved ? <span className="text-xs text-green-600 font-semibold">✓ Saved</span> : (
+                          <button disabled={!us.chosen.trim() || resolvingMasters[key]} onClick={async () => {
+                            if (!company?.id || !us.chosen.trim()) return;
+                            setResolvingMasters((p) => ({ ...p, [key]: true }));
+                            try {
+                              await addSupplier(company.id, { vendor_name: us.vendor_name, vendor_gstin: us.vendor_gstin ?? '', tally_ledger_name: us.chosen.trim() });
+                              setResolvedKeys((p) => new Set(p).add(key));
+                            } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                            finally { setResolvingMasters((p) => ({ ...p, [key]: false })); }
+                          }} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
                             {resolvingMasters[key] ? 'Saving…' : 'Save to Master'}
                           </button>
                         )}
@@ -711,7 +728,6 @@ export default function XmlGeneratorPage() {
                 );
               })}
 
-              {/* Unresolved expense charges */}
               {unresolvedCharges.map((uc, i) => {
                 const key = `charge:${uc.description}`;
                 const saved = resolvedKeys.has(key);
@@ -724,43 +740,63 @@ export default function XmlGeneratorPage() {
                       </div>
                       <div className="flex items-center gap-1 text-gray-400 pt-4">→</div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Tally Expense Ledger (save to Expense Master)</p>
-                        <input
-                          value={uc.chosen}
-                          onChange={(e) => setUnresolvedCharges((prev) => prev.map((c, j) => j === i ? { ...c, chosen: e.target.value } : c))}
-                          placeholder="Type exact Tally ledger name..."
-                          className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Tally Expense Ledger</p>
+                        <input value={uc.chosen} onChange={(e) => setUnresolvedCharges((p) => p.map((c, j) => j === i ? { ...c, chosen: e.target.value } : c))}
+                          placeholder="Exact Tally ledger name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                         {uc.suggested && uc.suggested !== uc.chosen && (
-                          <button onClick={() => setUnresolvedCharges((prev) => prev.map((c, j) => j === i ? { ...c, chosen: uc.suggested } : c))}
-                            className="text-xs text-indigo-600 mt-1 hover:underline">
-                            Use suggestion: "{uc.suggested}"
-                          </button>
+                          <button onClick={() => setUnresolvedCharges((p) => p.map((c, j) => j === i ? { ...c, chosen: uc.suggested } : c))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{uc.suggested}"</button>
                         )}
                       </div>
                       <div className="pt-4">
-                        {saved ? (
-                          <span className="text-xs text-green-600 font-semibold">✓ Saved</span>
-                        ) : (
-                          <button
-                            disabled={!uc.chosen.trim() || resolvingMasters[key]}
-                            onClick={async () => {
-                              if (!company?.id || !uc.chosen.trim()) return;
-                              setResolvingMasters((p) => ({ ...p, [key]: true }));
-                              try {
-                                await addExpenseLedger(company.id, {
-                                  tally_ledger_name: uc.chosen.trim(),
-                                  expense_keyword: uc.description,
-                                });
-                                setResolvedKeys((p) => new Set(p).add(key));
-                              } catch (e: unknown) {
-                                alert(e instanceof Error ? e.message : 'Failed to save');
-                              } finally {
-                                setResolvingMasters((p) => ({ ...p, [key]: false }));
-                              }
-                            }}
-                            className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors"
-                          >
+                        {saved ? <span className="text-xs text-green-600 font-semibold">✓ Saved</span> : (
+                          <button disabled={!uc.chosen.trim() || resolvingMasters[key]} onClick={async () => {
+                            if (!company?.id || !uc.chosen.trim()) return;
+                            setResolvingMasters((p) => ({ ...p, [key]: true }));
+                            try {
+                              await addExpenseLedger(company.id, { tally_ledger_name: uc.chosen.trim(), expense_keyword: uc.description });
+                              setResolvedKeys((p) => new Set(p).add(key));
+                            } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                            finally { setResolvingMasters((p) => ({ ...p, [key]: false })); }
+                          }} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
+                            {resolvingMasters[key] ? 'Saving…' : 'Save to Master'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {unresolvedStockItems.map((us, i) => {
+                const key = `stockitem:${us.description}`;
+                const saved = resolvedKeys.has(key);
+                return (
+                  <div key={i} className={`rounded-lg border p-4 ${saved ? 'border-green-200 bg-green-50' : 'border-amber-100 bg-amber-50'}`}>
+                    <div className="flex items-start gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Stock item not mapped</p>
+                        <p className="text-sm font-medium text-gray-900">"{us.description}"</p>
+                      </div>
+                      <div className="flex items-center gap-1 text-gray-400 pt-4">→</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Tally Stock Item Name</p>
+                        <input value={us.chosen} onChange={(e) => setUnresolvedStockItems((p) => p.map((s, j) => j === i ? { ...s, chosen: e.target.value } : s))}
+                          placeholder="Exact Tally stock item name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                        {us.suggested && us.suggested !== us.chosen && (
+                          <button onClick={() => setUnresolvedStockItems((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{us.suggested}"</button>
+                        )}
+                      </div>
+                      <div className="pt-4">
+                        {saved ? <span className="text-xs text-green-600 font-semibold">✓ Saved</span> : (
+                          <button disabled={!us.chosen.trim() || resolvingMasters[key]} onClick={async () => {
+                            if (!company?.id || !us.chosen.trim()) return;
+                            setResolvingMasters((p) => ({ ...p, [key]: true }));
+                            try {
+                              await addStockItem(company.id, { tally_item_name: us.chosen.trim(), alias_name: us.description });
+                              setResolvedKeys((p) => new Set(p).add(key));
+                            } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                            finally { setResolvingMasters((p) => ({ ...p, [key]: false })); }
+                          }} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors">
                             {resolvingMasters[key] ? 'Saving…' : 'Save to Master'}
                           </button>
                         )}
@@ -770,12 +806,7 @@ export default function XmlGeneratorPage() {
                 );
               })}
             </div>
-
-            {(unresolvedSuppliers.length > 0 || unresolvedCharges.length > 0) && (
-              <p className="text-xs text-gray-400 mt-4">
-                After saving all mappings above, click <strong>Preview</strong> again to see the updated assignments.
-              </p>
-            )}
+            <p className="text-xs text-gray-400 mt-4">After saving all mappings, click <strong>Preview</strong> again to see updated assignments.</p>
           </div>
         )}
 
