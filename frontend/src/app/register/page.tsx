@@ -506,7 +506,7 @@ export default function PurchaseRegisterPage() {
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">IGST</th>
                       <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">ITC</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
+                      <th className="px-4 py-3 w-10" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -520,8 +520,13 @@ export default function PurchaseRegisterPage() {
                       return (
                         <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-gray-400 text-xs tabular-nums">{idx + 1}</td>
-                          <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
-                            {inv.invoice_number || <span className="text-gray-400">—</span>}
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <button
+                              onClick={() => setDetailInvoice(inv)}
+                              className="font-medium text-indigo-600 hover:text-indigo-800 hover:underline text-left"
+                            >
+                              {inv.invoice_number || <span className="text-gray-400">—</span>}
+                            </button>
                           </td>
                           <td className="px-4 py-3 text-gray-700 max-w-[160px] truncate" title={inv.vendor_name}>
                             {inv.vendor_name}
@@ -557,31 +562,23 @@ export default function PurchaseRegisterPage() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => setDetailInvoice(inv)}
-                                className="text-xs text-indigo-600 hover:text-indigo-800 font-medium border border-indigo-200 hover:border-indigo-400 rounded px-2 py-1 transition-colors whitespace-nowrap"
-                              >
-                                View Details
-                              </button>
-                              <button
-                                onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
-                                disabled={deletingId === inv.id}
-                                title="Delete this invoice"
-                                className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
-                              >
-                                {deletingId === inv.id ? (
-                                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                                  </svg>
-                                ) : (
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                )}
-                              </button>
-                            </div>
+                            <button
+                              onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
+                              disabled={deletingId === inv.id}
+                              title="Delete this invoice"
+                              className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
+                            >
+                              {deletingId === inv.id ? (
+                                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              )}
+                            </button>
                           </td>
                         </tr>
                       );
