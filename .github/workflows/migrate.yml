@@ -14,7 +14,7 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 1.228.0
 
       - name: Run migrations
         env:
