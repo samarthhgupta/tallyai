@@ -22,7 +22,7 @@ jobs:
             SQL=$(cat "$file")
             HTTP_CODE=$(curl -s -o /tmp/migration_response.json -w "%{http_code}" \
               -X POST \
-              "https://api.supabase.com/v1/projects/idstdsuvxqzoankfgde/database/query" \
+              "https://api.supabase.com/v1/projects/idstdsuvxqzoankkfgde/database/query" \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$(python3 -c 'import json,sys; print(json.dumps({"query": sys.stdin.read()}))' <<< "$SQL")")
