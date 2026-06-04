@@ -14,11 +14,10 @@ jobs:
 
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 1.228.0
 
       - name: Run migrations
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          supabase link --project-ref idstdsuvxqzoankfgde
-          supabase db push
+          supabase db push --project-ref idstdsuvxqzoankfgde
