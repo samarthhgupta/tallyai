@@ -58,3 +58,4 @@ ON CONFLICT (key) DO UPDATE
   SET content     = EXCLUDED.content,
       description = EXCLUDED.description,
       updated_at  = NOW();
+
