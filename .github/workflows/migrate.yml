@@ -12,87 +12,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run migrations via Management API
+      - name: Write migration script
+        run: |
+          cat > /tmp/run_migrations.py << 'SCRIPTEOF'
+import os, json, sys, urllib.request, urllib.error
+from pathlib import Path
+
+TOKEN = os.environ["SUPABASE_ACCESS_TOKEN"]
+URL = "https://api.supabase.com/v1/projects/idstdsuvxqzoankkfgde/database/query"
+
+def run_sql(sql):
+    data = json.dumps({"query": sql}).encode("utf-8")
+    req = urllib.request.Request(URL, data=data, method="POST")
+    req.add_header("Authorization", "Bearer " + TOKEN)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "TallyAI-Migrations/1.0")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return 200, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        print(f"    HTTP {e.code}: {body}")
+        return e.code, body
+    except Exception as e:
+        print(f"    Exception: {e}")
+        return -1, str(e)
+
+# Step 1: create tracking table
+print("Creating tracking table...")
+code, body = run_sql(
+    "CREATE TABLE IF NOT EXISTS _migrations "
+    "(name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
+)
+if code != 200:
+    print(f"FATAL: could not create tracking table (HTTP {code}): {body}")
+    sys.exit(1)
+print("  OK")
+
+# Step 2: fetch applied
+print("Fetching applied migrations...")
+code, body = run_sql("SELECT name FROM _migrations ORDER BY name;")
+if code != 200:
+    print(f"FATAL: could not query tracking table (HTTP {code}): {body}")
+    sys.exit(1)
+applied = {row["name"] for row in json.loads(body)}
+print(f"  Already applied ({len(applied)}): {sorted(applied)}")
+
+# Step 3: run pending
+files = sorted(Path("supabase/migrations").glob("*.sql"))
+failed = False
+for f in files:
+    if f.name in applied:
+        print(f"  skip  {f.name}")
+        continue
+    print(f"  run   {f.name} ...")
+    sql = f.read_text(encoding="utf-8")
+    code, body = run_sql(sql)
+    if code != 200:
+        print(f"  FAIL  {f.name}")
+        failed = True
+        break
+    name_safe = f.name.replace("'", "''")
+    code2, body2 = run_sql(
+        f"INSERT INTO _migrations (name) VALUES ('{name_safe}') ON CONFLICT DO NOTHING;"
+    )
+    if code2 != 200:
+        print(f"  FAIL  recording {f.name}: {body2}")
+        failed = True
+        break
+    print(f"  done  {f.name}")
+
+if failed:
+    sys.exit(1)
+print("All migrations applied successfully.")
+SCRIPTEOF
+
+      - name: Run migrations
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: |
-          python3 << 'PYEOF'
-          import os, json, urllib.request, urllib.error, sys
-          from pathlib import Path
-
-          TOKEN = os.environ["SUPABASE_ACCESS_TOKEN"]
-          PROJECT_REF = "idstdsuvxqzoankkfgde"
-          BASE_URL = f"https://api.supabase.com/v1/projects/{PROJECT_REF}/database/query"
-
-          def run_sql(sql):
-              body = json.dumps({"query": sql}).encode()
-              req = urllib.request.Request(
-                  BASE_URL,
-                  data=body,
-                  headers={
-                      "Authorization": f"Bearer {TOKEN}",
-                      "Content-Type": "application/json",
-                  },
-                  method="POST",
-              )
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      return 200, r.read().decode()
-              except urllib.error.HTTPError as e:
-                  return e.code, e.read().decode()
-
-          # Ensure tracking table exists
-          code, body = run_sql("""
-              CREATE TABLE IF NOT EXISTS _migrations (
-                  name TEXT PRIMARY KEY,
-                  applied_at TIMESTAMPTZ DEFAULT NOW()
-              );
-          """)
-          if code != 200:
-              print(f"Failed to create tracking table: {body}")
-              sys.exit(1)
-
-          # Fetch already-applied migrations
-          code, body = run_sql("SELECT name FROM _migrations ORDER BY name;")
-          if code != 200:
-              print(f"Failed to fetch applied migrations: {body}")
-              sys.exit(1)
-
-          applied = set()
-          for row in json.loads(body):
-              applied.add(row["name"])
-          print(f"Already applied: {sorted(applied)}")
-
-          # Run pending migrations in order
-          migration_dir = Path("supabase/migrations")
-          files = sorted(migration_dir.glob("*.sql"))
-          any_failed = False
-
-          for f in files:
-              name = f.name
-              if name in applied:
-                  print(f"  ✓ skip  {name}")
-                  continue
-
-              print(f"  ▶ running {name} ...")
-              sql = f.read_text(encoding="utf-8")
-              code, body = run_sql(sql)
-              if code != 200:
-                  print(f"  ✗ FAILED {name}: {body}")
-                  any_failed = True
-                  break
-
-              # Record as applied
-              safe_name = name.replace("'", "''")
-              code2, body2 = run_sql(f"INSERT INTO _migrations (name) VALUES ('{safe_name}') ON CONFLICT DO NOTHING;")
-              if code2 != 200:
-                  print(f"  ✗ Could not record {name}: {body2}")
-                  any_failed = True
-                  break
-
-              print(f"  ✓ done   {name}")
-
-          if any_failed:
-              sys.exit(1)
-          print("All migrations applied successfully.")
-          PYEOF
+        run: python3 /tmp/run_migrations.py
