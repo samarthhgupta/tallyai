@@ -12,12 +12,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: supabase/setup-cli@v1
-        with:
-          version: 1.228.0
-
-      - name: Run migrations
+      - name: Run migrations via Management API
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          supabase db push --project-ref idstdsuvxqzoankfgde
+          set -e
+          for file in $(ls supabase/migrations/*.sql | sort); do
+            echo "▶ Running: $file"
+            SQL=$(cat "$file")
+            HTTP_CODE=$(curl -s -o /tmp/migration_response.json -w "%{http_code}" \
+              -X POST \
+              "https://api.supabase.com/v1/projects/idstdsuvxqzoankfgde/database/query" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(python3 -c 'import json,sys; print(json.dumps({"query": sys.stdin.read()}))' <<< "$SQL")")
+            BODY=$(cat /tmp/migration_response.json)
+            echo "  Status: $HTTP_CODE"
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "  Error: $BODY"
+              exit 1
+            fi
+            echo "  ✓ Done"
+          done
+          echo "All migrations applied successfully."
