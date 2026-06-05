@@ -243,12 +243,17 @@ export default function UploadPage() {
   const addFiles = useCallback((incoming: FileList | File[]) => {
     const valid = Array.from(incoming).filter(isValidFile);
     if (!valid.length) return;
+    const oversized = valid.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    if (oversized.length > 0) {
+      setExtractError(`File too large: ${oversized.map((f) => `${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join(', ')}. Maximum is ${MAX_FILE_SIZE_MB} MB per file. Split large PDFs into smaller parts before uploading.`);
+      return;
+    }
     setFiles((prev) => {
       const names = new Set(prev.map((f) => f.name));
       return [...prev, ...valid.filter((f) => !names.has(f.name))];
     });
     setExtractError('');
-  }, []);
+  }, [MAX_FILE_SIZE_MB]);
 
   const removeFile = (name: string) => setFiles((prev) => prev.filter((f) => f.name !== name));
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setDragging(true); }, []);
@@ -575,7 +580,8 @@ export default function UploadPage() {
               <p className="text-sm text-gray-600">
                 <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
               </p>
-              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported · Max 15 MB per file</p>
+              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
+              <p className="text-xs font-medium text-amber-600 mt-1.5">⚠ Max 15 MB per file — split larger PDFs before uploading</p>
             </div>
 
             {/* File list */}
