@@ -224,6 +224,19 @@ export function computeReadiness(
     readiness = 'critical';
   }
 
+  // Buyer name mismatch is critical regardless of GST — wrong company invoice must never be accepted
+  if (companyName && inv.buyer_name?.trim()) {
+    const buyerLower = inv.buyer_name.toLowerCase();
+    const companyLower = companyName.toLowerCase();
+    // Check if any 5+ char word from company name appears in buyer name
+    const companyWords = companyLower.split(/\s+/).filter((w) => w.length >= 5);
+    const matches = companyWords.length === 0 || companyWords.some((w) => buyerLower.includes(w));
+    if (!matches) {
+      flags.push(`Wrong company: buyer on invoice is "${inv.buyer_name}" but selected company is "${companyName}"`);
+      readiness = 'critical';
+    }
+  }
+
   // ── Warnings — informational, never block acceptance ──
   if (readiness !== 'critical') {
     if (inv.confidence < 0.70) {
