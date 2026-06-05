@@ -1029,7 +1029,7 @@ async def _extract_invoices_from_file(
                 chunk_label = f" (chunk {i+1}/{len(chunks)} of {upload.filename})"
                 return i, _call_claude_extract(client, chunk, system_prompt, chunk_label)
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(chunks)) as pool:
                 futures = [
                     loop.run_in_executor(pool, call_chunk, (i, chunk))
