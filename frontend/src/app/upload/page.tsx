@@ -12,7 +12,7 @@ import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
 import AppSidebar from '@/components/AppSidebar';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
-import { currentFY } from '@/lib/fyPeriod';
+import { currentFY, invoiceFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -24,6 +24,7 @@ interface QueueItem {
   readiness: 'ready' | 'warning' | 'critical';
   readinessFlags: string[];
   itcWarning: boolean;   // true if ITC concern present
+  fyMismatch: boolean;   // true if invoice FY ≠ selected FY
 }
 
 interface ITCItem {
@@ -298,6 +299,7 @@ export default function UploadPage() {
       data.file_results.forEach((fr) => {
         fr.invoices.forEach((inv, idx) => {
           const r = computeReadiness(inv, companyGstin, companyName);
+          const invFY = invoiceFY(inv.invoice_date ?? '');
           items.push({
             key: `${fr.filename}:${idx}`,
             inv,
@@ -305,6 +307,7 @@ export default function UploadPage() {
             readiness: r.readiness,
             readinessFlags: r.flags,
             itcWarning: r.itcStatus === 'potentially_ineligible',
+            fyMismatch: !!invFY && invFY !== financialYear,
           });
         });
       });
@@ -318,8 +321,21 @@ export default function UploadPage() {
     }
   };
 
+  // ── Revalidate FY mismatch when selected FY changes ──
+  useEffect(() => {
+    if (!queue.length) return;
+    setQueue((prev) =>
+      prev.map((q) => {
+        const inv = invoiceOverrides.get(q.key) ?? q.inv;
+        const invFY = invoiceFY(inv.invoice_date ?? '');
+        return { ...q, fyMismatch: !!invFY && invFY !== financialYear };
+      })
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [financialYear]);
+
   // ── Selection ──
-  const selectableKeys = queue.filter((q) => q.readiness !== 'critical').map((q) => q.key);
+  const selectableKeys = queue.filter((q) => q.readiness !== 'critical' && !q.fyMismatch).map((q) => q.key);
 
   const toggleSelect = (key: string) => {
     setSelected((prev) => {
@@ -378,6 +394,20 @@ export default function UploadPage() {
 
     if (!selectedCompanyId || !financialYear) {
       setActionError('No company or financial year selected.');
+      setActionLoading(false);
+      return;
+    }
+
+    // Backend enforcement: block any FY mismatch invoice from entering Purchase Register
+    const mismatchedKeys = keys.filter((key) => {
+      const q = queue.find((q) => q.key === key);
+      if (!q) return false;
+      const inv = invoiceOverrides.get(key) ?? q.inv;
+      const invFY = invoiceFY(inv.invoice_date ?? '');
+      return !!invFY && invFY !== financialYear;
+    });
+    if (mismatchedKeys.length > 0) {
+      setActionError(`Cannot accept: ${mismatchedKeys.length} invoice(s) have Financial Year mismatches. Resolve them before accepting.`);
       setActionLoading(false);
       return;
     }
@@ -683,26 +713,38 @@ export default function UploadPage() {
                   const inv = invoiceOverrides.get(item.key) ?? item.inv;
                   const isSelected = selected.has(item.key);
                   const isCritical = item.readiness === 'critical';
+                  const isFYMismatch = item.fyMismatch;
                   const historyMatch = findDuplicate(inv.invoice_number, inv.vendor_name);
 
                   return (
-                    <div key={item.key} className={`flex gap-3 items-start ${isCritical ? 'opacity-80' : ''}`}>
+                    <div key={item.key} className={`flex gap-3 items-start ${isCritical || isFYMismatch ? 'opacity-80' : ''}`}>
                       {/* Checkbox column */}
                       <div className="pt-4 pl-1 shrink-0">
                         <input
                           type="checkbox"
                           checked={isSelected}
-                          disabled={isCritical}
-                          onChange={() => !isCritical && toggleSelect(item.key)}
-                          title={isCritical ? 'Resolve critical issues before accepting' : undefined}
+                          disabled={isCritical || isFYMismatch}
+                          onChange={() => !isCritical && !isFYMismatch && toggleSelect(item.key)}
+                          title={isFYMismatch ? 'Financial Year mismatch — change FY or correct invoice date' : isCritical ? 'Resolve critical issues before accepting' : undefined}
                           className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
                         />
                       </div>
 
                       {/* Card + readiness badge */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1.5">
+                        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                           <ReadinessBadge readiness={item.readiness} flags={item.readinessFlags} />
+                          {isFYMismatch && (() => {
+                            const invFY = invoiceFY(inv.invoice_date ?? '');
+                            return (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                </svg>
+                                Financial Year Mismatch — Invoice belongs to {invFY}, current selection is {financialYear}. Change FY or correct the invoice date.
+                              </span>
+                            );
+                          })()}
                           {item.itcWarning && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -711,7 +753,7 @@ export default function UploadPage() {
                               ITC Risk
                             </span>
                           )}
-                          {isCritical && (
+                          {isCritical && !isFYMismatch && (
                             <span className="text-xs text-red-600 font-medium">Edit required before accepting</span>
                           )}
                         </div>
@@ -727,13 +769,14 @@ export default function UploadPage() {
                           }}
                           onSave={(updated) => {
                             setInvoiceOverrides((prev) => new Map(prev).set(item.key, updated));
-                            // Recompute readiness with updated invoice
+                            // Recompute readiness + FY mismatch with updated invoice
                             const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
                             const r = computeReadiness(updated, companyGstin, selectedCompany?.name ?? null);
+                            const invFY = invoiceFY(updated.invoice_date ?? '');
                             setQueue((prev) =>
                               prev.map((q) =>
                                 q.key === item.key
-                                  ? { ...q, readiness: r.readiness, readinessFlags: r.flags, itcWarning: r.itcStatus === 'potentially_ineligible' }
+                                  ? { ...q, readiness: r.readiness, readinessFlags: r.flags, itcWarning: r.itcStatus === 'potentially_ineligible', fyMismatch: !!invFY && invFY !== financialYear }
                                   : q
                               )
                             );

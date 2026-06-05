@@ -121,6 +121,33 @@ export function saveFYPeriod(p: FYPeriod): void {
   localStorage.setItem(KEY, JSON.stringify(p));
 }
 
+// ─── Derive FY string from an invoice date ────────────────────────────────────
+
+export function invoiceFY(dateStr: string): string {
+  let year: number;
+  let month: number; // 0-indexed
+  try {
+    if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+      year = parseInt(dateStr.slice(0, 4));
+      month = parseInt(dateStr.slice(5, 7)) - 1;
+    } else if (/^\d{2}\/\d{2}\/\d{4}/.test(dateStr)) {
+      const p = dateStr.split('/');
+      year = parseInt(p[2]);
+      month = parseInt(p[1]) - 1;
+    } else if (/^\d{8}$/.test(dateStr)) {
+      year = parseInt(dateStr.slice(0, 4));
+      month = parseInt(dateStr.slice(4, 6)) - 1;
+    } else {
+      return '';
+    }
+  } catch {
+    return '';
+  }
+  // Indian FY: Apr(3)–Mar(2). If month < April, FY started previous year.
+  const fyStart = month >= 3 ? year : year - 1;
+  return `FY ${fyStart}-${String(fyStart + 1).slice(2)}`;
+}
+
 // ─── Derive FYPeriod from invoice date ────────────────────────────────────────
 // Used when saving invoices — month comes from invoice date, not user selection.
 
