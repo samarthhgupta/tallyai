@@ -1014,13 +1014,31 @@ async def _extract_invoices_from_file(
 
         if _is_scanned_pdf(file_bytes):
             chunks = _pdf_scanned_images_chunked(file_bytes)
-            logger.info("Scanned PDF %s: %d pages → %d chunks", upload.filename, sum(len(c) for c in chunks), len(chunks))
+            logger.info("Scanned PDF %s: %d pages → %d chunks (parallel)", upload.filename, sum(len(c) for c in chunks), len(chunks))
             system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
             all_invoices: list[dict] = []
             first_error: Optional[str] = None
-            for i, chunk in enumerate(chunks):
+
+            # Run all chunks in parallel — reduces multi-page scanned PDFs from
+            # (N_chunks × Claude_latency) to (1 × Claude_latency), preventing Railway timeout.
+            import asyncio
+            import concurrent.futures
+
+            def call_chunk(args):
+                i, chunk = args
                 chunk_label = f" (chunk {i+1}/{len(chunks)} of {upload.filename})"
-                invs, err = _call_claude_extract(client, chunk, system_prompt, chunk_label)
+                return i, _call_claude_extract(client, chunk, system_prompt, chunk_label)
+
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                futures = [
+                    loop.run_in_executor(pool, call_chunk, (i, chunk))
+                    for i, chunk in enumerate(chunks)
+                ]
+                results = await asyncio.gather(*futures)
+
+            # Reassemble in original page order
+            for i, (invs, err) in sorted(results, key=lambda x: x[0]):
                 if err and not invs:
                     if first_error is None:
                         first_error = err
