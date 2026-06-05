@@ -265,8 +265,16 @@ export default function UploadPage() {
     b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
   // ── Extraction ──
+  const MAX_FILE_SIZE_MB = 15;
   const handleExtract = async () => {
     if (!files.length) return;
+
+    const oversized = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    if (oversized.length > 0) {
+      setExtractError(`File too large: ${oversized.map((f) => `${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join(', ')}. Maximum size is ${MAX_FILE_SIZE_MB} MB per file. Split the PDF into smaller parts and upload separately.`);
+      return;
+    }
+
     setExtracting(true);
     setExtractError('');
     setResult(null);
@@ -567,7 +575,7 @@ export default function UploadPage() {
               <p className="text-sm text-gray-600">
                 <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
               </p>
-              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
+              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported · Max 15 MB per file</p>
             </div>
 
             {/* File list */}
