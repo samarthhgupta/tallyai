@@ -35,6 +35,8 @@ export interface ExtraCharge {
   description: string;  // "Postage", "Freight", "Delivery Charges", etc.
   amount: number;
   gst_percent: number;  // usually 0
+  sac?: string;         // SAC code for services (e.g. 9965 for freight)
+  hsn?: string;         // HSN code if applicable
 }
 
 export interface ExtractedInvoice {

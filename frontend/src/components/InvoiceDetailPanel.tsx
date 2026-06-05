@@ -205,6 +205,7 @@ export default function InvoiceDetailPanel({
   // Section open/closed state
   const [secHeader, setSecHeader] = useState(true);
   const [secLines, setSecLines] = useState(true);
+  const [secCharges, setSecCharges] = useState(true);
   const [secHsn, setSecHsn] = useState(true);
   const [secRecon, setSecRecon] = useState(true);
   const [secAudit, setSecAudit] = useState(false);
@@ -498,32 +499,49 @@ export default function InvoiceDetailPanel({
                 </div>
               </Section>
 
-              {/* Additional Charges (view) */}
-              {charges.length > 0 && (
-                <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-                    <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Additional Charges</span>
-                  </div>
+              {/* 3. Additional Charges (view) — always shown */}
+              <Section
+                title="Additional Charges"
+                badge={charges.length > 0 ? `${charges.length} charge${charges.length !== 1 ? 's' : ''}` : undefined}
+                open={secCharges}
+                onToggle={() => setSecCharges(v => !v)}
+              >
+                {charges.length === 0 ? (
+                  <div className="px-4 py-4 text-sm text-gray-400 italic">No additional charges on this invoice.</div>
+                ) : (
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-100">
                       <tr>
                         <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Description</th>
+                        <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">SAC / HSN</th>
                         <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">GST%</th>
                         <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">Amount</th>
+                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">GST</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {charges.map((c, i) => (
-                        <tr key={i}>
-                          <td className="px-3 py-2 text-sm text-gray-700">{c.description}</td>
+                        <tr key={i} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-sm text-gray-700">{c.description || '—'}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-gray-500">{c.sac ?? c.hsn ?? '—'}</td>
                           <td className="px-3 py-2 text-sm text-right text-gray-600">{c.gst_percent > 0 ? `${c.gst_percent}%` : '—'}</td>
                           <td className="px-3 py-2 text-sm text-right tabular-nums font-medium text-gray-800">{formatINR(c.amount)}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums text-gray-600">
+                            {c.gst_percent > 0 ? formatINR(c.amount * c.gst_percent / 100) : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+                      <tr>
+                        <td colSpan={3} className="px-3 py-2 text-sm font-semibold text-gray-600 text-right">Charges Total</td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(chargesTotal)}</td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{chargesGST > 0 ? formatINR(chargesGST) : '—'}</td>
+                      </tr>
+                    </tfoot>
                   </table>
-                </div>
-              )}
+                )}
+              </Section>
 
               {/* HSN Tax Summary */}
               {hsnRows.length > 0 && (
