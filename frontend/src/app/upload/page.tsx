@@ -237,6 +237,7 @@ export default function UploadPage() {
 
   // ── File handling ──
   const ACCEPT = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
+  const MAX_FILE_SIZE_MB = 15;
   const isValidFile = (f: File) =>
     ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'].some((e) => f.name.toLowerCase().endsWith(e));
 
@@ -270,7 +271,6 @@ export default function UploadPage() {
     b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
   // ── Extraction ──
-  const MAX_FILE_SIZE_MB = 15;
   const handleExtract = async () => {
     if (!files.length) return;
 
