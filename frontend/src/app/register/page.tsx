@@ -44,7 +44,9 @@ function ITCBadge({
   onMarkEligible?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -54,6 +56,14 @@ function ITCBadge({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPopoverPos({ top: rect.bottom + 6, left: rect.left });
+    }
+    setOpen(v => !v);
+  };
 
   if (!status || status === 'not_applicable') {
     return <span className="text-gray-300 text-xs">—</span>;
@@ -73,9 +83,10 @@ function ITCBadge({
   if (status === 'reviewed_eligible') {
     const audit = parseReviewAudit(remark);
     return (
-      <div ref={ref} className="relative">
+      <div ref={ref}>
         <button
-          onClick={() => setOpen(v => !v)}
+          ref={btnRef}
+          onClick={handleOpen}
           className="inline-flex items-center gap-1 text-xs text-indigo-700 font-medium hover:text-indigo-900"
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -87,8 +98,11 @@ function ITCBadge({
             <path strokeLinecap="round" strokeWidth="2" d="M12 8v4m0 4h.01" />
           </svg>
         </button>
-        {open && (
-          <div className="absolute top-full left-0 mt-1 z-40 w-64 bg-white border border-gray-200 rounded-xl shadow-xl p-3">
+        {open && popoverPos && (
+          <div
+            className="fixed z-[200] w-64 bg-white border border-gray-200 rounded-xl shadow-xl p-3"
+            style={{ top: popoverPos.top, left: popoverPos.left }}
+          >
             <p className="text-xs font-semibold text-indigo-700 mb-1.5">✓ Reviewed & Approved</p>
             {audit ? (
               <div className="space-y-1 text-xs text-gray-600">
@@ -116,9 +130,10 @@ function ITCBadge({
   const displayRemark = remark && !parseReviewAudit(remark) ? remark : null;
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref}>
       <button
-        onClick={() => setOpen(v => !v)}
+        ref={btnRef}
+        onClick={handleOpen}
         className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium hover:text-amber-900"
       >
         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -130,8 +145,11 @@ function ITCBadge({
           <path strokeLinecap="round" strokeWidth="2" d="M12 8v4m0 4h.01" />
         </svg>
       </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 z-40 w-64 bg-white border border-amber-200 rounded-xl shadow-xl p-3">
+      {open && popoverPos && (
+        <div
+          className="fixed z-[200] w-64 bg-white border border-amber-200 rounded-xl shadow-xl p-3"
+          style={{ top: popoverPos.top, left: popoverPos.left }}
+        >
           <p className="text-xs font-semibold text-amber-700 mb-1.5">⚠ ITC Risk Reason</p>
           {displayRemark ? (
             <p className="text-xs text-gray-700 mb-2">{displayRemark}</p>
