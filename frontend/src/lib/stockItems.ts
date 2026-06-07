@@ -58,22 +58,36 @@ export async function addStockItem(
   },
 ): Promise<StockItemMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;
+  const row = {
+    company_id: companyId,
+    created_by: user?.id,
+    tally_item_name: params.tally_item_name, // NO trim
+    alias_name: params.alias_name ?? null,
+    unit: params.unit ?? null,
+    hsn_code: params.hsn_code ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: inserted, error: insertErr } = await db()
+    .from('stock_item_masters').insert(row).select().single();
+
+  if (!insertErr) return inserted as StockItemMaster;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((insertErr as any).code !== '23505') throw insertErr;
+
+  const { data: existing } = await db()
+    .from('stock_item_masters').select('id')
+    .eq('company_id', companyId).eq('tally_item_name', params.tally_item_name).single();
+
+  if (existing?.id) {
+    await db().from('stock_item_masters')
+      .update({ alias_name: row.alias_name, unit: row.unit, hsn_code: row.hsn_code, updated_at: row.updated_at })
+      .eq('id', existing.id);
+  }
+
   const { data, error } = await db()
-    .from('stock_item_masters')
-    .upsert(
-      {
-        company_id: companyId,
-        created_by: user?.id,
-        tally_item_name: params.tally_item_name, // NO trim
-        alias_name: params.alias_name ?? null,
-        unit: params.unit ?? null,
-        hsn_code: params.hsn_code ?? null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'company_id, tally_item_name', ignoreDuplicates: false },
-    )
-    .select()
-    .single();
+    .from('stock_item_masters').select()
+    .eq('company_id', companyId).eq('tally_item_name', params.tally_item_name).single();
   if (error) throw error;
   return data as StockItemMaster;
 }

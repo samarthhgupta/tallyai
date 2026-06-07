@@ -104,7 +104,6 @@ export async function addSupplier(
   const unregistered = !gstin;
   const gstinValid = gstin ? validateGstin(gstin) : true;
 
-  // State: derive from GSTIN digits, or fallback to company state for unregistered
   const stateName = gstin
     ? (deriveStateFromGstin(gstin) ?? '')
     : (params.companyState ?? '');
@@ -120,15 +119,40 @@ export async function addSupplier(
     updated_at: new Date().toISOString(),
   };
 
-  // Upsert: registered → match on gstin; unregistered → match on tally_ledger_name
-  const conflictCol = unregistered
-    ? 'company_id, tally_ledger_name'
-    : 'company_id, vendor_gstin';
+  // Try insert first; if duplicate (23505), find existing and update tally_ledger_name
+  const { data: inserted, error: insertErr } = await db()
+    .from('supplier_masters')
+    .insert(payload)
+    .select()
+    .single();
+
+  if (!insertErr) return inserted as SupplierMaster;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((insertErr as any).code !== '23505') throw insertErr;
+
+  // Duplicate — find existing row and update
+  const matchCol = unregistered ? 'tally_ledger_name' : 'vendor_gstin';
+  const matchVal = unregistered ? params.tally_ledger_name : gstin;
+  const { data: existing } = await db()
+    .from('supplier_masters')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq(matchCol, matchVal)
+    .single();
+
+  if (existing?.id) {
+    await db()
+      .from('supplier_masters')
+      .update({ tally_ledger_name: params.tally_ledger_name, state_name: stateName, gstin_valid: gstinValid, updated_at: payload.updated_at })
+      .eq('id', existing.id);
+  }
 
   const { data, error } = await db()
     .from('supplier_masters')
-    .upsert(payload, { onConflict: conflictCol, ignoreDuplicates: false })
     .select()
+    .eq('company_id', companyId)
+    .eq(matchCol, matchVal)
     .single();
   if (error) throw error;
   return data as SupplierMaster;

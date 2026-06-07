@@ -63,21 +63,35 @@ export async function addExpenseLedger(
   },
 ): Promise<ExpenseLedgerMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;
+  const row = {
+    company_id: companyId,
+    created_by: user?.id,
+    tally_ledger_name: params.tally_ledger_name, // NO trim
+    expense_keyword: params.expense_keyword ?? null,
+    sac_code: params.sac_code ?? null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: inserted, error: insertErr } = await db()
+    .from('expense_ledger_masters').insert(row).select().single();
+
+  if (!insertErr) return inserted as ExpenseLedgerMaster;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((insertErr as any).code !== '23505') throw insertErr;
+
+  const { data: existing } = await db()
+    .from('expense_ledger_masters').select('id')
+    .eq('company_id', companyId).eq('tally_ledger_name', params.tally_ledger_name).single();
+
+  if (existing?.id) {
+    await db().from('expense_ledger_masters')
+      .update({ expense_keyword: row.expense_keyword, sac_code: row.sac_code, updated_at: row.updated_at })
+      .eq('id', existing.id);
+  }
+
   const { data, error } = await db()
-    .from('expense_ledger_masters')
-    .upsert(
-      {
-        company_id: companyId,
-        created_by: user?.id,
-        tally_ledger_name: params.tally_ledger_name, // NO trim
-        expense_keyword: params.expense_keyword ?? null,
-        sac_code: params.sac_code ?? null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'company_id, tally_ledger_name', ignoreDuplicates: false },
-    )
-    .select()
-    .single();
+    .from('expense_ledger_masters').select()
+    .eq('company_id', companyId).eq('tally_ledger_name', params.tally_ledger_name).single();
   if (error) throw error;
   return data as ExpenseLedgerMaster;
 }
