@@ -128,6 +128,7 @@ interface InvoiceAcceptPayload {
   stockItems: Array<{ desc: string; hsn: string; tallyName: string }>;
   charges: Array<{ keyword: string; tallyName: string }>;
   cgstLedger: string; sgstLedger: string; igstLedger: string;
+  roLedger: string;
   taxType: 'cgst_sgst' | 'igst' | 'none';
   // Locked values to freeze in the UI after accept (keyed by itemDesc for stock items)
   lockedStock: Record<string, string>;
@@ -137,6 +138,7 @@ interface InvoiceAcceptPayload {
 interface LockedInvoice {
   vendorLedger: string; purchaseLedger: string;
   cgstLedger: string; sgstLedger: string; igstLedger: string;
+  roLedger: string;
   stock: Record<string, string>; // itemDesc → tallyName
   charges: Record<string, string>; // charge desc → tally ledger name
 }
@@ -180,7 +182,7 @@ interface FlatDisplayRow {
   // invoice-level — only on first row
   isFirst: boolean;
   charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number }>;
-  roLedger: string; roAmt: number;
+  roLedger: string; roSuggested: boolean; roAmt: number;
 }
 
 function FlatPreviewTable({
@@ -207,6 +209,7 @@ function FlatPreviewTable({
   const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
   const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
+  const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
 
   // Bulk-select state for inline accept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
@@ -269,10 +272,11 @@ function FlatPreviewTable({
     const invTaxType = (invoice?.tax_type ?? 'none') as 'cgst_sgst' | 'igst' | 'none';
     const invoiceTail = {
       charges,
-      roLedger: ro?.tally_ledger_name?.startsWith('(') ? '' : (ro?.tally_ledger_name ?? ''),
+      roLedger: ro?.tally_ledger_name ?? '',
+      roSuggested: ro?.is_suggested === true,
       roAmt:  ro?.amount ?? 0,
     };
-    const emptyTail = { charges: [], roLedger: '', roAmt: 0 };
+    const emptyTail = { charges: [], roLedger: '', roSuggested: false, roAmt: 0 };
 
     const base = {
       invoiceDate: partyRow?.invoice_date ?? (invoice?.invoice_date ?? ''),
@@ -389,7 +393,7 @@ function FlatPreviewTable({
         // Gather all display rows for this invoice
         const invRows = displayRows.filter((r) => r.invoiceNo === row.invoiceNo);
         const hasSuggestion = invRows.some(
-          (r) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && r.charges.some((c) => c.suggested)),
+          (r) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && (r.charges.some((c) => c.suggested) || r.roSuggested)),
         );
         if (hasSuggestion) suggestableInvoices.push(row.invoiceNo);
       }
@@ -441,12 +445,15 @@ function FlatPreviewTable({
         tallyName: chargeEdits[ch.desc] ?? ch.ledger,
       }));
 
+      const roLedger = roLedgerEdits[invNo] ?? firstRow.roLedger;
+
       payloads.push({
         invoiceNo: invNo,
         vendorName: firstRow.vendorName, vendorGstin: firstRow.gstin, vendorLedger,
         purchaseLedger,
         stockItems, charges, lockedStock,
         cgstLedger, sgstLedger, igstLedger,
+        roLedger,
         taxType: firstRow.taxType,
       });
     }
@@ -465,6 +472,7 @@ function FlatPreviewTable({
             cgstLedger: p.cgstLedger,
             sgstLedger: p.sgstLedger,
             igstLedger: p.igstLedger,
+            roLedger: p.roLedger,
             stock: p.lockedStock,
             charges: chargesLocked,
           };
@@ -590,6 +598,7 @@ function FlatPreviewTable({
               const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
               const effectiveSgst           = locked?.sgstLedger ?? (taxLedgerEdits.sgst ?? row.sgstLedger);
               const effectiveIgst           = locked?.igstLedger ?? (taxLedgerEdits.igst ?? row.igstLedger);
+              const effectiveRo             = locked?.roLedger ?? (roLedgerEdits[row.invoiceNo] ?? row.roLedger);
 
               // Editable input for any suggested Tally field
               const EditableField = ({ value, suggested, color, onSave, placeholder }: {
@@ -827,7 +836,14 @@ function FlatPreviewTable({
                     {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
                   </td>
                   {/* Round Off — first row only */}
-                  <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
+                  <td className="px-3 py-2 min-w-[160px]">
+                    {row.isFirst && row.roAmt !== 0 && (
+                      isLocked
+                        ? <span className="font-mono font-medium text-gray-600">{effectiveRo || '—'}</span>
+                        : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600"
+                            onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
                 </tr>
               );
@@ -1554,6 +1570,7 @@ export default function XmlGeneratorPage() {
                   const seenCgst   = new Set<string>();
                   const seenSgst   = new Set<string>();
                   const seenIgst   = new Set<string>();
+                  const seenRo     = new Set<string>();
 
                   for (const p of payloads) {
                     // 1. Vendor ledger → supplier_masters
@@ -1597,7 +1614,13 @@ export default function XmlGeneratorPage() {
                         catch (e) { errs.push(`IGST ledger: ${getErrMsg(e)}`); }
                       }
                     }
-                    // 5. Purchase ledger → update company purchase_ledger_config catch-all entry
+                    // 5. Round off ledger → expense_ledger_masters
+                    if (p.roLedger && !seenRo.has(p.roLedger)) {
+                      seenRo.add(p.roLedger);
+                      try { await addExpenseLedger(company.id, { tally_ledger_name: p.roLedger, expense_keyword: 'Round Off' }); }
+                      catch (e) { errs.push(`Round Off ledger: ${getErrMsg(e)}`); }
+                    }
+                    // 6. Purchase ledger → update company purchase_ledger_config catch-all entry
                     if (p.purchaseLedger) {
                       try {
                         const fresh = await getCompany(company.id);

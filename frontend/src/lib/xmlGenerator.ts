@@ -730,7 +730,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
       const l = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
-      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? '(auto-balanced by Tally)', amount: inv.round_off, status: 'OK' });
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: inv.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
   }
   return rows;
@@ -805,7 +805,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
       const l = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
-      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? '(auto-balanced by Tally)', amount: inv.round_off, status: 'OK' });
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: inv.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
   }
   return rows;
