@@ -48,10 +48,10 @@ function autoSuggestPurchaseLedgers(invoices: StoredInvoice[]): PurchaseLedgerEn
   const sorted = Array.from(rates).sort((a, b) => a - b);
   const entries: PurchaseLedgerEntry[] = sorted.map((rate) => ({
     gst_percent: rate,
-    tally_ledger_name: rate === 0 ? 'Purchases (Exempt)' : `Purchases @${rate}%`,
+    tally_ledger_name: rate === 0 ? 'Purchase (Exempt)' : `Purchase @${rate}%`,
   }));
   // Add a catch-all fallback for any rate not explicitly listed
-  entries.push({ gst_percent: null, tally_ledger_name: 'Purchases' });
+  entries.push({ gst_percent: null, tally_ledger_name: 'Purchase' });
   return entries;
 }
 
@@ -182,6 +182,7 @@ function FlatPreviewTable({
 
   // Local editable overrides (keyed as needed)
   const [vendorEdits, setVendorEdits] = React.useState<Record<string, string>>({});
+  const [purchaseLedgerEdits, setPurchaseLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
   const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
   const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
@@ -230,7 +231,7 @@ function FlatPreviewTable({
     // Never use per-rate purchase rows from preview; all line items in one invoice share the same ledger.
     const invPlEntry = purchaseLedgers.find((p) => p.gst_percent === null && p.tally_ledger_name)
       ?? purchaseLedgers.find((p) => p.tally_ledger_name);
-    const invPlLedger = invPlEntry?.tally_ledger_name ?? (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
+    const invPlLedger = invPlEntry?.tally_ledger_name ?? 'Purchase';
     const invPlSuggested = !invPlEntry?.tally_ledger_name;
 
     const charges = chargeRows.map((c) => ({
@@ -610,10 +611,30 @@ function FlatPreviewTable({
                       </span>
                     )}
                   </td>
-                  {/* Purchase Ledger */}
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <EditableField value={row.purchaseLedger || '—'} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
-                      onSave={() => {}} />
+                  {/* Purchase Ledger — editable, one per invoice (first row only for editing) */}
+                  <td className="px-3 py-2 min-w-[180px]">
+                    {(() => {
+                      const plDisplay = purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger;
+                      const plSuggested = row.purchaseLedgerSuggested || !purchaseLedgerEdits[row.invoiceNo];
+                      if (purchaseLedgers.length > 0) {
+                        return (
+                          <select
+                            value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
+                            onChange={(e) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
+                            className={`border rounded px-2 py-0.5 text-xs font-mono w-full ${plSuggested && !purchaseLedgerEdits[row.invoiceNo] ? 'border-amber-300 bg-amber-50 text-blue-800' : 'border-gray-200 bg-white text-blue-800'}`}
+                          >
+                            {purchaseLedgers.map((p) => (
+                              <option key={p.tally_ledger_name} value={p.tally_ledger_name}>{p.tally_ledger_name}</option>
+                            ))}
+                          </select>
+                        );
+                      }
+                      return (
+                        <EditableField value={plDisplay} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
+                          onSave={(v) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
+                      );
+                      void plSuggested;
+                    })()}
                   </td>
                   {/* Item Name + HSN */}
                   <td className="px-3 py-2 max-w-[220px]">
