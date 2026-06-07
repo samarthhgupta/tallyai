@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
-import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
+import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
@@ -120,6 +120,27 @@ type SuggestionItem =
   | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
   | { kind: 'expense'; keyword: string;    tallyName: string };
 
+// Per-invoice accept payload — everything that should be saved when the user accepts an invoice
+interface InvoiceAcceptPayload {
+  invoiceNo: string;
+  vendorName: string; vendorGstin: string; vendorLedger: string;
+  purchaseLedger: string;
+  stockItems: Array<{ desc: string; hsn: string; tallyName: string }>;
+  charges: Array<{ keyword: string; tallyName: string }>;
+  cgstLedger: string; sgstLedger: string; igstLedger: string;
+  taxType: 'cgst_sgst' | 'igst' | 'none';
+  // Locked values to freeze in the UI after accept (keyed by itemDesc for stock items)
+  lockedStock: Record<string, string>;
+}
+
+// Per-invoice locked field values (set after accept, used to freeze display)
+interface LockedInvoice {
+  vendorLedger: string; purchaseLedger: string;
+  cgstLedger: string; sgstLedger: string; igstLedger: string;
+  stock: Record<string, string>; // itemDesc → tallyName
+  charges: Record<string, string>; // charge desc → tally ledger name
+}
+
 // ─── Flat Preview Table (one row per line item, Excel format) ─────────────────
 
 import type { SupplierMaster } from '@/lib/suppliers';
@@ -164,7 +185,7 @@ interface FlatDisplayRow {
 
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems, purchaseLedgers,
-  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onBulkAccept,
+  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -176,7 +197,7 @@ function FlatPreviewTable({
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
   onMapTaxLedger: (type: 'CGST' | 'SGST' | 'IGST', name: string) => void;
-  onBulkAccept: (items: SuggestionItem[]) => Promise<void>;
+  onAcceptInvoices: (payloads: InvoiceAcceptPayload[]) => Promise<void>;
 }) {
   const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
 
@@ -190,6 +211,9 @@ function FlatPreviewTable({
   // Bulk-select state for inline accept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
   const [bulkSaving, setBulkSaving] = React.useState(false);
+
+  // Accepted invoices — once accepted, fields are locked in the UI
+  const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>({});
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
@@ -387,33 +411,70 @@ function FlatPreviewTable({
 
   const handleBulkAccept = async () => {
     setBulkSaving(true);
-    const items: SuggestionItem[] = [];
-    const seenVendor = new Set<string>();
-    const seenStock  = new Set<string>();
-    const seenExp    = new Set<string>();
+    const payloads: InvoiceAcceptPayload[] = [];
 
-    for (const row of displayRows) {
-      if (!selectedInvoices.has(row.invoiceNo)) continue;
-      if (row.vendorSuggested && !seenVendor.has(row.vendorName)) {
-        seenVendor.add(row.vendorName);
-        items.push({ kind: 'vendor', vendorName: row.vendorName, gstin: row.gstin, ledger: vendorEdits[row.vendorName] ?? row.vendorLedger });
-      }
-      if (row.stockItemSuggested && !seenStock.has(row.itemDesc)) {
-        seenStock.add(row.itemDesc);
-        const tallyName = stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem;
-        if (tallyName) items.push({ kind: 'stock', desc: row.itemDesc, hsn: row.hsn, tallyName });
-      }
-      if (row.isFirst) {
-        for (const ch of row.charges) {
-          if (ch.suggested && !seenExp.has(ch.desc)) {
-            seenExp.add(ch.desc);
-            items.push({ kind: 'expense', keyword: ch.desc, tallyName: chargeEdits[ch.desc] ?? ch.ledger });
+    for (const invNo of Array.from(selectedInvoices)) {
+      const invRows = displayRows.filter((r) => r.invoiceNo === invNo);
+      const firstRow = invRows.find((r) => r.isFirst);
+      if (!firstRow) continue;
+
+      const vendorLedger = vendorEdits[firstRow.vendorName] ?? firstRow.vendorLedger;
+      const purchaseLedger = purchaseLedgerEdits[invNo] ?? firstRow.purchaseLedger;
+      const cgstLedger = taxLedgerEdits.cgst ?? firstRow.cgstLedger;
+      const sgstLedger = taxLedgerEdits.sgst ?? firstRow.sgstLedger;
+      const igstLedger = taxLedgerEdits.igst ?? firstRow.igstLedger;
+
+      const stockItems: InvoiceAcceptPayload['stockItems'] = [];
+      const lockedStock: Record<string, string> = {};
+      for (const r of invRows) {
+        if (r.itemDesc) {
+          const tallyName = stockItemEdits[`${invNo}_${r.itemDesc}`] ?? r.stockItem;
+          if (tallyName) {
+            stockItems.push({ desc: r.itemDesc, hsn: r.hsn, tallyName });
+            lockedStock[r.itemDesc] = tallyName;
           }
         }
       }
+
+      const charges: InvoiceAcceptPayload['charges'] = (firstRow.charges ?? []).map((ch) => ({
+        keyword: ch.desc,
+        tallyName: chargeEdits[ch.desc] ?? ch.ledger,
+      }));
+
+      payloads.push({
+        invoiceNo: invNo,
+        vendorName: firstRow.vendorName, vendorGstin: firstRow.gstin, vendorLedger,
+        purchaseLedger,
+        stockItems, charges, lockedStock,
+        cgstLedger, sgstLedger, igstLedger,
+        taxType: firstRow.taxType,
+      });
     }
-    try { await onBulkAccept(items); setSelectedInvoices(new Set()); }
-    finally { setBulkSaving(false); }
+
+    try {
+      await onAcceptInvoices(payloads);
+      // Lock fields locally — no full preview refresh
+      setLockedInvoices((prev) => {
+        const next = { ...prev };
+        for (const p of payloads) {
+          const chargesLocked: Record<string, string> = {};
+          p.charges.forEach((ch) => { chargesLocked[ch.keyword] = ch.tallyName; });
+          next[p.invoiceNo] = {
+            vendorLedger: p.vendorLedger,
+            purchaseLedger: p.purchaseLedger,
+            cgstLedger: p.cgstLedger,
+            sgstLedger: p.sgstLedger,
+            igstLedger: p.igstLedger,
+            stock: p.lockedStock,
+            charges: chargesLocked,
+          };
+        }
+        return next;
+      });
+      setSelectedInvoices(new Set());
+    } finally {
+      setBulkSaving(false);
+    }
   };
 
   // Dual-scroll: sync top scrollbar with table scroll
@@ -515,10 +576,20 @@ function FlatPreviewTable({
             {displayRows.map((row, i) => {
               const prevRow = displayRows[i - 1];
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
-              const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
+              const locked = lockedInvoices[row.invoiceNo];
+              const isLocked = !!locked;
+              const rowBg = isLocked ? 'bg-green-50/30' : (isNewInvoice ? 'bg-white' : 'bg-blue-50/20');
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
-              const isInvSuggestable = suggestableInvoices.includes(row.invoiceNo);
+              const isInvSuggestable = !isLocked && suggestableInvoices.includes(row.invoiceNo);
               const isChecked = selectedInvoices.has(row.invoiceNo);
+
+              // When locked, use the frozen accepted values
+              const effectiveVendorLedger   = locked?.vendorLedger   ?? (vendorEdits[row.vendorName] ?? row.vendorLedger);
+              const effectivePurchaseLedger = locked?.purchaseLedger ?? (purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger);
+              const effectiveStockItem      = locked?.stock[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem);
+              const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
+              const effectiveSgst           = locked?.sgstLedger ?? (taxLedgerEdits.sgst ?? row.sgstLedger);
+              const effectiveIgst           = locked?.igstLedger ?? (taxLedgerEdits.igst ?? row.igstLedger);
 
               // Editable input for any suggested Tally field
               const EditableField = ({ value, suggested, color, onSave, placeholder }: {
@@ -560,9 +631,12 @@ function FlatPreviewTable({
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
-                  {/* Checkbox — one per invoice, on the first row only */}
+                  {/* Checkbox / accepted badge — one per invoice, on the first row only */}
                   <td className="px-2 py-2 w-8 text-center">
-                    {row.isFirst && isInvSuggestable && (
+                    {row.isFirst && isLocked && (
+                      <span title="Accepted — fields locked" className="text-green-600 text-sm font-bold">✓</span>
+                    )}
+                    {row.isFirst && !isLocked && isInvSuggestable && (
                       <input
                         type="checkbox"
                         checked={isChecked}
@@ -583,7 +657,9 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
                   {/* Vendor Ledger */}
                   <td className="px-3 py-2 min-w-[180px]">
-                    {row.vendorSuggested ? (
+                    {isLocked ? (
+                      <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '—'}</span>
+                    ) : row.vendorSuggested ? (
                       suppliers.length > 0 ? (
                         <select value={editedVendor ?? ''} onChange={(e) => {
                           if (!e.target.value) return;
@@ -611,48 +687,42 @@ function FlatPreviewTable({
                       </span>
                     )}
                   </td>
-                  {/* Purchase Ledger — editable, one per invoice (first row only for editing) */}
+                  {/* Purchase Ledger */}
                   <td className="px-3 py-2 min-w-[180px]">
-                    {(() => {
-                      const plDisplay = purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger;
-                      const plSuggested = row.purchaseLedgerSuggested || !purchaseLedgerEdits[row.invoiceNo];
-                      if (purchaseLedgers.length > 0) {
-                        return (
-                          <select
-                            value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
-                            onChange={(e) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
-                            className={`border rounded px-2 py-0.5 text-xs font-mono w-full ${plSuggested && !purchaseLedgerEdits[row.invoiceNo] ? 'border-amber-300 bg-amber-50 text-blue-800' : 'border-gray-200 bg-white text-blue-800'}`}
-                          >
-                            {purchaseLedgers.map((p) => (
-                              <option key={p.tally_ledger_name} value={p.tally_ledger_name}>{p.tally_ledger_name}</option>
-                            ))}
-                          </select>
-                        );
-                      }
-                      return (
-                        <EditableField value={plDisplay} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
-                          onSave={(v) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
-                      );
-                      void plSuggested;
-                    })()}
+                    {isLocked ? (
+                      <span className="font-mono font-medium text-blue-800">{effectivePurchaseLedger || '—'}</span>
+                    ) : purchaseLedgers.length > 0 ? (
+                      <select
+                        value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
+                        onChange={(e) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
+                        className={`border rounded px-2 py-0.5 text-xs font-mono w-full ${row.purchaseLedgerSuggested && !purchaseLedgerEdits[row.invoiceNo] ? 'border-amber-300 bg-amber-50 text-blue-800' : 'border-gray-200 bg-white text-blue-800'}`}
+                      >
+                        {purchaseLedgers.map((p) => (
+                          <option key={p.tally_ledger_name} value={p.tally_ledger_name}>{p.tally_ledger_name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <EditableField value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
+                        onSave={(v) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
+                    )}
                   </td>
                   {/* Item Name + HSN */}
                   <td className="px-3 py-2 max-w-[220px]">
                     <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
                     {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
-                  {/* Stock Item — always editable when suggested */}
+                  {/* Stock Item */}
                   <td className="px-3 py-2 min-w-[180px]">
-                    {row.stockItemSuggested ? (
+                    {isLocked ? (
+                      <span className="font-mono text-indigo-700">{effectiveStockItem || '—'}</span>
+                    ) : row.stockItemSuggested ? (
                       isInventoryMode && stockItems.length > 0 ? (
                         <select defaultValue="" onChange={(e) => {
                           if (!e.target.value) return;
                           const chosen = e.target.value;
-                          const edited = stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? chosen;
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
                           onMapStockItem(row.itemDesc, chosen);
-                          void edited;
                         }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
                           <option value="">{stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem} ✦</option>
                           {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
@@ -720,11 +790,13 @@ function FlatPreviewTable({
                       </React.Fragment>
                     );
                   })}
-                  {/* CGST — ledger editable, amount per line item */}
+                  {/* CGST */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (
-                      <EditableField value={cgstDisplay} suggested={row.cgstSuggested} color="text-teal-700"
-                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />
+                      isLocked
+                        ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '—'}</span>
+                        : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
@@ -733,8 +805,10 @@ function FlatPreviewTable({
                   {/* SGST */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (
-                      <EditableField value={sgstDisplay} suggested={row.sgstSuggested} color="text-teal-700"
-                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />
+                      isLocked
+                        ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '—'}</span>
+                        : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
@@ -743,8 +817,10 @@ function FlatPreviewTable({
                   {/* IGST */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'igst' && (
-                      <EditableField value={igstDisplay} suggested={row.igstSuggested} color="text-cyan-700"
-                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />
+                      isLocked
+                        ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '—'}</span>
+                        : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
@@ -1469,22 +1545,73 @@ export default function XmlGeneratorPage() {
                 onMapTaxLedger={(_type, _name) => {
                   // Tax ledger edits are local to the preview — persist in Duties & Taxes master
                 }}
-                onBulkAccept={async (items) => {
+                onAcceptInvoices={async (payloads) => {
                   if (!company?.id) return;
                   const errs: string[] = [];
-                  for (const item of items) {
-                    try {
-                      if (item.kind === 'vendor') {
-                        await addSupplier(company.id, { vendor_name: item.vendorName, vendor_gstin: item.gstin, tally_ledger_name: item.ledger });
-                      } else if (item.kind === 'stock') {
-                        await addStockItem(company.id, { tally_item_name: item.tallyName, alias_name: item.desc });
-                      } else if (item.kind === 'expense') {
-                        await addExpenseLedger(company.id, { tally_ledger_name: item.tallyName, expense_keyword: item.keyword });
+                  const seenVendor = new Set<string>();
+                  const seenStock  = new Set<string>();
+                  const seenExp    = new Set<string>();
+                  const seenCgst   = new Set<string>();
+                  const seenSgst   = new Set<string>();
+                  const seenIgst   = new Set<string>();
+
+                  for (const p of payloads) {
+                    // 1. Vendor ledger → supplier_masters
+                    if (p.vendorLedger && !seenVendor.has(p.vendorName)) {
+                      seenVendor.add(p.vendorName);
+                      try { await addSupplier(company.id, { vendor_name: p.vendorName, vendor_gstin: p.vendorGstin, tally_ledger_name: p.vendorLedger }); }
+                      catch (e) { errs.push(`Vendor "${p.vendorName}": ${getErrMsg(e)}`); }
+                    }
+                    // 2. Stock items → stock_item_masters
+                    for (const si of p.stockItems) {
+                      if (si.tallyName && !seenStock.has(si.desc)) {
+                        seenStock.add(si.desc);
+                        try { await addStockItem(company.id, { tally_item_name: si.tallyName, alias_name: si.desc }); }
+                        catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
                       }
-                    } catch (e: unknown) { errs.push(getErrMsg(e)); }
+                    }
+                    // 3. Expense/charge ledgers → expense_ledger_masters
+                    for (const ch of p.charges) {
+                      if (ch.tallyName && !seenExp.has(ch.keyword)) {
+                        seenExp.add(ch.keyword);
+                        try { await addExpenseLedger(company.id, { tally_ledger_name: ch.tallyName, expense_keyword: ch.keyword }); }
+                        catch (e) { errs.push(`Expense "${ch.keyword}": ${getErrMsg(e)}`); }
+                      }
+                    }
+                    // 4. Tax ledgers → duties_taxes_masters (consolidated, null rate)
+                    if (p.taxType === 'cgst_sgst') {
+                      if (p.cgstLedger && !seenCgst.has(p.cgstLedger)) {
+                        seenCgst.add(p.cgstLedger);
+                        try { await addDutiesTaxes(company.id, { tax_component: 'CGST', tax_rate: null, tally_ledger_name: p.cgstLedger }); }
+                        catch (e) { errs.push(`CGST ledger: ${getErrMsg(e)}`); }
+                      }
+                      if (p.sgstLedger && !seenSgst.has(p.sgstLedger)) {
+                        seenSgst.add(p.sgstLedger);
+                        try { await addDutiesTaxes(company.id, { tax_component: 'SGST', tax_rate: null, tally_ledger_name: p.sgstLedger }); }
+                        catch (e) { errs.push(`SGST ledger: ${getErrMsg(e)}`); }
+                      }
+                    } else if (p.taxType === 'igst') {
+                      if (p.igstLedger && !seenIgst.has(p.igstLedger)) {
+                        seenIgst.add(p.igstLedger);
+                        try { await addDutiesTaxes(company.id, { tax_component: 'IGST', tax_rate: null, tally_ledger_name: p.igstLedger }); }
+                        catch (e) { errs.push(`IGST ledger: ${getErrMsg(e)}`); }
+                      }
+                    }
+                    // 5. Purchase ledger → update company purchase_ledger_config catch-all entry
+                    if (p.purchaseLedger) {
+                      try {
+                        const fresh = await getCompany(company.id);
+                        const existing = fresh.purchase_ledger_config ?? [];
+                        const hasEntry = existing.some((e) => e.tally_ledger_name === p.purchaseLedger);
+                        if (!hasEntry) {
+                          const updated = [...existing.filter((e) => e.gst_percent !== null), { gst_percent: null, tally_ledger_name: p.purchaseLedger }];
+                          await savePurchaseLedgerConfig(company.id, updated);
+                        }
+                      } catch (e) { errs.push(`Purchase ledger: ${getErrMsg(e)}`); }
+                    }
                   }
                   if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
-                  handlePreview();
+                  // Do NOT refresh preview — fields are locked locally per invoice
                 }}
               />
             </div>
