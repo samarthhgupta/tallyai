@@ -11,6 +11,7 @@ import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
+import { calcLineAmount } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
 import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
@@ -220,49 +221,84 @@ function FlatPreviewTable({
       gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
     };
 
-    const itemsToRender = isInventoryMode ? invRows2 : purchRows;
-
-    if (itemsToRender.length === 0) {
-      displayRows.push({
-        ...base, isFirst: true, ...invoiceTail,
-        purchaseLedger: '', purchaseLedgerSuggested: false,
-        itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
-        taxRate: null, qty: null, uom: '', rate: null, disc: null,
-        amount: Math.abs(partyRow?.amount ?? 0),
+    if (isInventoryMode) {
+      // Inventory mode: one row per Inventory preview row (has full item data from preview)
+      if (invRows2.length === 0) {
+        displayRows.push({
+          ...base, isFirst: true, ...invoiceTail,
+          purchaseLedger: '', purchaseLedgerSuggested: false,
+          itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
+          taxRate: null, qty: null, uom: '', rate: null, disc: null,
+          amount: Math.abs(partyRow?.amount ?? 0),
+        });
+        continue;
+      }
+      invRows2.forEach((row, idx) => {
+        const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
+        const gstPct = lineItem?.gst_percent ?? null;
+        const plEntry = gstPct != null
+          ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
+          : purchaseLedgers[0];
+        displayRows.push({
+          ...base,
+          isFirst: idx === 0,
+          ...(idx === 0 ? invoiceTail : emptyTail),
+          purchaseLedger: plEntry?.tally_ledger_name ?? '',
+          purchaseLedgerSuggested: !plEntry?.tally_ledger_name,
+          itemDesc: row.item_description ?? '',
+          hsn: lineItem?.hsn ?? '',
+          stockItem: row.tally_ledger_name ?? '',
+          stockItemSuggested: row.is_suggested === true,
+          taxRate: gstPct,
+          qty:  row.qty ?? null,
+          uom:  row.uom ?? '',
+          rate: row.rate ?? null,
+          disc: row.disc_percent ?? null,
+          amount: row.amount,
+        });
       });
-      continue;
+    } else {
+      // Accounting-only mode: one row per LINE ITEM from the invoice
+      // Purchase rows are grouped by GST rate — don't use them for item iteration
+      const lineItems = invoice?.line_items ?? [];
+      if (lineItems.length === 0) {
+        displayRows.push({
+          ...base, isFirst: true, ...invoiceTail,
+          purchaseLedger: '', purchaseLedgerSuggested: false,
+          itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
+          taxRate: null, qty: null, uom: '', rate: null, disc: null,
+          amount: Math.abs(partyRow?.amount ?? 0),
+        });
+        continue;
+      }
+      lineItems.forEach((item, idx) => {
+        const gstPct = item.gst_percent ?? null;
+        const hasInvGst = (invoice?.cgst ?? 0) > 0 || (invoice?.sgst ?? 0) > 0 || (invoice?.igst ?? 0) > 0;
+        const plEntry = gstPct != null
+          ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
+          : purchaseLedgers[0];
+        // If no saved mapping exists for this rate, show the suggestion
+        const plLedger = plEntry?.tally_ledger_name || (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
+        const purchaseLedgerSuggested = !plEntry?.tally_ledger_name;
+        displayRows.push({
+          ...base,
+          isFirst: idx === 0,
+          ...(idx === 0 ? invoiceTail : emptyTail),
+          purchaseLedger: plLedger,
+          purchaseLedgerSuggested,
+          itemDesc: item.description ?? '',
+          hsn: item.hsn ?? '',
+          stockItem: '',
+          stockItemSuggested: false,
+          taxRate: gstPct,
+          qty:  item.qty ?? null,
+          uom:  item.uom ?? '',
+          rate: item.rate ?? null,
+          disc: (item.disc_percent ?? 0) > 0 ? item.disc_percent : null,
+          amount: calcLineAmount(item),
+        });
+      });
     }
-
-    itemsToRender.forEach((row, idx) => {
-      const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
-      const gstPct   = lineItem?.gst_percent ?? null;
-      const plRow    = gstPct != null
-        ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
-        : purchaseLedgers[0];
-      const plLedger = plRow?.tally_ledger_name ?? '';
-      // For accounting mode, the Purchase row itself holds the tally ledger name + suggested flag
-      const isInv = row.ledger_type === 'Inventory';
-      const purchaseLedger = isInv ? plLedger : row.tally_ledger_name;
-      const purchaseLedgerSuggested = isInv ? !plLedger : (row.is_suggested === true);
-
-      displayRows.push({
-        ...base,
-        isFirst: idx === 0,
-        ...(idx === 0 ? invoiceTail : emptyTail),
-        purchaseLedger,
-        purchaseLedgerSuggested,
-        itemDesc: isInv ? (row.item_description ?? '') : (lineItem?.description ?? ''),
-        hsn: lineItem?.hsn ?? '',
-        stockItem: isInv ? (row.tally_ledger_name ?? '') : '',
-        stockItemSuggested: isInv && (row.is_suggested === true),
-        taxRate: gstPct,
-        qty:  isInv ? (row.qty ?? null)  : null,
-        uom:  isInv ? (row.uom ?? '')    : '',
-        rate: isInv ? (row.rate ?? null) : null,
-        disc: isInv ? (row.disc_percent ?? null) : null,
-        amount: row.amount,
-      });
-    });
   }
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
