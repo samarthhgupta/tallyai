@@ -325,8 +325,8 @@ interface VoucherResult { xml: string | null; skip?: string; warnings: string[];
 function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-  if (!supplier) return { xml: null, skip: `Supplier not found in master for "${inv.vendor_name}"`, warnings };
-  const partyLedger = supplier.tally_ledger_name;
+  const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
+  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master — using vendor name as ledger`);
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
   const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
@@ -360,8 +360,8 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
 function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-  if (!supplier) return { xml: null, skip: `Supplier not found in master for "${inv.vendor_name}"`, warnings };
-  const partyLedger = supplier.tally_ledger_name;
+  const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
+  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master — using vendor name as ledger`);
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
