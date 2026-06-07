@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
@@ -106,338 +106,352 @@ function PurchaseLedgerRow({
   );
 }
 
-// ─── Invoice Preview Cards ────────────────────────────────────────────────────
+// ─── Flat Preview Table (one row per line item, Excel format) ─────────────────
 
-function StatusDot({ status, warning }: { status: string; warning?: string }) {
-  if (status === 'Skipped') return <span className="inline-block w-2 h-2 rounded-full bg-red-500" title="Error — will be excluded" />;
-  if (warning) return <span className="inline-block w-2 h-2 rounded-full bg-amber-400" title={warning} />;
-  return <span className="inline-block w-2 h-2 rounded-full bg-green-500" title="OK" />;
+import type { SupplierMaster } from '@/lib/suppliers';
+
+interface FlatDisplayRow {
+  // invoice-level
+  invoiceDate: string;
+  invoiceNo: string;
+  voucherType: string;
+  vendorName: string;
+  vendorLedger: string;
+  vendorUnmapped: boolean;
+  gstin: string;
+  gstRegType: string;
+  // item-level
+  purchaseLedger: string;
+  itemDesc: string;
+  hsn: string;
+  stockItem: string;
+  stockItemUnmapped: boolean;
+  taxRate: number | null;
+  qty: number | null;
+  uom: string;
+  rate: number | null;
+  disc: number | null;
+  amount: number;
+  // invoice-level shown only on first item row
+  isFirst: boolean;
+  charges: Array<{ desc: string; ledger: string; unmapped: boolean; amount: number }>;
+  cgstLedger: string; cgstAmt: number;
+  sgstLedger: string; sgstAmt: number;
+  igstLedger: string; igstAmt: number;
+  roLedger: string; roAmt: number;
 }
 
-function InvoicePreviewCards({
-  rows, invoices, expenseLedgers, suppliers, stockItems,
+function FlatPreviewTable({
+  rows, invoices, suppliers, expenseLedgers, stockItems, purchaseLedgers,
   onMapExpense, onMapSupplier, onMapStockItem,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
+  suppliers: SupplierMaster[];
   expenseLedgers: { tally_ledger_name: string }[];
-  suppliers: { tally_ledger_name: string; vendor_name: string }[];
   stockItems: { tally_item_name: string }[];
+  purchaseLedgers: PurchaseLedgerEntry[];
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
 }) {
+  const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
+
   // Group rows by invoice number, preserving order
   const invoiceOrder: string[] = [];
-  const invoiceRowMap = new Map<string, PreviewRow[]>();
+  const byInvoice = new Map<string, PreviewRow[]>();
   rows.forEach((r) => {
-    if (!invoiceRowMap.has(r.invoice_number)) {
-      invoiceOrder.push(r.invoice_number);
-      invoiceRowMap.set(r.invoice_number, []);
-    }
-    invoiceRowMap.get(r.invoice_number)!.push(r);
+    if (!byInvoice.has(r.invoice_number)) { invoiceOrder.push(r.invoice_number); byInvoice.set(r.invoice_number, []); }
+    byInvoice.get(r.invoice_number)!.push(r);
   });
 
-  const defaultExpanded = invoiceOrder.length <= 10;
-  const [expandedSet, setExpandedSet] = useState<Set<string>>(
-    () => defaultExpanded ? new Set(invoiceOrder) : new Set()
+  // Build one flat row per line item
+  const displayRows: FlatDisplayRow[] = [];
+
+  for (const invNo of invoiceOrder) {
+    const invRows = byInvoice.get(invNo)!;
+    const partyRow   = invRows.find((r) => r.ledger_type === 'Party');
+    const invRows2   = invRows.filter((r) => r.ledger_type === 'Inventory');
+    const purchRows  = invRows.filter((r) => r.ledger_type === 'Purchase');
+    const chargeRows = invRows.filter((r) => r.ledger_type === 'Expense');
+    const cgst = invRows.find((r) => r.ledger_type === 'CGST');
+    const sgst = invRows.find((r) => r.ledger_type === 'SGST');
+    const igst = invRows.find((r) => r.ledger_type === 'IGST');
+    const ro   = invRows.find((r) => r.ledger_type === 'Round Off');
+
+    const invoice  = invoices.find((i) => i.invoice_number === invNo);
+    const supplier = suppliers.find((s) => s.tally_ledger_name === partyRow?.party_ledger);
+
+    const vendorLedger  = partyRow?.tally_ledger_name ?? '—';
+    const vendorUnmapped = partyRow?.status === 'Skipped';
+
+    const charges = chargeRows.map((c) => {
+      const rawDesc = c.tally_ledger_name.replace(/^— NO LEDGER FOR "(.+)" —$/, '$1');
+      return {
+        desc: rawDesc,
+        ledger: c.tally_ledger_name.startsWith('—') ? '' : c.tally_ledger_name,
+        unmapped: !!(c.warning?.includes('No expense ledger')),
+        amount: c.amount,
+      };
+    });
+
+    const invoiceTail = {
+      charges,
+      cgstLedger: cgst?.tally_ledger_name?.startsWith('—') ? '' : (cgst?.tally_ledger_name ?? ''),
+      cgstAmt: cgst?.amount ?? 0,
+      sgstLedger: sgst?.tally_ledger_name?.startsWith('—') ? '' : (sgst?.tally_ledger_name ?? ''),
+      sgstAmt: sgst?.amount ?? 0,
+      igstLedger: igst?.tally_ledger_name?.startsWith('—') ? '' : (igst?.tally_ledger_name ?? ''),
+      igstAmt: igst?.amount ?? 0,
+      roLedger:  ro?.tally_ledger_name?.startsWith('(') ? '' : (ro?.tally_ledger_name ?? ''),
+      roAmt:  ro?.amount ?? 0,
+    };
+    const emptyTail = { charges: [], cgstLedger: '', cgstAmt: 0, sgstLedger: '', sgstAmt: 0, igstLedger: '', igstAmt: 0, roLedger: '', roAmt: 0 };
+
+    const base = {
+      invoiceDate: partyRow?.invoice_date ?? '',
+      invoiceNo: invNo,
+      voucherType: partyRow?.voucher_type_name ?? '',
+      vendorName: partyRow?.vendor_name ?? '',
+      vendorLedger,
+      vendorUnmapped,
+      gstin: invoice?.vendor_gstin ?? '',
+      gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
+    };
+
+    const itemsToRender = isInventoryMode ? invRows2 : purchRows;
+
+    if (itemsToRender.length === 0) {
+      // No line items: just render one row for the invoice (e.g., supplier unmapped)
+      displayRows.push({
+        ...base, isFirst: true, ...invoiceTail,
+        purchaseLedger: '', itemDesc: '', hsn: '', stockItem: '', stockItemUnmapped: false,
+        taxRate: null, qty: null, uom: '', rate: null, disc: null,
+        amount: Math.abs(partyRow?.amount ?? 0),
+      });
+      continue;
+    }
+
+    itemsToRender.forEach((row, idx) => {
+      const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
+      const gstPct   = lineItem?.gst_percent ?? null;
+      const plLedger = gstPct != null
+        ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))?.tally_ledger_name ?? ''
+        : (purchaseLedgers[0]?.tally_ledger_name ?? '');
+
+      const isInv = row.ledger_type === 'Inventory';
+
+      displayRows.push({
+        ...base,
+        isFirst: idx === 0,
+        ...(idx === 0 ? invoiceTail : emptyTail),
+        purchaseLedger: isInv ? plLedger : row.tally_ledger_name,
+        itemDesc: isInv ? (row.item_description ?? '') : '',
+        hsn: lineItem?.hsn ?? '',
+        stockItem: isInv ? (row.status === 'Skipped' ? '' : (row.stock_item_name ?? '')) : '',
+        stockItemUnmapped: isInv && row.status === 'Skipped',
+        taxRate: gstPct,
+        qty:  isInv ? (row.qty ?? null)  : null,
+        uom:  isInv ? (row.uom ?? '')    : '',
+        rate: isInv ? (row.rate ?? null) : null,
+        disc: isInv ? (row.disc_percent ?? null) : null,
+        amount: row.amount,
+      });
+    });
+  }
+
+  const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
+
+  const TH = ({ children, right }: { children: React.ReactNode; right?: boolean }) => (
+    <th className={`px-3 py-2.5 border-b border-gray-200 font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap text-[11px] ${right ? 'text-right' : 'text-left'}`}>
+      {children}
+    </th>
   );
 
-  const toggleCard = (invNo: string) => {
-    setExpandedSet((prev) => {
-      const next = new Set(prev);
-      if (next.has(invNo)) next.delete(invNo);
-      else next.add(invNo);
-      return next;
-    });
-  };
-
   return (
-    <div className="space-y-3">
-      {invoiceOrder.map((invNo) => {
-        const cardRows = invoiceRowMap.get(invNo)!;
-        const partyRow = cardRows.find((r) => r.ledger_type === 'Party');
-        const inventoryRows = cardRows.filter((r) => r.ledger_type === 'Inventory');
-        const purchaseRows = cardRows.filter((r) => r.ledger_type === 'Purchase');
-        const chargeRows = cardRows.filter((r) => r.ledger_type === 'Expense');
-        const cgstRow = cardRows.find((r) => r.ledger_type === 'CGST');
-        const sgstRow = cardRows.find((r) => r.ledger_type === 'SGST');
-        const igstRow = cardRows.find((r) => r.ledger_type === 'IGST');
-        const roundOffRow = cardRows.find((r) => r.ledger_type === 'Round Off');
-        const discountRow = cardRows.find((r) => r.ledger_type === 'Discount');
+    <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+      <table className="min-w-max text-xs border-collapse">
+        <thead className="bg-gray-50">
+          <tr>
+            {/* Invoice Date */}
+            <TH>Date</TH>
+            {/* Invoice No */}
+            <TH>Invoice No</TH>
+            {/* Voucher Type */}
+            <TH>Voucher Type</TH>
+            {/* Vendor Name */}
+            <TH>Vendor (Invoice)</TH>
+            {/* Vendor Ledger */}
+            <TH>Vendor Ledger (Tally)</TH>
+            {/* GSTIN */}
+            <TH>GSTIN</TH>
+            {/* Reg Type */}
+            <TH>GST Reg Type</TH>
+            {/* Purchase Ledger */}
+            <TH>Purchase Ledger (Tally)</TH>
+            {/* Item */}
+            <TH>Item Name + HSN (Invoice)</TH>
+            {/* Stock Item */}
+            <TH>Stock Item (Tally)</TH>
+            {/* Tax Rate */}
+            <TH right>Tax Rate %</TH>
+            {/* Qty */}
+            <TH right>Qty</TH>
+            {/* UOM */}
+            <TH>UOM</TH>
+            {/* Rate */}
+            <TH right>Rate (₹)</TH>
+            {/* Disc */}
+            <TH right>Discount %</TH>
+            {/* Amount */}
+            <TH right>Amount (₹)</TH>
+            {/* Charges */}
+            {Array.from({ length: maxCharges }, (_, ci) => (
+              <React.Fragment key={`ch${ci}`}>
+                <TH>Charge {ci + 1} (Invoice)</TH>
+                <TH>Charge {ci + 1} Ledger (Tally)</TH>
+                <TH right>Charge {ci + 1} Amt (₹)</TH>
+              </React.Fragment>
+            ))}
+            {/* CGST */}
+            <TH>CGST Ledger (Tally)</TH>
+            <TH right>CGST Amt (₹)</TH>
+            {/* SGST */}
+            <TH>SGST Ledger (Tally)</TH>
+            <TH right>SGST Amt (₹)</TH>
+            {/* IGST */}
+            <TH>IGST Ledger (Tally)</TH>
+            <TH right>IGST Amt (₹)</TH>
+            {/* Round Off */}
+            <TH>Round Off Ledger (Tally)</TH>
+            <TH right>Round Off Amt (₹)</TH>
+          </tr>
+        </thead>
+        <tbody>
+          {displayRows.map((row, i) => {
+            const prevRow = displayRows[i - 1];
+            const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
+            const hasError = row.vendorUnmapped || row.stockItemUnmapped;
+            const rowBg = hasError
+              ? 'bg-red-50'
+              : isNewInvoice
+              ? 'bg-white'
+              : 'bg-blue-50/20';
+            const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
 
-        const invoiceMeta = invoices.find((i) => i.invoice_number === invNo);
-        const totalAmount = partyRow?.amount ?? cardRows.reduce((s, r) => s + r.amount, 0);
-        const errorCount = cardRows.filter((r) => r.status === 'Skipped').length;
-        const warningCount = cardRows.filter((r) => r.warning && r.status !== 'Skipped').length;
-
-        const isSupplierUnmapped = partyRow?.status === 'Skipped';
-        const expanded = expandedSet.has(invNo);
-
-        return (
-          <div key={invNo} className={`rounded-xl border ${errorCount > 0 ? 'border-red-200' : 'border-gray-200'} bg-white overflow-hidden`}>
-            {/* Header */}
-            <button
-              onClick={() => toggleCard(invNo)}
-              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
-            >
-              <span className="text-gray-400 text-xs select-none">{expanded ? '▼' : '▶'}</span>
-              <span className="font-mono text-sm font-semibold text-gray-800 shrink-0">{invNo}</span>
-              <span className="text-xs text-gray-400 shrink-0">{partyRow?.invoice_date ?? invoiceMeta?.invoice_date ?? ''}</span>
-              <span className="text-sm text-gray-700 truncate max-w-[200px]" title={partyRow?.vendor_name}>
-                {partyRow?.vendor_name ?? invoiceMeta?.vendor_name ?? ''}
-              </span>
-
-              {/* Supplier badge or dropdown */}
-              {isSupplierUnmapped && partyRow ? (
-                <span
-                  className="shrink-0"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <select
-                    defaultValue=""
-                    onChange={(e) => e.target.value && onMapSupplier(partyRow.vendor_name, e.target.value)}
-                    className="border border-red-300 rounded px-2 py-0.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  >
-                    <option value="">Map supplier…</option>
-                    {suppliers.map((s) => (
-                      <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>
-                    ))}
-                  </select>
-                </span>
-              ) : partyRow ? (
-                <span className="shrink-0 inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                  {partyRow.tally_ledger_name}
-                </span>
-              ) : null}
-
-              {/* Voucher type */}
-              {partyRow?.voucher_type_name && (
-                <span className="shrink-0 text-xs font-mono px-2 py-0.5 rounded bg-gray-100 text-gray-600">
-                  {partyRow.voucher_type_name}
-                </span>
-              )}
-
-              <span className="ml-auto shrink-0 font-mono text-sm font-semibold text-gray-800">
-                ₹{Math.abs(totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-
-              {/* Error / warning badges */}
-              {(errorCount > 0 || warningCount > 0) && (
-                <span className="shrink-0 flex items-center gap-1.5">
-                  {errorCount > 0 && (
-                    <span className="text-xs bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full">{errorCount} err</span>
+            return (
+              <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
+                {/* Date */}
+                <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
+                {/* Invoice No */}
+                <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800">{row.invoiceNo}</td>
+                {/* Voucher Type */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.isFirst && <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700">{row.voucherType}</span>}
+                </td>
+                {/* Vendor Name */}
+                <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
+                {/* Vendor Ledger */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.isFirst ? (
+                    row.vendorUnmapped ? (
+                      <select defaultValue="" onChange={(e) => e.target.value && onMapSupplier(row.vendorName, e.target.value)}
+                        className="border border-red-300 rounded px-2 py-1 text-xs bg-white focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
+                        <option value="">Map supplier…</option>
+                        {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
+                      </select>
+                    ) : (
+                      <span className="font-mono font-medium text-purple-800">{row.vendorLedger}</span>
+                    )
+                  ) : null}
+                </td>
+                {/* GSTIN */}
+                <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '—'}</td>
+                {/* Reg Type */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.isFirst && row.gstRegType && (
+                    <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded font-medium ${row.gstRegType === 'Unregistered' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                      {row.gstRegType}
+                    </span>
                   )}
-                  {warningCount > 0 && (
-                    <span className="text-xs bg-amber-100 text-amber-700 font-semibold px-2 py-0.5 rounded-full">{warningCount} warn</span>
+                </td>
+                {/* Purchase Ledger */}
+                <td className="px-3 py-2 font-mono text-blue-800 whitespace-nowrap">{row.purchaseLedger || '—'}</td>
+                {/* Item Name + HSN */}
+                <td className="px-3 py-2 max-w-[220px]">
+                  <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
+                  {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
+                </td>
+                {/* Stock Item */}
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {row.stockItemUnmapped ? (
+                    <select defaultValue="" onChange={(e) => e.target.value && onMapStockItem(row.itemDesc, e.target.value)}
+                      className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
+                      <option value="">Map stock item…</option>
+                      {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
+                    </select>
+                  ) : (
+                    <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
                   )}
-                </span>
-              )}
-            </button>
-
-            {/* Body */}
-            {expanded && (
-              <div className="border-t border-gray-100 px-4 py-3 space-y-4">
-
-                {/* Section A: Inventory line items */}
-                {inventoryRows.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Line Items</p>
-                    <div className="overflow-x-auto rounded-lg border border-gray-100">
-                      <table className="min-w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 text-gray-400 font-semibold uppercase tracking-wide">
-                            <th className="px-3 py-2 text-left">#</th>
-                            <th className="px-3 py-2 text-left">Description (as per invoice)</th>
-                            <th className="px-3 py-2 text-left">→ Tally Stock Item</th>
-                            <th className="px-3 py-2 text-left">HSN</th>
-                            <th className="px-3 py-2 text-right">Qty</th>
-                            <th className="px-3 py-2 text-left">UOM</th>
-                            <th className="px-3 py-2 text-right">Rate</th>
-                            <th className="px-3 py-2 text-right">Disc%</th>
-                            <th className="px-3 py-2 text-right">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {inventoryRows.map((row, idx) => {
-                            const isUnmapped = row.status === 'Skipped';
-                            const itemDesc = row.item_description ?? '';
-                            return (
-                              <tr key={idx} className={isUnmapped ? 'bg-amber-50' : 'bg-white'}>
-                                <td className="px-3 py-2 text-gray-400">{idx + 1}</td>
-                                <td className="px-3 py-2 text-gray-700 max-w-[180px] truncate" title={itemDesc}>{itemDesc}</td>
-                                <td className="px-3 py-2">
-                                  {isUnmapped ? (
-                                    <select
-                                      defaultValue=""
-                                      onChange={(e) => e.target.value && onMapStockItem(itemDesc, e.target.value)}
-                                      className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[180px]"
-                                    >
-                                      <option value="">Pick stock item…</option>
-                                      {stockItems.map((s) => (
-                                        <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>
-                                      ))}
-                                    </select>
-                                  ) : (
-                                    <span className="font-mono text-gray-800">{row.tally_ledger_name}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 font-mono text-gray-500">
-                                  {invoices.find((i) => i.invoice_number === row.invoice_number)?.line_items.find((li) => li.description === row.item_description)?.hsn ?? ''}
-                                </td>
-                                <td className="px-3 py-2 text-right text-gray-700">{row.qty ?? ''}</td>
-                                <td className="px-3 py-2 text-gray-500">{row.uom ?? ''}</td>
-                                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : ''}</td>
-                                <td className="px-3 py-2 text-right text-gray-500">{row.disc_percent != null ? `${row.disc_percent}%` : ''}</td>
-                                <td className="px-3 py-2 text-right font-mono text-gray-800">
-                                  {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Section B: Purchase accounts */}
-                {purchaseRows.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Purchase Accounts</p>
-                    <div className="overflow-x-auto rounded-lg border border-gray-100">
-                      <table className="min-w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 text-gray-400 font-semibold uppercase tracking-wide">
-                            <th className="px-3 py-2 text-left">GST Rate</th>
-                            <th className="px-3 py-2 text-right">Taxable Amount (₹)</th>
-                            <th className="px-3 py-2 text-left">Purchase Ledger</th>
-                            <th className="px-3 py-2 text-left">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {purchaseRows.map((row, idx) => (
-                            <tr key={idx} className={row.status === 'Skipped' ? 'bg-red-50' : 'bg-white'}>
-                              <td className="px-3 py-2 text-gray-600">—</td>
-                              <td className="px-3 py-2 text-right font-mono text-gray-800">
-                                {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </td>
-                              <td className="px-3 py-2 font-mono text-gray-800">{row.tally_ledger_name}</td>
-                              <td className="px-3 py-2">
-                                <StatusDot status={row.status} warning={row.warning} />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Section C: Charges */}
-                {chargeRows.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Charges</p>
-                    <div className="overflow-x-auto rounded-lg border border-gray-100">
-                      <table className="min-w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 text-gray-400 font-semibold uppercase tracking-wide">
-                            <th className="px-3 py-2 text-left">Description (as invoice)</th>
-                            <th className="px-3 py-2 text-left">→ Tally Ledger</th>
-                            <th className="px-3 py-2 text-right">Amount (₹)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {chargeRows.map((row, idx) => {
-                            const isUnmapped = row.warning?.includes('No expense ledger');
-                            const chargeDesc = isUnmapped
-                              ? row.tally_ledger_name.replace(/^— NO LEDGER FOR "(.+)" —$/, '$1')
-                              : '';
-                            return (
-                              <tr key={idx} className={isUnmapped ? 'bg-amber-50' : 'bg-white'}>
-                                <td className="px-3 py-2 text-gray-700">{isUnmapped ? chargeDesc : row.item_description ?? ''}</td>
-                                <td className="px-3 py-2">
-                                  {isUnmapped ? (
-                                    <select
-                                      defaultValue=""
-                                      onChange={(e) => e.target.value && onMapExpense(chargeDesc, e.target.value)}
-                                      className="border border-amber-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[200px]"
-                                    >
-                                      <option value="">Pick ledger…</option>
-                                      {expenseLedgers.map((l) => (
-                                        <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>
-                                      ))}
-                                    </select>
-                                  ) : (
-                                    <span className="font-mono text-gray-800">{row.tally_ledger_name}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-right font-mono text-gray-800">
-                                  {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Section D: Taxes + Round Off + Discount */}
-                {(cgstRow || sgstRow || igstRow || roundOffRow || discountRow) && (
-                  <div className="flex flex-wrap items-center gap-4 text-xs bg-gray-50 rounded-lg px-3 py-2">
-                    {cgstRow && (
-                      <span className={cgstRow.status === 'Skipped' ? 'text-red-600 font-semibold' : 'text-gray-700'}>
-                        CGST ₹{Math.abs(cgstRow.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        <span className="text-gray-400 ml-1">→ {cgstRow.tally_ledger_name}</span>
-                      </span>
-                    )}
-                    {sgstRow && (
-                      <span className={sgstRow.status === 'Skipped' ? 'text-red-600 font-semibold' : 'text-gray-700'}>
-                        SGST ₹{Math.abs(sgstRow.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        <span className="text-gray-400 ml-1">→ {sgstRow.tally_ledger_name}</span>
-                      </span>
-                    )}
-                    {igstRow && (
-                      <span className={igstRow.status === 'Skipped' ? 'text-red-600 font-semibold' : 'text-gray-700'}>
-                        IGST ₹{Math.abs(igstRow.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        <span className="text-gray-400 ml-1">→ {igstRow.tally_ledger_name}</span>
-                      </span>
-                    )}
-                    {roundOffRow && (
-                      <span className="text-gray-500">
-                        Round Off ₹{roundOffRow.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
-                    )}
-                    {discountRow && (
-                      <span className="text-gray-500">
-                        Discount ₹{Math.abs(discountRow.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Footer */}
-                <div className="flex items-center justify-between text-xs text-gray-500 border-t border-gray-100 pt-2">
-                  <span className="font-semibold text-gray-700">
-                    Total: ₹{Math.abs(totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    {errorCount > 0 && <span className="text-red-600 font-semibold">{errorCount} error{errorCount !== 1 ? 's' : ''}</span>}
-                    {warningCount > 0 && <span className="text-amber-600">{warningCount} warning{warningCount !== 1 ? 's' : ''}</span>}
-                    {errorCount === 0 && warningCount === 0 && <span className="text-green-600">Ready</span>}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
+                </td>
+                {/* Tax Rate */}
+                <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '—'}</td>
+                {/* Qty */}
+                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '—'}</td>
+                {/* UOM */}
+                <td className="px-3 py-2 text-gray-500">{row.uom || '—'}</td>
+                {/* Rate */}
+                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '—'}</td>
+                {/* Disc */}
+                <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '—'}</td>
+                {/* Amount */}
+                <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
+                  {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+                {/* Charges */}
+                {Array.from({ length: maxCharges }, (_, ci) => {
+                  const ch = row.isFirst ? row.charges[ci] : undefined;
+                  return (
+                    <React.Fragment key={`ch${ci}`}>
+                      <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {ch && (ch.unmapped ? (
+                          <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
+                            className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
+                            <option value="">Map ledger…</option>
+                            {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                          </select>
+                        ) : (
+                          <span className="font-mono text-orange-700">{ch.ledger}</span>
+                        ))}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-700">
+                        {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
+                      </td>
+                    </React.Fragment>
+                  );
+                })}
+                {/* CGST */}
+                <td className="px-3 py-2 font-mono text-teal-700 whitespace-nowrap">{row.isFirst ? (row.cgstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}</td>
+                {/* SGST */}
+                <td className="px-3 py-2 font-mono text-teal-700 whitespace-nowrap">{row.isFirst ? (row.sgstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}</td>
+                {/* IGST */}
+                <td className="px-3 py-2 font-mono text-cyan-700 whitespace-nowrap">{row.isFirst ? (row.igstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}</td>
+                {/* Round Off */}
+                <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
+                <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
+
 
 // ─── Shared master loader ─────────────────────────────────────────────────────
 
@@ -893,13 +907,14 @@ export default function XmlGeneratorPage() {
                 </div>
               )}
 
-              {/* Invoice Preview Cards */}
-              <InvoicePreviewCards
+              {/* Flat preview table — one row per line item */}
+              <FlatPreviewTable
                 rows={previewRows}
                 invoices={invoices}
-                expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 suppliers={cachedMasters?.suppliers ?? []}
+                expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
+                purchaseLedgers={validLedgers}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   try { await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description }); handlePreview(); }
