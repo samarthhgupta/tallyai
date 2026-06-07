@@ -213,6 +213,7 @@ export default function UploadPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [invoiceOverrides, setInvoiceOverrides] = useState<Map<string, ExtractedInvoice>>(new Map());
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [queueRestored, setQueueRestored] = useState(false);
 
   // Action state
   const [actionLoading, setActionLoading] = useState(false);
@@ -231,6 +232,50 @@ export default function UploadPage() {
       setIsAuthed(true);
     });
   }, [company, companyLoading, router]);
+
+  // ── Queue persistence (localStorage) ──
+  const queueStorageKey = company?.id ? `upload_queue_${company.id}` : null;
+
+  // Restore queue from localStorage once company is loaded
+  useEffect(() => {
+    if (!queueStorageKey || queueRestored) return;
+    try {
+      const raw = localStorage.getItem(queueStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          queue: QueueItem[];
+          overrides: [string, ExtractedInvoice][];
+          batchId: string | null;
+          financialYear: string;
+        };
+        if (parsed.queue?.length) {
+          setQueue(parsed.queue);
+          setInvoiceOverrides(new Map(parsed.overrides ?? []));
+          setBatchId(parsed.batchId ?? null);
+          if (parsed.financialYear) setFinancialYear(parsed.financialYear);
+        }
+      }
+    } catch { /* ignore corrupt storage */ }
+    setQueueRestored(true);
+  }, [queueStorageKey, queueRestored]);
+
+  // Save queue to localStorage whenever it changes
+  useEffect(() => {
+    if (!queueStorageKey || !queueRestored) return;
+    if (queue.length === 0) {
+      localStorage.removeItem(queueStorageKey);
+    } else {
+      try {
+        localStorage.setItem(queueStorageKey, JSON.stringify({
+          queue,
+          overrides: Array.from(invoiceOverrides.entries()),
+          batchId,
+          financialYear,
+        }));
+      } catch { /* ignore quota errors */ }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, invoiceOverrides, batchId, financialYear, queueStorageKey, queueRestored]);
 
   const selectedCompany = company;
   const selectedCompanyId = company?.id ?? '';
@@ -637,7 +682,7 @@ export default function UploadPage() {
           </div>
 
           {/* ── Upload Queue ── */}
-          {result && queue.length > 0 && (
+          {queue.length > 0 && (
             <div>
               {/* Queue header + action bar */}
               <div className="sticky top-0 z-10 bg-gray-50 pb-3 pt-1">
@@ -701,13 +746,25 @@ export default function UploadPage() {
                       </button>
                       <button
                         onClick={() => {
-                          const overridden = result.file_results.map((fr) => ({
-                            ...fr,
-                            invoices: fr.invoices.map((inv, idx) =>
-                              invoiceOverrides.get(`${fr.filename}:${idx}`) ?? inv
-                            ),
-                          }));
-                          downloadBulkExcel(overridden);
+                          const fileResults = result
+                            ? result.file_results.map((fr) => ({
+                                ...fr,
+                                invoices: fr.invoices.map((inv, idx) =>
+                                  invoiceOverrides.get(`${fr.filename}:${idx}`) ?? inv
+                                ),
+                              }))
+                            : (() => {
+                                // Queue restored from localStorage — group by filename
+                                const byFile = new Map<string, ExtractedInvoice[]>();
+                                queue.forEach((q) => {
+                                  const inv = invoiceOverrides.get(q.key) ?? q.inv;
+                                  const list = byFile.get(q.filename) ?? [];
+                                  list.push(inv);
+                                  byFile.set(q.filename, list);
+                                });
+                                return Array.from(byFile.entries()).map(([filename, invoices]) => ({ filename, invoices, error: null }));
+                              })();
+                          downloadBulkExcel(fileResults);
                         }}
                         className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
                       >
@@ -803,9 +860,9 @@ export default function UploadPage() {
               </div>
 
               {/* File-level errors (skipped files etc.) */}
-              {result.file_results.some((fr) => fr.error) && (
+              {result?.file_results.some((fr) => fr.error) && (
                 <div className="mt-6 space-y-2">
-                  {result.file_results
+                  {result!.file_results
                     .filter((fr) => fr.error)
                     .map((fr) => {
                       const isSkipped = fr.error?.startsWith('Skipped');

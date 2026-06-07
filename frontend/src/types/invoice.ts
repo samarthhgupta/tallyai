@@ -35,6 +35,8 @@ export interface ExtraCharge {
   description: string;  // "Postage", "Freight", "Delivery Charges", etc.
   amount: number;
   gst_percent: number;  // usually 0
+  sac?: string;         // SAC code for services (e.g. 9965 for freight)
+  hsn?: string;         // HSN code if applicable
 }
 
 export interface ExtractedInvoice {
@@ -84,7 +86,7 @@ export interface Company {
 
 export type InvoiceStatus = 'pending_review' | 'accepted' | 'rejected';
 export type InvoiceReadiness = 'ready' | 'warning' | 'critical';
-export type ITCStatus = 'eligible' | 'potentially_ineligible' | 'not_applicable';
+export type ITCStatus = 'eligible' | 'potentially_ineligible' | 'not_applicable' | 'reviewed_eligible';
 
 // Stored invoice row from Supabase (superset of ExtractedInvoice)
 export interface StoredInvoice extends ExtractedInvoice {

@@ -112,6 +112,24 @@ CASE 3 — Charge appears AFTER the line items subtotal WITH an HSN code:
 
   - If the charge row is blank or zero, do NOT include it anywhere.
 
+FREIGHT GST HARD RULE — evaluate this BEFORE any other classification logic:
+
+The invoice's printed HSN/SAC tax summary is the authoritative source for freight GST treatment.
+Check it first. This rule overrides Priority 4 defaults, mismatch resolution, and all other rules.
+
+CASE A — SAC 9965 (or any freight SAC) is ABSENT from the printed tax summary:
+  → gst_percent = 0. Final. Do not apply defaults. Do not apply mismatch resolution.
+  The freight is a non-taxable pass-through charge. The supplier chose not to charge GST on it.
+
+CASE B — SAC 9965 appears in the printed tax summary with a taxable value:
+  → Use the GST rate from that row. This overrides any explicit rate printed next to the charge.
+
+CASE C — The invoice has NO printed HSN/SAC tax summary at all:
+  → Proceed to the ADDITIONAL CHARGES — GST CLASSIFICATION rules below.
+
+Rationale: if the supplier's own tax summary does not include freight, then no GST was computed
+on it — adding GST in the extraction will always cause a reconciliation mismatch and wrong ITC.
+
 ADDITIONAL CHARGES — GST CLASSIFICATION:
 
 FREIGHT-RELATED charges (SAC 9965, default GST 5%):
@@ -327,12 +345,37 @@ STEP 3 — Column label hints:
   Labels suggesting GST-EXCLUSIVE: "Net Amt", "Net Amount", "Taxable Amt", "Taxable Value", "Amount After Disc"
   Labels suggesting GST-INCLUSIVE: "Amount (₹)", "Total Amt", "Invoice Amt", "Gross Amt", or no qualifier
 
+AMOUNT FIELD SOURCING — source of truth hierarchy (read before extracting any line item):
+
+The "amount" field is what you READ from the invoice. The "rate" field is what you CALCULATE.
+Never compute "amount" forward from "rate" — that makes them circularly dependent and silently
+locks in any arithmetic error.
+
+PRIORITY 1 — Invoice has a Price column (post-discount, ex-GST per unit):
+  amount = qty × Price    ← READ Price from the column, MULTIPLY by qty. Exact. No formula.
+  rate   = Price ÷ (1 − disc_percent/100)  ← approximate back-calculation; rounding of ±₹1 is acceptable.
+  The amount field is locked by the Price column. Do not override it with your rate calculation.
+
+PRIORITY 2 — Invoice has a Net Amount / Taxable / Amount After Disc column (already ex-GST):
+  amount = value from that column   ← read directly.
+  rate   = amount ÷ qty ÷ (1 − disc_percent/100)   ← back-calculated.
+
+PRIORITY 3 — Invoice has only a GST-inclusive Amount column:
+  amount = printed_amount ÷ (1 + gst_percent/100)   ← GST strip-out, then use as amount.
+  rate   = amount ÷ qty ÷ (1 − disc_percent/100)    ← back-calculated.
+
+In all cases: NEVER set amount = qty × rate × (1 − disc_percent/100). That formula is only
+used to VERIFY, never to SOURCE the amount field.
+
 WHEN AMOUNT COLUMN IS GST-INCLUSIVE — full back-calculation and verification procedure:
 
 The "amount" field we store must ALWAYS be taxable (GST-exclusive, post-discount). Convert:
-  stored_amount = printed_amount ÷ (1 + gst_percent/100)
-Then back-calculate the pre-discount ex-GST rate:
-  rate = stored_amount ÷ qty ÷ (1 − disc_percent/100)
+  stored_amount = printed_amount ÷ (1 + gst_percent/100)     [PRIORITY 3 above — only when no Price column]
+  rate = stored_amount ÷ qty ÷ (1 − disc_percent/100)        [approximate back-calc; ±₹1 rounding is normal]
+
+When the invoice has a Price column (MRP / Disc% / Price / Amount format — PRIORITY 1 above):
+  stored_amount = qty × Price    [exact — read Price column, multiply by qty, no division]
+  rate = Price ÷ (1 − disc_percent/100)    [approximate; the exact value of rate is less important than amount]
 
 After extracting all line items, run ALL SIX checks below. If any check fails, re-examine
 the failing line item before finalising the JSON.
@@ -369,6 +412,31 @@ CHECK 6 — Grand Total reconciliation:
   Result must equal the printed Grand Total within ₹2.
   Any remaining gap after checks 1–5 pass is usually one paisa of rounding — acceptable.
   A gap larger than ₹2 means something is wrong: re-examine line items, disc%, or charges.
+
+CHECK 7 — HSN-wise totals vs printed tax summary — SELF-CORRECTION STEP (run this last):
+  This check uses the invoice's printed HSN/SAC tax summary as an independent source of truth.
+  The tax summary is computed by the supplier's billing software separately from the line items —
+  it is the most reliable number on the invoice.
+
+  For each HSN/SAC code that appears in your extracted line items:
+    sum_your_amounts = sum of all stored_amounts for that HSN code
+    printed_taxable  = taxable value shown for that HSN in the invoice's tax summary table
+
+  If |sum_your_amounts − printed_taxable| > ₹2 for any HSN group:
+    You have an extraction error on one or more lines in that group. Do NOT proceed.
+    SELF-CORRECTION PROCEDURE:
+      Step 1: Identify which lines belong to the mismatched HSN group.
+      Step 2: For each such line, go back to the Price column (or Net Amount column).
+              Set: corrected_amount = qty × Price   [read Price directly — do not use any formula]
+      Step 3: Re-sum the group and compare again to printed_taxable.
+      Step 4: If it now matches → update the affected "amount" fields in your JSON and proceed.
+              If it still doesn't match → a line item was missed or has wrong qty/HSN.
+                Re-examine the line items table from scratch for that HSN group.
+      Step 5: After correcting amounts, re-run checks 5 and 6.
+
+  CRITICAL: Do NOT use the reconciliation engine or freight GST to paper over a CHECK 7 failure.
+  A discrepancy in HSN totals means the line item extraction is wrong — fix the extraction first.
+  Only after CHECK 7 passes for all HSN groups should you evaluate charges and freight treatment.
 
 EXAMPLE — Shri Ganesh Traders (invoice SGT/495/2024-25):
   Invoice columns: S.N. | Description | HSN | Qty | Unit | MRP | Discount% | Price | Amount(₹)
@@ -425,8 +493,11 @@ so the backend knows not to re-apply its own conversion.
 COLUMN IDENTIFICATION RULE — when an invoice has both "Amount" and "Net Amt" columns:
   - "Amount" / "Gross Amount" = qty × rate (pre-discount gross) — DO NOT use this as the "amount" field
   - "Net Amt" / "Net Amount" / "Taxable" / "Value" = after ALL discounts, before GST — USE THIS as the "amount" field
+  - "Price" column (post-discount ex-GST per unit) — USE qty × Price as the "amount" field (PRIORITY 1)
   - When in doubt: the "amount" field must satisfy  qty × rate × (1 - disc_percent/100) ≈ amount.
-    Cross-check using the printed Net Amount column — they must agree.
+    Cross-check using the printed Net Amount or Price column — they must agree.
+  - NEVER derive the "amount" field by computing qty × rate × (1 - disc%) — that is circular
+    if your rate was itself back-calculated. Always read the amount from a printed column.
 
 BUYER FIELDS:
 - "buyer_name": the name of the company the invoice is addressed TO (appears under "Bill To", "Consignee", "Buyer", "Ship To"). This is NOT the vendor/seller.
@@ -614,13 +685,12 @@ def correct_line_item_rates(inv: dict) -> dict:
                 correct_rate = float(nearest_int) if abs(rate_2dp - nearest_int) < 0.10 else rate_2dp
                 current_rate = item.get("rate", 0)
                 pct_diff = abs(correct_rate - current_rate) / max(correct_rate, 0.01)
-                abs_diff = abs(correct_rate - current_rate)
-                # Override if >1% difference (wrong column extracted by Claude)
-                # OR if the back-calc gives a clean whole-rupee rate and the extracted
-                # rate is off by ≥₹0.50 — catches off-by-one errors like 2141 vs 2142
-                # where the % gap is tiny but the rupee difference is real.
-                is_whole = correct_rate == float(int(correct_rate))
-                if current_rate == 0 or pct_diff > 0.01 or (is_whole and abs_diff >= 0.5):
+                # Override only when Claude clearly read the wrong column (>5% difference).
+                # Sub-percent differences (e.g. 1,231 vs 1,232) are now caught by Claude's
+                # own CHECK 7 self-correction loop using the Price column directly —
+                # the division formula here has inherent rounding and must not be treated
+                # as ground truth for small discrepancies.
+                if current_rate == 0 or pct_diff > 0.05:
                     item["rate"] = correct_rate
 
     return inv
