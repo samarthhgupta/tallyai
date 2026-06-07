@@ -86,7 +86,7 @@ export interface Company {
 
 export type InvoiceStatus = 'pending_review' | 'accepted' | 'rejected';
 export type InvoiceReadiness = 'ready' | 'warning' | 'critical';
-export type ITCStatus = 'eligible' | 'potentially_ineligible' | 'not_applicable';
+export type ITCStatus = 'eligible' | 'potentially_ineligible' | 'not_applicable' | 'reviewed_eligible';
 
 // Stored invoice row from Supabase (superset of ExtractedInvoice)
 export interface StoredInvoice extends ExtractedInvoice {
