@@ -284,6 +284,10 @@ function FlatPreviewTable({
         continue;
       }
       lineItems.forEach((item, idx) => {
+        // Show HSN @ Rate% as suggested stock item name even in accounting mode (informational)
+        const hsnSuggestion = item.hsn
+          ? `${item.hsn} @ ${item.gst_percent ?? 0}%`
+          : '';
         displayRows.push({
           ...base,
           isFirst: idx === 0,
@@ -292,8 +296,8 @@ function FlatPreviewTable({
           purchaseLedgerSuggested: invPlSuggested,
           itemDesc: item.description ?? '',
           hsn: item.hsn ?? '',
-          stockItem: '',
-          stockItemSuggested: false,
+          stockItem: hsnSuggestion,
+          stockItemSuggested: !!hsnSuggestion,
           taxRate: item.gst_percent ?? null,
           qty:  item.qty ?? null,
           uom:  item.uom ?? '',
@@ -497,7 +501,10 @@ function FlatPreviewTable({
                         />
                       )
                     ) : (
-                      <Sug active={false}><span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span></Sug>
+                      // Accounting mode: show HSN suggestion as amber text (informational — not saved to XML)
+                      <Sug active={row.stockItemSuggested}>
+                        <span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
+                      </Sug>
                     )}
                   </td>
                   {/* Tax Rate */}
