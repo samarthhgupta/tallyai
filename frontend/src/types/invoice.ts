@@ -114,6 +114,13 @@ export interface StoredInvoice extends ExtractedInvoice {
   converted_nongst_ledger: string | null;
   supplier_master_id: string | null;
   ledger_master_id: string | null;
+  tally_ledger_acceptance: {
+    vendorLedger: string; purchaseLedger: string;
+    cgstLedger: string; sgstLedger: string; igstLedger: string;
+    roLedger: string;
+    stock: Record<string, string>;
+    charges: Record<string, string>;
+  } | null;
 }
 
 export interface HsnRow {

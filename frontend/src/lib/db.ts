@@ -720,6 +720,21 @@ export async function getPurchaseRegister(
   return (data ?? []) as StoredInvoice[];
 }
 
+// ─── Save Tally ledger acceptance for an invoice (by invoice_number + company_id) ──
+
+export async function saveInvoiceTallyAcceptance(
+  companyId: string,
+  invoiceNumber: string,
+  acceptance: StoredInvoice['tally_ledger_acceptance'],
+): Promise<void> {
+  const { error } = await db()
+    .from('invoices')
+    .update({ tally_ledger_acceptance: acceptance })
+    .eq('company_id', companyId)
+    .eq('invoice_number', invoiceNumber);
+  if (error) throw error;
+}
+
 // ─── Get single invoice ───────────────────────────────────────────────────────
 
 export async function getInvoiceById(id: string): Promise<StoredInvoice> {

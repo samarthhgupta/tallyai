@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany } from '@/lib/db';
+import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -187,6 +187,7 @@ interface FlatDisplayRow {
 
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems, purchaseLedgers,
+  initialLockedInvoices,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices,
 }: {
   rows: PreviewRow[];
@@ -195,6 +196,7 @@ function FlatPreviewTable({
   expenseLedgers: { tally_ledger_name: string }[];
   stockItems: { tally_item_name: string }[];
   purchaseLedgers: PurchaseLedgerEntry[];
+  initialLockedInvoices: Record<string, LockedInvoice>;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
@@ -215,8 +217,8 @@ function FlatPreviewTable({
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
   const [bulkSaving, setBulkSaving] = React.useState(false);
 
-  // Accepted invoices — once accepted, fields are locked in the UI
-  const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>({});
+  // Accepted invoices — once accepted, fields are locked in the UI (initialised from DB on mount)
+  const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>(initialLockedInvoices);
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
@@ -1136,6 +1138,17 @@ export default function XmlGeneratorPage() {
     [purchaseLedgers],
   );
 
+  // Restore locked invoice state from DB on invoice load
+  const initialLockedInvoices = useMemo<Record<string, LockedInvoice>>(() => {
+    const out: Record<string, LockedInvoice> = {};
+    for (const inv of invoices) {
+      if (inv.tally_ledger_acceptance) {
+        out[inv.invoice_number] = inv.tally_ledger_acceptance as LockedInvoice;
+      }
+    }
+    return out;
+  }, [invoices]);
+
   const hasSuggestedPending = suggestedIndexes.size > 0;
 
   const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
@@ -1540,6 +1553,7 @@ export default function XmlGeneratorPage() {
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
                 purchaseLedgers={validLedgers}
+                initialLockedInvoices={initialLockedInvoices}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   try { await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description }); handlePreview(); }
@@ -1632,6 +1646,23 @@ export default function XmlGeneratorPage() {
                         }
                       } catch (e) { errs.push(`Purchase ledger: ${getErrMsg(e)}`); }
                     }
+                  }
+                  // 7. Persist accepted ledger values to DB so they survive page refresh
+                  for (const p of payloads) {
+                    const chargesLocked: Record<string, string> = {};
+                    p.charges.forEach((ch) => { chargesLocked[ch.keyword] = ch.tallyName; });
+                    const acceptance: StoredInvoice['tally_ledger_acceptance'] = {
+                      vendorLedger: p.vendorLedger,
+                      purchaseLedger: p.purchaseLedger,
+                      cgstLedger: p.cgstLedger,
+                      sgstLedger: p.sgstLedger,
+                      igstLedger: p.igstLedger,
+                      roLedger: p.roLedger,
+                      stock: p.lockedStock,
+                      charges: chargesLocked,
+                    };
+                    try { await saveInvoiceTallyAcceptance(company.id, p.invoiceNo, acceptance); }
+                    catch (e) { errs.push(`Save acceptance for ${p.invoiceNo}: ${getErrMsg(e)}`); }
                   }
                   if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
                   // Do NOT refresh preview — fields are locked locally per invoice
