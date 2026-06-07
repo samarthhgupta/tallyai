@@ -352,19 +352,36 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
-  // Rows that have at least one AI-suggested field (eligible for bulk accept)
-  const suggestableIndices = displayRows
-    .map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && r.charges.some((c) => c.suggested)))
-    .map(({ i }) => i);
+  // One checkbox per INVOICE — only for invoices that have at least one suggested field.
+  // selectedRows stores invoice numbers (strings), not row indices.
+  // "suggestable" invoices = invoices whose first row has vendorSuggested, or any row has stockItemSuggested/expense suggested.
+  const suggestableInvoices: string[] = [];
+  {
+    const seen = new Set<string>();
+    for (const row of displayRows) {
+      if (!seen.has(row.invoiceNo)) {
+        seen.add(row.invoiceNo);
+        // Gather all display rows for this invoice
+        const invRows = displayRows.filter((r) => r.invoiceNo === row.invoiceNo);
+        const hasSuggestion = invRows.some(
+          (r) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && r.charges.some((c) => c.suggested)),
+        );
+        if (hasSuggestion) suggestableInvoices.push(row.invoiceNo);
+      }
+    }
+  }
 
-  const allSelected = suggestableIndices.length > 0 && suggestableIndices.every((i) => selectedRows.has(i));
+  // selectedRows now holds a Set<string> of invoice numbers (re-using state but typed via cast)
+  const selectedInvoices = selectedRows as unknown as Set<string>;
+  const setSelectedInvoices = setSelectedRows as unknown as React.Dispatch<React.SetStateAction<Set<string>>>;
+
+  const allSelected = suggestableInvoices.length > 0 && suggestableInvoices.every((inv) => selectedInvoices.has(inv));
   const toggleAll = () => {
-    if (allSelected) { setSelectedRows(new Set()); }
-    else { setSelectedRows(new Set(suggestableIndices)); }
+    if (allSelected) { setSelectedInvoices(new Set()); }
+    else { setSelectedInvoices(new Set(suggestableInvoices)); }
   };
-  const toggleRow = (i: number) => setSelectedRows((prev) => {
-    const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s;
+  const toggleInvoice = (invNo: string) => setSelectedInvoices((prev) => {
+    const s = new Set(prev); s.has(invNo) ? s.delete(invNo) : s.add(invNo); return s;
   });
 
   const handleBulkAccept = async () => {
@@ -374,8 +391,8 @@ function FlatPreviewTable({
     const seenStock  = new Set<string>();
     const seenExp    = new Set<string>();
 
-    for (const idx of Array.from(selectedRows)) {
-      const row = displayRows[idx];
+    for (const row of displayRows) {
+      if (!selectedInvoices.has(row.invoiceNo)) continue;
       if (row.vendorSuggested && !seenVendor.has(row.vendorName)) {
         seenVendor.add(row.vendorName);
         items.push({ kind: 'vendor', vendorName: row.vendorName, gstin: row.gstin, ledger: vendorEdits[row.vendorName] ?? row.vendorLedger });
@@ -394,7 +411,7 @@ function FlatPreviewTable({
         }
       }
     }
-    try { await onBulkAccept(items); setSelectedRows(new Set()); }
+    try { await onBulkAccept(items); setSelectedInvoices(new Set()); }
     finally { setBulkSaving(false); }
   };
 
@@ -429,7 +446,7 @@ function FlatPreviewTable({
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
       {/* Bulk-accept action bar — shown when there are any suggestable rows */}
-      {suggestableIndices.length > 0 && (
+      {suggestableInvoices.length > 0 && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
           <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
             <input
@@ -445,7 +462,7 @@ function FlatPreviewTable({
             disabled={bulkSaving || selectedRows.size === 0}
             className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {bulkSaving ? 'Saving…' : `Accept ${selectedRows.size} out of ${suggestableIndices.length}`}
+            {bulkSaving ? 'Saving…' : `Accept ${selectedInvoices.size} out of ${suggestableInvoices.length} invoices`}
           </button>
           <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
         </div>
@@ -499,8 +516,8 @@ function FlatPreviewTable({
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
               const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
-              const isSuggestable = row.vendorSuggested || row.stockItemSuggested || (row.isFirst && row.charges.some((c) => c.suggested));
-              const isChecked = selectedRows.has(i);
+              const isInvSuggestable = suggestableInvoices.includes(row.invoiceNo);
+              const isChecked = selectedInvoices.has(row.invoiceNo);
 
               // Editable input for any suggested Tally field
               const EditableField = ({ value, suggested, color, onSave, placeholder }: {
@@ -542,13 +559,13 @@ function FlatPreviewTable({
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
-                  {/* Checkbox */}
+                  {/* Checkbox — one per invoice, on the first row only */}
                   <td className="px-2 py-2 w-8 text-center">
-                    {isSuggestable && (
+                    {row.isFirst && isInvSuggestable && (
                       <input
                         type="checkbox"
                         checked={isChecked}
-                        onChange={() => toggleRow(i)}
+                        onChange={() => toggleInvoice(row.invoiceNo)}
                         className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                       />
                     )}
