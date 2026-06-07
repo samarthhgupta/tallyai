@@ -594,9 +594,6 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>All Masters</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${esc(input.tallyCompanyName)}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>${messages.join('')}
       </REQUESTDATA>
@@ -632,9 +629,6 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>Vouchers</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${esc(input.tallyCompanyName)}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>${voucherBlocks.join('')}
       </REQUESTDATA>
