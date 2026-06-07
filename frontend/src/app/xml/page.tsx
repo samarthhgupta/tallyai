@@ -159,6 +159,14 @@ function FlatPreviewTable({
 }) {
   const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
 
+  // Editable vendor ledger names (keyed by vendor_name)
+  const [vendorEdits, setVendorEdits] = React.useState<Record<string, string>>({});
+
+  // Stock item "apply to all" popup state
+  const [stockConfirm, setStockConfirm] = React.useState<{
+    itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
+  } | null>(null);
+
   // Group rows by invoice number, preserving order
   const invoiceOrder: string[] = [];
   const byInvoice = new Map<string, PreviewRow[]>();
@@ -186,6 +194,17 @@ function FlatPreviewTable({
 
     const vendorLedger    = partyRow?.tally_ledger_name ?? '—';
     const vendorSuggested = partyRow?.status === 'Suggested';
+
+    // ONE purchase ledger per invoice (not per item/rate)
+    const hasInvGst = (invoice?.cgst ?? 0) > 0 || (invoice?.sgst ?? 0) > 0 || (invoice?.igst ?? 0) > 0;
+    // Prefer catch-all (null) entry, then first purchase row from preview, then suggestion
+    const invPlEntry = purchaseLedgers.find((p) => p.gst_percent === null && p.tally_ledger_name)
+      ?? purchaseLedgers.find((p) => p.tally_ledger_name);
+    const invPlFromPreview = purchRows[0]; // first purchase row has the resolved ledger name
+    const invPlLedger = invPlFromPreview?.tally_ledger_name
+      ?? invPlEntry?.tally_ledger_name
+      ?? (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
+    const invPlSuggested = invPlFromPreview?.is_suggested !== false ? (invPlFromPreview?.is_suggested ?? !invPlEntry?.tally_ledger_name) : false;
 
     const charges = chargeRows.map((c) => ({
       desc: c.item_description ?? c.tally_ledger_name,
@@ -222,11 +241,10 @@ function FlatPreviewTable({
     };
 
     if (isInventoryMode) {
-      // Inventory mode: one row per Inventory preview row (has full item data from preview)
       if (invRows2.length === 0) {
         displayRows.push({
           ...base, isFirst: true, ...invoiceTail,
-          purchaseLedger: '', purchaseLedgerSuggested: false,
+          purchaseLedger: invPlLedger, purchaseLedgerSuggested: invPlSuggested,
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
@@ -235,21 +253,17 @@ function FlatPreviewTable({
       }
       invRows2.forEach((row, idx) => {
         const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
-        const gstPct = lineItem?.gst_percent ?? null;
-        const plEntry = gstPct != null
-          ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
-          : purchaseLedgers[0];
         displayRows.push({
           ...base,
           isFirst: idx === 0,
           ...(idx === 0 ? invoiceTail : emptyTail),
-          purchaseLedger: plEntry?.tally_ledger_name ?? '',
-          purchaseLedgerSuggested: !plEntry?.tally_ledger_name,
+          purchaseLedger: invPlLedger,
+          purchaseLedgerSuggested: invPlSuggested,
           itemDesc: row.item_description ?? '',
           hsn: lineItem?.hsn ?? '',
           stockItem: row.tally_ledger_name ?? '',
           stockItemSuggested: row.is_suggested === true,
-          taxRate: gstPct,
+          taxRate: lineItem?.gst_percent ?? null,
           qty:  row.qty ?? null,
           uom:  row.uom ?? '',
           rate: row.rate ?? null,
@@ -258,13 +272,11 @@ function FlatPreviewTable({
         });
       });
     } else {
-      // Accounting-only mode: one row per LINE ITEM from the invoice
-      // Purchase rows are grouped by GST rate — don't use them for item iteration
       const lineItems = invoice?.line_items ?? [];
       if (lineItems.length === 0) {
         displayRows.push({
           ...base, isFirst: true, ...invoiceTail,
-          purchaseLedger: '', purchaseLedgerSuggested: false,
+          purchaseLedger: invPlLedger, purchaseLedgerSuggested: invPlSuggested,
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
@@ -272,25 +284,17 @@ function FlatPreviewTable({
         continue;
       }
       lineItems.forEach((item, idx) => {
-        const gstPct = item.gst_percent ?? null;
-        const hasInvGst = (invoice?.cgst ?? 0) > 0 || (invoice?.sgst ?? 0) > 0 || (invoice?.igst ?? 0) > 0;
-        const plEntry = gstPct != null
-          ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
-          : purchaseLedgers[0];
-        // If no saved mapping exists for this rate, show the suggestion
-        const plLedger = plEntry?.tally_ledger_name || (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
-        const purchaseLedgerSuggested = !plEntry?.tally_ledger_name;
         displayRows.push({
           ...base,
           isFirst: idx === 0,
           ...(idx === 0 ? invoiceTail : emptyTail),
-          purchaseLedger: plLedger,
-          purchaseLedgerSuggested,
+          purchaseLedger: invPlLedger,
+          purchaseLedgerSuggested: invPlSuggested,
           itemDesc: item.description ?? '',
           hsn: item.hsn ?? '',
           stockItem: '',
           stockItemSuggested: false,
-          taxRate: gstPct,
+          taxRate: item.gst_percent ?? null,
           qty:  item.qty ?? null,
           uom:  item.uom ?? '',
           rate: item.rate ?? null,
@@ -303,195 +307,298 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
+  // Dual-scroll: sync top scrollbar with table scroll
+  const tableContainerRef = React.useRef<HTMLDivElement>(null);
+  const topScrollRef = React.useRef<HTMLDivElement>(null);
+  const [tableScrollWidth, setTableScrollWidth] = React.useState(0);
+  React.useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const update = () => setTableScrollWidth(el.scrollWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [displayRows]);
+  const onTableScroll = () => {
+    if (topScrollRef.current && tableContainerRef.current)
+      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+  };
+  const onTopScroll = () => {
+    if (tableContainerRef.current && topScrollRef.current)
+      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+  };
+
   const TH = ({ children, right }: { children: React.ReactNode; right?: boolean }) => (
-    <th className={`px-3 py-2.5 border-b border-gray-200 font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap text-[11px] ${right ? 'text-right' : 'text-left'}`}>
+    <th className={`px-3 py-2.5 border-b border-gray-200 font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap text-[11px] bg-gray-50 ${right ? 'text-right' : 'text-left'}`}>
       {children}
     </th>
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
-      <table className="min-w-max text-xs border-collapse">
-        <thead className="bg-gray-50">
-          <tr>
-            {/* Invoice Date */}
-            <TH>Date</TH>
-            {/* Invoice No */}
-            <TH>Invoice No</TH>
-            {/* Voucher Type */}
-            <TH>Voucher Type</TH>
-            {/* Vendor Name */}
-            <TH>Vendor (Invoice)</TH>
-            {/* Vendor Ledger */}
-            <TH>Vendor Ledger (Tally)</TH>
-            {/* GSTIN */}
-            <TH>GSTIN</TH>
-            {/* Reg Type */}
-            <TH>GST Reg Type</TH>
-            {/* Purchase Ledger */}
-            <TH>Purchase Ledger (Tally)</TH>
-            {/* Item */}
-            <TH>Item Name + HSN (Invoice)</TH>
-            {/* Stock Item */}
-            <TH>Stock Item (Tally)</TH>
-            {/* Tax Rate */}
-            <TH right>Tax Rate %</TH>
-            {/* Qty */}
-            <TH right>Qty</TH>
-            {/* UOM */}
-            <TH>UOM</TH>
-            {/* Rate */}
-            <TH right>Rate (₹)</TH>
-            {/* Disc */}
-            <TH right>Discount %</TH>
-            {/* Amount */}
-            <TH right>Amount (₹)</TH>
-            {/* Charges */}
-            {Array.from({ length: maxCharges }, (_, ci) => (
-              <React.Fragment key={`ch${ci}`}>
-                <TH>Charge {ci + 1} (Invoice)</TH>
-                <TH>Charge {ci + 1} Ledger (Tally)</TH>
-                <TH right>Charge {ci + 1} Amt (₹)</TH>
-              </React.Fragment>
-            ))}
-            {/* CGST */}
-            <TH>CGST Ledger (Tally)</TH>
-            <TH right>CGST Amt (₹)</TH>
-            {/* SGST */}
-            <TH>SGST Ledger (Tally)</TH>
-            <TH right>SGST Amt (₹)</TH>
-            {/* IGST */}
-            <TH>IGST Ledger (Tally)</TH>
-            <TH right>IGST Amt (₹)</TH>
-            {/* Round Off */}
-            <TH>Round Off Ledger (Tally)</TH>
-            <TH right>Round Off Amt (₹)</TH>
-          </tr>
-        </thead>
-        <tbody>
-          {displayRows.map((row, i) => {
-            const prevRow = displayRows[i - 1];
-            const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
-            const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
-            const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
-            const Sug = ({ children, active }: { children: React.ReactNode; active: boolean }) =>
-              active
-                ? <span className="font-mono font-medium text-amber-700 bg-amber-50 px-1 py-0.5 rounded text-[11px]" title="AI suggestion — verify in Tally">{children} ✦</span>
-                : <span className="font-mono font-medium">{children}</span>;
+    <div className="rounded-lg border border-gray-200 shadow-sm">
+      {/* Top scrollbar mirror */}
+      <div ref={topScrollRef} onScroll={onTopScroll} className="overflow-x-auto" style={{ height: 12 }}>
+        <div style={{ width: tableScrollWidth, height: 1 }} />
+      </div>
+      {/* Table with sticky header */}
+      <div ref={tableContainerRef} onScroll={onTableScroll} className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+        <table className="min-w-max text-xs border-collapse">
+          <thead className="bg-gray-50 sticky top-0 z-10">
+            <tr>
+              <TH>Date</TH>
+              <TH>Invoice No</TH>
+              <TH>Voucher Type</TH>
+              <TH>Vendor (Invoice)</TH>
+              <TH>Vendor Ledger (Tally)</TH>
+              <TH>GSTIN</TH>
+              <TH>GST Reg Type</TH>
+              <TH>Purchase Ledger (Tally)</TH>
+              <TH>Item Name + HSN (Invoice)</TH>
+              <TH>Stock Item (Tally)</TH>
+              <TH right>Tax Rate %</TH>
+              <TH right>Qty</TH>
+              <TH>UOM</TH>
+              <TH right>Rate (₹)</TH>
+              <TH right>Discount %</TH>
+              <TH right>Amount (₹)</TH>
+              {Array.from({ length: maxCharges }, (_, ci) => (
+                <React.Fragment key={`ch${ci}`}>
+                  <TH>Charge {ci + 1} (Invoice)</TH>
+                  <TH>Charge {ci + 1} Ledger (Tally)</TH>
+                  <TH right>Charge {ci + 1} Amt (₹)</TH>
+                </React.Fragment>
+              ))}
+              <TH>CGST Ledger (Tally)</TH>
+              <TH right>CGST Amt (₹)</TH>
+              <TH>SGST Ledger (Tally)</TH>
+              <TH right>SGST Amt (₹)</TH>
+              <TH>IGST Ledger (Tally)</TH>
+              <TH right>IGST Amt (₹)</TH>
+              <TH>Round Off Ledger (Tally)</TH>
+              <TH right>Round Off Amt (₹)</TH>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row, i) => {
+              const prevRow = displayRows[i - 1];
+              const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
+              const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
+              const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
 
-            return (
-              <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
-                {/* Date */}
-                <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
-                {/* Invoice No */}
-                <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800">{row.invoiceNo}</td>
-                {/* Voucher Type */}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {row.isFirst && <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700">{row.voucherType}</span>}
-                </td>
-                {/* Vendor Name */}
-                <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
-                {/* Vendor Ledger */}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {row.isFirst ? (
-                    suppliers.length > 0 && row.vendorSuggested ? (
-                      <select defaultValue="" onChange={(e) => e.target.value && onMapSupplier(row.vendorName, e.target.value)}
-                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
-                        <option value="">{row.vendorLedger} (suggested)</option>
-                        {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
-                      </select>
+              // Amber cell for AI suggestions
+              const Sug = ({ children, active }: { children: React.ReactNode; active: boolean }) =>
+                active
+                  ? <span className="font-mono font-medium text-amber-700 bg-amber-50 px-1 py-0.5 rounded text-[11px]" title="AI suggestion — verify in Tally">{children} ✦</span>
+                  : <span className="font-mono font-medium">{children}</span>;
+
+              // Editable vendor ledger — always show input when suggested
+              const editedVendorLedger = vendorEdits[row.vendorName];
+              const vendorDisplayVal = editedVendorLedger ?? row.vendorLedger;
+
+              return (
+                <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
+                  {/* Date */}
+                  <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
+                  {/* Invoice No */}
+                  <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800">{row.invoiceNo}</td>
+                  {/* Voucher Type — every row */}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700">{row.voucherType}</span>
+                  </td>
+                  {/* Vendor Name — every row */}
+                  <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
+                  {/* Vendor Ledger — every row, always editable when suggested */}
+                  <td className="px-3 py-2 whitespace-nowrap min-w-[180px]">
+                    {row.vendorSuggested ? (
+                      suppliers.length > 0 ? (
+                        <select
+                          value={editedVendorLedger ?? ''}
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            setVendorEdits((prev) => ({ ...prev, [row.vendorName]: e.target.value }));
+                            onMapSupplier(row.vendorName, e.target.value);
+                          }}
+                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full"
+                        >
+                          <option value="">{vendorDisplayVal} (suggested) ✦</option>
+                          {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          defaultValue={vendorDisplayVal}
+                          placeholder="Enter Tally ledger name…"
+                          onBlur={(e) => {
+                            const val = e.target.value.trim();
+                            if (val) {
+                              setVendorEdits((prev) => ({ ...prev, [row.vendorName]: val }));
+                              onMapSupplier(row.vendorName, val);
+                            }
+                          }}
+                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full font-mono"
+                          title="AI suggestion — type to override"
+                        />
+                      )
                     ) : (
-                      <Sug active={row.vendorSuggested}><span className="text-purple-800">{row.vendorLedger}</span></Sug>
-                    )
-                  ) : null}
-                </td>
-                {/* GSTIN */}
-                <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '—'}</td>
-                {/* Reg Type */}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {row.isFirst && row.gstRegType && (
-                    <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded font-medium ${row.gstRegType === 'Unregistered' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                      {row.gstRegType}
-                    </span>
-                  )}
-                </td>
-                {/* Purchase Ledger */}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  <Sug active={row.purchaseLedgerSuggested}><span className="text-blue-800">{row.purchaseLedger || '—'}</span></Sug>
-                </td>
-                {/* Item Name + HSN */}
-                <td className="px-3 py-2 max-w-[220px]">
-                  <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
-                  {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
-                </td>
-                {/* Stock Item */}
-                <td className="px-3 py-2 whitespace-nowrap">
-                  {isInventoryMode && stockItems.length > 0 && row.stockItemSuggested ? (
-                    <select defaultValue="" onChange={(e) => e.target.value && onMapStockItem(row.itemDesc, e.target.value)}
-                      className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
-                      <option value="">{row.stockItem} (suggested)</option>
-                      {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
-                    </select>
-                  ) : (
-                    <Sug active={isInventoryMode && row.stockItemSuggested}><span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span></Sug>
-                  )}
-                </td>
-                {/* Tax Rate */}
-                <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '—'}</td>
-                {/* Qty */}
-                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '—'}</td>
-                {/* UOM */}
-                <td className="px-3 py-2 text-gray-500">{row.uom || '—'}</td>
-                {/* Rate */}
-                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '—'}</td>
-                {/* Disc */}
-                <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '—'}</td>
-                {/* Amount */}
-                <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
-                  {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-                {/* Charges */}
-                {Array.from({ length: maxCharges }, (_, ci) => {
-                  const ch = row.isFirst ? row.charges[ci] : undefined;
-                  return (
-                    <React.Fragment key={`ch${ci}`}>
-                      <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {ch && (
-                          expenseLedgers.length > 0 && ch.suggested ? (
-                            <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
-                              className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
-                              <option value="">{ch.ledger} (suggested)</option>
-                              {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
-                            </select>
-                          ) : (
-                            <Sug active={ch.suggested}><span className="text-orange-700">{ch.ledger}</span></Sug>
-                          )
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-gray-700">
-                        {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
-                      </td>
-                    </React.Fragment>
-                  );
-                })}
-                {/* CGST */}
-                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.cgstSuggested}><span className="text-teal-700">{row.cgstLedger || '—'}</span></Sug> : ''}</td>
-                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}</td>
-                {/* SGST */}
-                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.sgstSuggested}><span className="text-teal-700">{row.sgstLedger || '—'}</span></Sug> : ''}</td>
-                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}</td>
-                {/* IGST */}
-                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.igstSuggested}><span className="text-cyan-700">{row.igstLedger || '—'}</span></Sug> : ''}</td>
-                <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}</td>
-                {/* Round Off */}
-                <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
-                <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                      <span className="font-mono font-medium text-purple-800">{row.vendorLedger}</span>
+                    )}
+                  </td>
+                  {/* GSTIN */}
+                  <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '—'}</td>
+                  {/* Reg Type */}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {row.gstRegType && (
+                      <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded font-medium ${row.gstRegType === 'Unregistered' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                        {row.gstRegType}
+                      </span>
+                    )}
+                  </td>
+                  {/* Purchase Ledger — every row, same for whole invoice */}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <Sug active={row.purchaseLedgerSuggested}><span className="text-blue-800">{row.purchaseLedger || '—'}</span></Sug>
+                  </td>
+                  {/* Item Name + HSN */}
+                  <td className="px-3 py-2 max-w-[220px]">
+                    <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
+                    {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
+                  </td>
+                  {/* Stock Item */}
+                  <td className="px-3 py-2 whitespace-nowrap min-w-[180px]">
+                    {isInventoryMode && row.stockItemSuggested ? (
+                      stockItems.length > 0 ? (
+                        <select
+                          defaultValue=""
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            const chosen = e.target.value;
+                            setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
+                            onMapStockItem(row.itemDesc, chosen);
+                          }}
+                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full"
+                        >
+                          <option value="">{row.stockItem} (suggested) ✦</option>
+                          {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          defaultValue={row.stockItem}
+                          placeholder="Enter stock item name…"
+                          onBlur={(e) => {
+                            const val = e.target.value.trim();
+                            if (val) {
+                              setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: val });
+                              onMapStockItem(row.itemDesc, val);
+                            }
+                          }}
+                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full font-mono"
+                          title="AI suggestion — type to override"
+                        />
+                      )
+                    ) : (
+                      <Sug active={false}><span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span></Sug>
+                    )}
+                  </td>
+                  {/* Tax Rate */}
+                  <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '—'}</td>
+                  {/* Qty */}
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '—'}</td>
+                  {/* UOM */}
+                  <td className="px-3 py-2 text-gray-500">{row.uom || '—'}</td>
+                  {/* Rate */}
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '—'}</td>
+                  {/* Disc */}
+                  <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '—'}</td>
+                  {/* Amount */}
+                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
+                    {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  {/* Charges */}
+                  {Array.from({ length: maxCharges }, (_, ci) => {
+                    const ch = row.isFirst ? row.charges[ci] : undefined;
+                    return (
+                      <React.Fragment key={`ch${ci}`}>
+                        <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {ch && (
+                            expenseLedgers.length > 0 && ch.suggested ? (
+                              <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
+                                className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
+                                <option value="">{ch.ledger} (suggested) ✦</option>
+                                {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                              </select>
+                            ) : (
+                              <Sug active={ch.suggested}><span className="text-orange-700">{ch.ledger}</span></Sug>
+                            )
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-gray-700">
+                          {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
+                        </td>
+                      </React.Fragment>
+                    );
+                  })}
+                  {/* CGST */}
+                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.cgstSuggested}><span className="text-teal-700">{row.cgstLedger || '—'}</span></Sug> : ''}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}</td>
+                  {/* SGST */}
+                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.sgstSuggested}><span className="text-teal-700">{row.sgstLedger || '—'}</span></Sug> : ''}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}</td>
+                  {/* IGST */}
+                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.igstSuggested}><span className="text-cyan-700">{row.igstLedger || '—'}</span></Sug> : ''}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}</td>
+                  {/* Round Off */}
+                  <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Stock item "apply to all" confirm popup */}
+      {stockConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-base font-semibold text-gray-900 mb-2">Apply naming pattern to all?</h3>
+            <p className="text-sm text-gray-600 mb-1">
+              You confirmed stock item: <span className="font-mono font-semibold text-indigo-700">{stockConfirm.chosenName}</span>
+            </p>
+            <p className="text-sm text-gray-600 mb-4">
+              Would you like to use <span className="font-mono font-semibold">HSN @ Rate%</span> as the naming pattern for all other AI-suggested stock items too?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  // Apply HSN @ Rate% format to all suggested stock items across all invoices
+                  rows
+                    .filter((r) => r.ledger_type === 'Inventory' && r.is_suggested)
+                    .forEach((r) => {
+                      const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
+                      const li = inv?.line_items.find((l) => l.description === r.item_description);
+                      if (li) {
+                        const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
+                        onMapStockItem(r.item_description ?? '', name);
+                      }
+                    });
+                  setStockConfirm(null);
+                }}
+                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+              >
+                Yes, use HSN @ Rate% for all
+              </button>
+              <button
+                onClick={() => setStockConfirm(null)}
+                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                No, map individually
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
