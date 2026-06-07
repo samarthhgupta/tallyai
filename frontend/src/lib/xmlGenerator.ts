@@ -425,6 +425,186 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   return { xml: wrapVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join(''), voucherTypeName), warnings };
 }
 
+// ─── Master creation XML ──────────────────────────────────────────────────────
+// Generates a separate XML file (REPORTNAME=All Masters) that creates all
+// ledgers and stock items referenced in the export batch. Import this FIRST
+// in Tally before importing the vouchers XML — Tally silently skips masters
+// that already exist, so it is safe to re-import.
+
+function masterLedgerBlock(name: string, fields: string): string {
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <LEDGER NAME="${name}" ACTION="Create">
+        ${fields}
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <LANGUAGENAME.LIST>
+          <NAME.LIST TYPE="String">
+            <NAME>${name}</NAME>
+          </NAME.LIST>
+          <LANGUAGEID> 1033</LANGUAGEID>
+        </LANGUAGENAME.LIST>
+      </LEDGER>
+    </TALLYMESSAGE>`;
+}
+
+function buildSupplierMasterBlock(s: SupplierMaster): string {
+  const gstin = s.vendor_gstin ? `<PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : '';
+  const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
+  return masterLedgerBlock(esc(s.tally_ledger_name), `
+        <PARENT>Sundry Creditors</PARENT>
+        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+        ${gstin}
+        <ISBILLWISEON>No</ISBILLWISEON>`);
+}
+
+function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry): string {
+  return masterLedgerBlock(esc(pl.tally_ledger_name), `
+        <PARENT>Purchase Accounts</PARENT>
+        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+        <TAXTYPE>Others</TAXTYPE>
+        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+        <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+        <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`);
+}
+
+function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
+  const dutyHeadMap: Record<string, string> = { CGST: 'CGST', SGST: 'SGST/UTGST', IGST: 'IGST' };
+  const dutyHead = dutyHeadMap[dt.tax_component] ?? dt.tax_component;
+  return masterLedgerBlock(esc(dt.tally_ledger_name), `
+        <PARENT>Duties &amp; Taxes</PARENT>
+        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+        <TAXTYPE>GST</TAXTYPE>
+        <GSTDUTYHEAD>${dutyHead}</GSTDUTYHEAD>`);
+}
+
+function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
+  return masterLedgerBlock(esc(el.tally_ledger_name), `
+        <PARENT>Indirect Expenses</PARENT>
+        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+        <TAXTYPE>Others</TAXTYPE>
+        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+        <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`);
+}
+
+function buildStockItemBlock(s: StockItemMaster, gstPercent: number): string {
+  const halfRate = gstPercent / 2;
+  const unit = s.unit || 'Nos';
+  const hsnBlock = s.hsn_code ? `
+        <HSNDETAILS.LIST>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <HSNCODE>${esc(s.hsn_code)}</HSNCODE>
+          <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
+        </HSNDETAILS.LIST>` : '';
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <STOCKITEM NAME="${esc(s.tally_item_name)}" ACTION="Create">
+        <PARENT/>
+        <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+        <BASEUNITS>${esc(unit)}</BASEUNITS>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <GSTDETAILS.LIST>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <TAXABILITY>Taxable</TAXABILITY>
+          <STATEWISEDETAILS.LIST>
+            <STATENAME>&#4; Any</STATENAME>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${gstPercent}</GSTRATE>
+            </RATEDETAILS.LIST>
+          </STATEWISEDETAILS.LIST>
+        </GSTDETAILS.LIST>${hsnBlock}
+        <LANGUAGENAME.LIST>
+          <NAME.LIST TYPE="String">
+            <NAME>${esc(s.tally_item_name)}</NAME>
+          </NAME.LIST>
+          <LANGUAGEID> 1033</LANGUAGEID>
+        </LANGUAGENAME.LIST>
+      </STOCKITEM>
+    </TALLYMESSAGE>`;
+}
+
+export function generateMastersXml(input: XmlGeneratorInput): string {
+  const messages: string[] = [];
+
+  // 1. Supplier ledgers — only those used in this export batch
+  const seenSuppliers = new Set<string>();
+  for (const inv of input.invoices) {
+    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+    if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
+      seenSuppliers.add(supplier.tally_ledger_name);
+      messages.push(buildSupplierMasterBlock(supplier));
+    }
+  }
+
+  // 2. Purchase account ledgers (all configured)
+  for (const pl of input.purchaseLedgers) {
+    if (pl.tally_ledger_name.trim()) messages.push(buildPurchaseLedgerBlock(pl));
+  }
+
+  // 3. GST duty/tax ledgers (all configured)
+  for (const dt of input.dutiesTaxes) {
+    messages.push(buildTaxLedgerBlock(dt));
+  }
+
+  // 4. Expense ledgers (all configured; parent defaults to Indirect Expenses)
+  for (const el of input.expenseLedgers) {
+    messages.push(buildExpenseLedgerBlock(el));
+  }
+
+  // 5. Stock items — inventory mode only, only those mapped in this batch
+  if (input.voucherMode === 'inventory') {
+    // Build a map from tally_item_name → GST rate (from first matching invoice line)
+    const itemRateMap = new Map<string, number>();
+    for (const inv of input.invoices) {
+      for (const item of inv.line_items) {
+        const stockItem = findStockItem(input.stockItems, item.description ?? '');
+        if (stockItem && !itemRateMap.has(stockItem.tally_item_name)) {
+          itemRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
+        }
+      }
+    }
+    for (const [, stockItem] of input.stockItems
+      .filter((s) => itemRateMap.has(s.tally_item_name))
+      .map((s) => [s.tally_item_name, s] as const)) {
+      const rate = itemRateMap.get(stockItem.tally_item_name) ?? 0;
+      messages.push(buildStockItemBlock(stockItem, rate));
+    }
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${esc(input.tallyCompanyName)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>${messages.join('')}
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
