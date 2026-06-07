@@ -8,6 +8,7 @@ import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
+import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -134,6 +135,7 @@ function PreviewTable({
             <th className="px-4 py-3 text-left whitespace-nowrap">Invoice No</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Date</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Vendor</th>
+            <th className="px-4 py-3 text-left whitespace-nowrap">Voucher Type</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Type</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Tally Ledger / Details</th>
             <th className="px-4 py-3 text-right whitespace-nowrap">Amount (₹)</th>
@@ -159,6 +161,13 @@ function PreviewTable({
                 <td className="px-4 py-2.5 font-mono text-xs text-gray-600 whitespace-nowrap">{row.invoice_number}</td>
                 <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">{row.invoice_date}</td>
                 <td className="px-4 py-2.5 text-gray-700 max-w-[160px] truncate" title={row.vendor_name}>{row.vendor_name}</td>
+                <td className="px-4 py-2.5 whitespace-nowrap">
+                  {row.ledger_type === 'Party' && (
+                    <span className="inline-block text-xs font-mono px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                      {row.voucher_type_name}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-2.5 whitespace-nowrap">
                   <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${LEDGER_TYPE_COLORS[row.ledger_type]}`}>
                     {row.ledger_type}
@@ -236,13 +245,14 @@ function PreviewTable({
 // ─── Shared master loader ─────────────────────────────────────────────────────
 
 async function loadMasters(companyId: string) {
-  const [suppliers, dutiesTaxes, stockItems, expenseLedgers] = await Promise.all([
+  const [suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes] = await Promise.all([
     loadSuppliers(companyId),
     loadDutiesTaxes(companyId),
     loadStockItems(companyId),
     loadExpenseLedgers(companyId),
+    loadVoucherTypes(companyId),
   ]);
-  return { suppliers, dutiesTaxes, stockItems, expenseLedgers };
+  return { suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes };
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────

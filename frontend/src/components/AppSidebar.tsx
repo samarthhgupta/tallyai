@@ -14,6 +14,7 @@ const NAV = [
       { label: 'Stock Items', href: '/masters/stock-items' },
       { label: 'Expense Ledgers', href: '/masters/expense-ledgers' },
       { label: 'Duties & Taxes', href: '/masters/duties-taxes' },
+      { label: 'Voucher Types', href: '/masters/voucher-types' },
     ],
   },
   { label: 'Purchase Register', href: '/register' },

@@ -14,6 +14,8 @@ import type { SupplierMaster } from './suppliers';
 import type { DutiesTaxesMaster } from './dutiesTaxes';
 import type { StockItemMaster } from './stockItems';
 import type { ExpenseLedgerMaster } from './expenseLedgers';
+import type { VoucherTypeMaster } from './voucherTypes';
+import { resolveVoucherType } from './voucherTypes';
 import { calcLineAmount } from '@/types/invoice';
 
 export interface XmlGeneratorInput {
@@ -23,6 +25,7 @@ export interface XmlGeneratorInput {
   stockItems: StockItemMaster[];
   expenseLedgers: ExpenseLedgerMaster[];
   purchaseLedgers: PurchaseLedgerEntry[];   // maps gst_percent → purchase ledger name
+  voucherTypes: VoucherTypeMaster[];        // maps purchase category → voucher type name
   tallyCompanyName: string;                 // sacred — used verbatim in XML header
   voucherMode?: 'accounting_only' | 'inventory'; // default: accounting_only
   discountLedgerName?: string | null;       // Tally ledger for bill-level discounts (P&L)
@@ -301,13 +304,13 @@ function buildRoundOffEntry(inv: StoredInvoice, expenseLedgers: ExpenseLedgerMas
   return `\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>${inv.round_off > 0 ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(inv.round_off)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`;
 }
 
-function wrapVoucher(inv: StoredInvoice, partyLedger: string, ledgerXml: string, inventoryXml: string): string {
+function wrapVoucher(inv: StoredInvoice, partyLedger: string, ledgerXml: string, inventoryXml: string, voucherTypeName: string): string {
   const narration = `${esc(inv.vendor_name)} | ${esc(inv.invoice_number)} | ${inv.invoice_date}`;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <VOUCHER VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">
+      <VOUCHER VCHTYPE="${esc(voucherTypeName)}" ACTION="Create" OBJVIEW="Invoice Voucher View">
         <DATE>${tallyDate(inv.invoice_date)}</DATE>
-        <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+        <VOUCHERTYPENAME>${esc(voucherTypeName)}</VOUCHERTYPENAME>
         <PARTYLEDGERNAME>${esc(partyLedger)}</PARTYLEDGERNAME>
         <VOUCHERNUMBER>${esc(inv.invoice_number)}</VOUCHERNUMBER>
         <NARRATION>${narration}</NARRATION>${inventoryXml}${ledgerXml}
@@ -324,6 +327,8 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   if (!supplier) return { xml: null, skip: `Supplier not found in master for "${inv.vendor_name}"`, warnings };
   const partyLedger = supplier.tally_ledger_name;
+  const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+  const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
   const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
   const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
 
@@ -349,7 +354,7 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const ro = buildRoundOffEntry(inv, input.expenseLedgers);
   if (ro) entries.push(ro);
 
-  return { xml: wrapVoucher(inv, partyLedger, entries.join(''), ''), warnings };
+  return { xml: wrapVoucher(inv, partyLedger, entries.join(''), '', voucherTypeName), warnings };
 }
 
 function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
@@ -357,6 +362,8 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   if (!supplier) return { xml: null, skip: `Supplier not found in master for "${inv.vendor_name}"`, warnings };
   const partyLedger = supplier.tally_ledger_name;
+  const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+  const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
   let totalItemsAmount = 0;
   const invEntries: string[] = [];
@@ -415,7 +422,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const ro = buildRoundOffEntry(inv, input.expenseLedgers);
   if (ro) ledgerEntries.push(ro);
 
-  return { xml: wrapVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join('')), warnings };
+  return { xml: wrapVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join(''), voucherTypeName), warnings };
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -465,6 +472,7 @@ export interface PreviewRow {
   invoice_date: string;
   vendor_name: string;
   party_ledger: string;
+  voucher_type_name: string;   // resolved Tally voucher type for this invoice
   ledger_type: 'Party' | 'Purchase' | 'CGST' | 'SGST' | 'IGST' | 'Expense' | 'Round Off' | 'Inventory' | 'Discount';
   tally_ledger_name: string;
   amount: number;
@@ -486,21 +494,23 @@ export function buildTallyPreview(input: XmlGeneratorInput): PreviewRow[] {
     : buildAccountingOnlyPreview(input);
 }
 
-function makeBase(inv: StoredInvoice, partyLedger: string) {
-  return { invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, vendor_name: inv.vendor_name, party_ledger: partyLedger };
+function makeBase(inv: StoredInvoice, partyLedger: string, voucherTypeName: string) {
+  return { invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, vendor_name: inv.vendor_name, party_ledger: partyLedger, voucher_type_name: voucherTypeName };
 }
 
 function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
   const rows: PreviewRow[] = [];
 
   for (const inv of input.invoices) {
+    const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+    const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
     if (!supplier) {
-      rows.push({ ...makeBase(inv, '—'), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
+      rows.push({ ...makeBase(inv, '—', voucherTypeName), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
       continue;
     }
     const partyLedger = supplier.tally_ledger_name;
-    const base = makeBase(inv, partyLedger);
+    const base = makeBase(inv, partyLedger, voucherTypeName);
     const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
     const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
 
@@ -557,13 +567,15 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
   const rows: PreviewRow[] = [];
 
   for (const inv of input.invoices) {
+    const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+    const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
     if (!supplier) {
-      rows.push({ ...makeBase(inv, '—'), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
+      rows.push({ ...makeBase(inv, '—', voucherTypeName), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
       continue;
     }
     const partyLedger = supplier.tally_ledger_name;
-    const base = makeBase(inv, partyLedger);
+    const base = makeBase(inv, partyLedger, voucherTypeName);
     let totalItemsAmount = 0;
 
     for (const item of inv.line_items) {
