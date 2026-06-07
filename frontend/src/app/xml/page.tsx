@@ -112,40 +112,46 @@ function PurchaseLedgerRow({
 import type { SupplierMaster } from '@/lib/suppliers';
 
 interface FlatDisplayRow {
-  // invoice-level
+  // invoice-level (repeated on every row)
   invoiceDate: string;
   invoiceNo: string;
   voucherType: string;
   vendorName: string;
   vendorLedger: string;
-  vendorSuggested: boolean;  // amber — AI guess, not from master
+  vendorSuggested: boolean;
   gstin: string;
   gstRegType: string;
+  // invoice-level tax ledgers (same for all rows in this invoice)
+  taxType: 'cgst_sgst' | 'igst' | 'none';
+  cgstLedger: string; cgstSuggested: boolean;
+  sgstLedger: string; sgstSuggested: boolean;
+  igstLedger: string; igstSuggested: boolean;
   // item-level
   purchaseLedger: string;
   purchaseLedgerSuggested: boolean;
   itemDesc: string;
   hsn: string;
   stockItem: string;
-  stockItemSuggested: boolean;  // amber — AI guess
+  stockItemSuggested: boolean;
   taxRate: number | null;
   qty: number | null;
   uom: string;
   rate: number | null;
   disc: number | null;
   amount: number;
-  // invoice-level shown only on first item row
+  // per-item tax amounts (computed from item taxable × gst rate)
+  cgstAmt: number;
+  sgstAmt: number;
+  igstAmt: number;
+  // invoice-level — only on first row
   isFirst: boolean;
   charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number }>;
-  cgstLedger: string; cgstAmt: number; cgstSuggested: boolean;
-  sgstLedger: string; sgstAmt: number; sgstSuggested: boolean;
-  igstLedger: string; igstAmt: number; igstSuggested: boolean;
   roLedger: string; roAmt: number;
 }
 
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems, purchaseLedgers,
-  onMapExpense, onMapSupplier, onMapStockItem,
+  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -156,11 +162,15 @@ function FlatPreviewTable({
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
+  onMapTaxLedger: (type: 'CGST' | 'SGST' | 'IGST', name: string) => void;
 }) {
   const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
 
-  // Editable vendor ledger names (keyed by vendor_name)
+  // Local editable overrides (keyed as needed)
   const [vendorEdits, setVendorEdits] = React.useState<Record<string, string>>({});
+  const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
+  const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
+  const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
@@ -213,21 +223,14 @@ function FlatPreviewTable({
       amount: c.amount,
     }));
 
+    // Tax ledger info lives in base (repeats every row); amounts computed per item
+    const invTaxType = (invoice?.tax_type ?? 'none') as 'cgst_sgst' | 'igst' | 'none';
     const invoiceTail = {
       charges,
-      cgstLedger: cgst?.tally_ledger_name?.startsWith('—') ? '' : (cgst?.tally_ledger_name ?? ''),
-      cgstAmt: cgst?.amount ?? 0,
-      cgstSuggested: cgst?.is_suggested === true,
-      sgstLedger: sgst?.tally_ledger_name?.startsWith('—') ? '' : (sgst?.tally_ledger_name ?? ''),
-      sgstAmt: sgst?.amount ?? 0,
-      sgstSuggested: sgst?.is_suggested === true,
-      igstLedger: igst?.tally_ledger_name?.startsWith('—') ? '' : (igst?.tally_ledger_name ?? ''),
-      igstAmt: igst?.amount ?? 0,
-      igstSuggested: igst?.is_suggested === true,
       roLedger: ro?.tally_ledger_name?.startsWith('(') ? '' : (ro?.tally_ledger_name ?? ''),
       roAmt:  ro?.amount ?? 0,
     };
-    const emptyTail = { charges: [], cgstLedger: '', cgstAmt: 0, cgstSuggested: false, sgstLedger: '', sgstAmt: 0, sgstSuggested: false, igstLedger: '', igstAmt: 0, igstSuggested: false, roLedger: '', roAmt: 0 };
+    const emptyTail = { charges: [], roLedger: '', roAmt: 0 };
 
     const base = {
       invoiceDate: partyRow?.invoice_date ?? (invoice?.invoice_date ?? ''),
@@ -238,6 +241,23 @@ function FlatPreviewTable({
       vendorSuggested,
       gstin: invoice?.vendor_gstin ?? '',
       gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
+      taxType: invTaxType,
+      cgstLedger: cgst?.tally_ledger_name?.startsWith('—') ? '' : (cgst?.tally_ledger_name ?? ''),
+      cgstSuggested: cgst?.is_suggested === true,
+      sgstLedger: sgst?.tally_ledger_name?.startsWith('—') ? '' : (sgst?.tally_ledger_name ?? ''),
+      sgstSuggested: sgst?.is_suggested === true,
+      igstLedger: igst?.tally_ledger_name?.startsWith('—') ? '' : (igst?.tally_ledger_name ?? ''),
+      igstSuggested: igst?.is_suggested === true,
+    };
+
+    // Helper: per-item tax from taxable amount and gst rate
+    const itemTax = (taxable: number, gstPct: number | null) => {
+      const pct = gstPct ?? 0;
+      return {
+        cgstAmt: invTaxType === 'cgst_sgst' ? Math.round(taxable * (pct / 2) / 100 * 100) / 100 : 0,
+        sgstAmt: invTaxType === 'cgst_sgst' ? Math.round(taxable * (pct / 2) / 100 * 100) / 100 : 0,
+        igstAmt: invTaxType === 'igst'       ? Math.round(taxable * pct / 100 * 100) / 100 : 0,
+      };
     };
 
     if (isInventoryMode) {
@@ -248,11 +268,13 @@ function FlatPreviewTable({
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
+          cgstAmt: 0, sgstAmt: 0, igstAmt: 0,
         });
         continue;
       }
       invRows2.forEach((row, idx) => {
         const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
+        const tax = itemTax(row.amount, lineItem?.gst_percent ?? null);
         displayRows.push({
           ...base,
           isFirst: idx === 0,
@@ -264,6 +286,7 @@ function FlatPreviewTable({
           stockItem: row.tally_ledger_name ?? '',
           stockItemSuggested: row.is_suggested === true,
           taxRate: lineItem?.gst_percent ?? null,
+          ...tax,
           qty:  row.qty ?? null,
           uom:  row.uom ?? '',
           rate: row.rate ?? null,
@@ -280,14 +303,14 @@ function FlatPreviewTable({
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
+          cgstAmt: 0, sgstAmt: 0, igstAmt: 0,
         });
         continue;
       }
       lineItems.forEach((item, idx) => {
-        // Show HSN @ Rate% as suggested stock item name even in accounting mode (informational)
-        const hsnSuggestion = item.hsn
-          ? `${item.hsn} @ ${item.gst_percent ?? 0}%`
-          : '';
+        const hsnSuggestion = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : '';
+        const itemAmt = calcLineAmount(item);
+        const tax = itemTax(itemAmt, item.gst_percent ?? null);
         displayRows.push({
           ...base,
           isFirst: idx === 0,
@@ -303,7 +326,8 @@ function FlatPreviewTable({
           uom:  item.uom ?? '',
           rate: item.rate ?? null,
           disc: (item.disc_percent ?? 0) > 0 ? item.disc_percent : null,
-          amount: calcLineAmount(item),
+          amount: itemAmt,
+          ...tax,
         });
       });
     }
@@ -390,15 +414,43 @@ function FlatPreviewTable({
               const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
 
-              // Amber cell for AI suggestions
-              const Sug = ({ children, active }: { children: React.ReactNode; active: boolean }) =>
-                active
-                  ? <span className="font-mono font-medium text-amber-700 bg-amber-50 px-1 py-0.5 rounded text-[11px]" title="AI suggestion — verify in Tally">{children} ✦</span>
-                  : <span className="font-mono font-medium">{children}</span>;
+              // Editable input for any suggested Tally field
+              const EditableField = ({ value, suggested, color, onSave, placeholder }: {
+                value: string; suggested: boolean; color: string;
+                onSave: (v: string) => void; placeholder?: string;
+              }) => {
+                const [draft, setDraft] = React.useState(value);
+                if (!suggested) return <span className={`font-mono font-medium ${color}`}>{value || '—'}</span>;
+                return (
+                  <div className="flex items-center gap-1 min-w-[140px]">
+                    <input
+                      type="text"
+                      value={draft}
+                      placeholder={placeholder ?? 'Enter Tally name…'}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+                      onBlur={() => { const v = draft.trim(); if (v) onSave(v); }}
+                      className={`border border-amber-300 rounded px-2 py-0.5 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 flex-1 font-mono min-w-0`}
+                      title="AI suggestion ✦ — edit and press Enter or click away to save"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { const v = draft.trim(); if (v) onSave(v); }}
+                      className="shrink-0 w-5 h-5 flex items-center justify-center rounded bg-indigo-600 text-white text-[10px] hover:bg-indigo-700"
+                      title="Save"
+                    >✓</button>
+                  </div>
+                );
+              };
 
-              // Editable vendor ledger — always show input when suggested
-              const editedVendorLedger = vendorEdits[row.vendorName];
-              const vendorDisplayVal = editedVendorLedger ?? row.vendorLedger;
+              // Vendor ledger: dropdown if master exists, input otherwise
+              const editedVendor = vendorEdits[row.vendorName];
+              const vendorDisplayVal = editedVendor ?? row.vendorLedger;
+
+              // Per-row tax ledger display values (shared across all rows via taxLedgerEdits)
+              const cgstDisplay = taxLedgerEdits.cgst ?? row.cgstLedger;
+              const sgstDisplay = taxLedgerEdits.sgst ?? row.sgstLedger;
+              const igstDisplay = taxLedgerEdits.igst ?? row.igstLedger;
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
@@ -406,43 +458,27 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
                   {/* Invoice No */}
                   <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800">{row.invoiceNo}</td>
-                  {/* Voucher Type — every row */}
+                  {/* Voucher Type */}
                   <td className="px-3 py-2 whitespace-nowrap">
                     <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700">{row.voucherType}</span>
                   </td>
-                  {/* Vendor Name — every row */}
+                  {/* Vendor Name */}
                   <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
-                  {/* Vendor Ledger — every row, always editable when suggested */}
-                  <td className="px-3 py-2 whitespace-nowrap min-w-[180px]">
+                  {/* Vendor Ledger */}
+                  <td className="px-3 py-2 min-w-[180px]">
                     {row.vendorSuggested ? (
                       suppliers.length > 0 ? (
-                        <select
-                          value={editedVendorLedger ?? ''}
-                          onChange={(e) => {
-                            if (!e.target.value) return;
-                            setVendorEdits((prev) => ({ ...prev, [row.vendorName]: e.target.value }));
-                            onMapSupplier(row.vendorName, e.target.value);
-                          }}
-                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full"
-                        >
+                        <select value={editedVendor ?? ''} onChange={(e) => {
+                          if (!e.target.value) return;
+                          setVendorEdits((p) => ({ ...p, [row.vendorName]: e.target.value }));
+                          onMapSupplier(row.vendorName, e.target.value);
+                        }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
                           <option value="">{vendorDisplayVal} (suggested) ✦</option>
                           {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
                         </select>
                       ) : (
-                        <input
-                          type="text"
-                          defaultValue={vendorDisplayVal}
-                          placeholder="Enter Tally ledger name…"
-                          onBlur={(e) => {
-                            const val = e.target.value.trim();
-                            if (val) {
-                              setVendorEdits((prev) => ({ ...prev, [row.vendorName]: val }));
-                              onMapSupplier(row.vendorName, val);
-                            }
-                          }}
-                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full font-mono"
-                          title="AI suggestion — type to override"
-                        />
+                        <EditableField value={vendorDisplayVal} suggested color="text-purple-800"
+                          onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); onMapSupplier(row.vendorName, v); }} />
                       )
                     ) : (
                       <span className="font-mono font-medium text-purple-800">{row.vendorLedger}</span>
@@ -458,53 +494,46 @@ function FlatPreviewTable({
                       </span>
                     )}
                   </td>
-                  {/* Purchase Ledger — every row, same for whole invoice */}
+                  {/* Purchase Ledger */}
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <Sug active={row.purchaseLedgerSuggested}><span className="text-blue-800">{row.purchaseLedger || '—'}</span></Sug>
+                    <EditableField value={row.purchaseLedger || '—'} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
+                      onSave={() => {}} />
                   </td>
                   {/* Item Name + HSN */}
                   <td className="px-3 py-2 max-w-[220px]">
                     <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
                     {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
-                  {/* Stock Item */}
-                  <td className="px-3 py-2 whitespace-nowrap min-w-[180px]">
-                    {isInventoryMode && row.stockItemSuggested ? (
-                      stockItems.length > 0 ? (
-                        <select
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (!e.target.value) return;
-                            const chosen = e.target.value;
-                            setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
-                            onMapStockItem(row.itemDesc, chosen);
-                          }}
-                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full"
-                        >
-                          <option value="">{row.stockItem} (suggested) ✦</option>
+                  {/* Stock Item — always editable when suggested */}
+                  <td className="px-3 py-2 min-w-[180px]">
+                    {row.stockItemSuggested ? (
+                      isInventoryMode && stockItems.length > 0 ? (
+                        <select defaultValue="" onChange={(e) => {
+                          if (!e.target.value) return;
+                          const chosen = e.target.value;
+                          const edited = stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? chosen;
+                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
+                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
+                          onMapStockItem(row.itemDesc, chosen);
+                          void edited;
+                        }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
+                          <option value="">{stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem} ✦</option>
                           {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
                         </select>
                       ) : (
-                        <input
-                          type="text"
-                          defaultValue={row.stockItem}
-                          placeholder="Enter stock item name…"
-                          onBlur={(e) => {
-                            const val = e.target.value.trim();
-                            if (val) {
-                              setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: val });
-                              onMapStockItem(row.itemDesc, val);
+                        <EditableField
+                          value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
+                          suggested color="text-indigo-700"
+                          onSave={(v) => {
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                            if (isInventoryMode) {
+                              setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                              onMapStockItem(row.itemDesc, v);
                             }
-                          }}
-                          className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 w-full font-mono"
-                          title="AI suggestion — type to override"
-                        />
+                          }} />
                       )
                     ) : (
-                      // Accounting mode: show HSN suggestion as amber text (informational — not saved to XML)
-                      <Sug active={row.stockItemSuggested}>
-                        <span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
-                      </Sug>
+                      <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
                     )}
                   </td>
                   {/* Tax Rate */}
@@ -521,22 +550,30 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
                     {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
-                  {/* Charges */}
+                  {/* Charges — only on first row of invoice */}
                   {Array.from({ length: maxCharges }, (_, ci) => {
                     const ch = row.isFirst ? row.charges[ci] : undefined;
                     return (
                       <React.Fragment key={`ch${ci}`}>
                         <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        <td className="px-3 py-2 min-w-[160px]">
                           {ch && (
-                            expenseLedgers.length > 0 && ch.suggested ? (
-                              <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
-                                className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
-                                <option value="">{ch.ledger} (suggested) ✦</option>
-                                {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
-                              </select>
+                            ch.suggested ? (
+                              expenseLedgers.length > 0 ? (
+                                <select defaultValue="" onChange={(e) => {
+                                  if (!e.target.value) return;
+                                  setChargeEdits((p) => ({ ...p, [ch.desc]: e.target.value }));
+                                  onMapExpense(ch.desc, e.target.value);
+                                }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
+                                  <option value="">{chargeEdits[ch.desc] ?? ch.ledger} ✦</option>
+                                  {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                                </select>
+                              ) : (
+                                <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested color="text-orange-700"
+                                  onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); onMapExpense(ch.desc, v); }} />
+                              )
                             ) : (
-                              <Sug active={ch.suggested}><span className="text-orange-700">{ch.ledger}</span></Sug>
+                              <span className="font-mono text-orange-700">{ch.ledger}</span>
                             )
                           )}
                         </td>
@@ -546,16 +583,37 @@ function FlatPreviewTable({
                       </React.Fragment>
                     );
                   })}
-                  {/* CGST */}
-                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.cgstSuggested}><span className="text-teal-700">{row.cgstLedger || '—'}</span></Sug> : ''}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}</td>
+                  {/* CGST — ledger editable, amount per line item */}
+                  <td className="px-3 py-2 min-w-[160px]">
+                    {row.taxType === 'cgst_sgst' && (
+                      <EditableField value={cgstDisplay} suggested={row.cgstSuggested} color="text-teal-700"
+                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                    {row.taxType === 'cgst_sgst' && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}
+                  </td>
                   {/* SGST */}
-                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.sgstSuggested}><span className="text-teal-700">{row.sgstLedger || '—'}</span></Sug> : ''}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}</td>
+                  <td className="px-3 py-2 min-w-[160px]">
+                    {row.taxType === 'cgst_sgst' && (
+                      <EditableField value={sgstDisplay} suggested={row.sgstSuggested} color="text-teal-700"
+                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                    {row.taxType === 'cgst_sgst' && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}
+                  </td>
                   {/* IGST */}
-                  <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.igstSuggested}><span className="text-cyan-700">{row.igstLedger || '—'}</span></Sug> : ''}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}</td>
-                  {/* Round Off */}
+                  <td className="px-3 py-2 min-w-[160px]">
+                    {row.taxType === 'igst' && (
+                      <EditableField value={igstDisplay} suggested={row.igstSuggested} color="text-cyan-700"
+                        onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                    {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
+                  </td>
+                  {/* Round Off — first row only */}
                   <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
                 </tr>
@@ -1104,6 +1162,9 @@ export default function XmlGeneratorPage() {
                   if (!company?.id) return;
                   try { await addStockItem(company.id, { tally_item_name: tallyItemName, alias_name: description }); handlePreview(); }
                   catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                }}
+                onMapTaxLedger={(_type, _name) => {
+                  // Tax ledger edits are local to the preview — to persist, configure in Duties & Taxes master
                 }}
               />
             </div>
