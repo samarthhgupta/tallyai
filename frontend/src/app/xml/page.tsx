@@ -21,23 +21,45 @@ import * as XLSX from 'xlsx';
 const COMMON_GST_RATES = [0, 5, 12, 18, 28];
 
 const LEDGER_TYPE_COLORS: Record<PreviewRow['ledger_type'], string> = {
-  Party:      'bg-purple-100 text-purple-700',
-  Purchase:   'bg-blue-100 text-blue-700',
-  CGST:       'bg-teal-100 text-teal-700',
-  SGST:       'bg-teal-100 text-teal-700',
-  IGST:       'bg-cyan-100 text-cyan-700',
-  Expense:    'bg-orange-100 text-orange-700',
-  'Round Off':'bg-gray-100 text-gray-600',
-  Inventory:  'bg-indigo-100 text-indigo-700',
-  Discount:   'bg-pink-100 text-pink-700',
+  Party:       'bg-purple-100 text-purple-700',
+  Purchase:    'bg-blue-100 text-blue-700',
+  CGST:        'bg-teal-100 text-teal-700',
+  SGST:        'bg-teal-100 text-teal-700',
+  IGST:        'bg-cyan-100 text-cyan-700',
+  Expense:     'bg-orange-100 text-orange-700',
+  'Round Off': 'bg-gray-100 text-gray-600',
+  Inventory:   'bg-indigo-100 text-indigo-700',
+  Discount:    'bg-pink-100 text-pink-700',
 };
+
+// ─── Auto-suggest purchase ledgers from invoice data ─────────────────────────
+// Scans all accepted invoices → finds distinct GST rates → proposes standard
+// Tally ledger names. Accountant can edit names before saving.
+
+function autoSuggestPurchaseLedgers(invoices: StoredInvoice[]): PurchaseLedgerEntry[] {
+  const rates = new Set<number>();
+  for (const inv of invoices) {
+    for (const item of (inv.line_items ?? [])) {
+      if (typeof item.gst_percent === 'number') rates.add(item.gst_percent);
+    }
+  }
+  const sorted = Array.from(rates).sort((a, b) => a - b);
+  const entries: PurchaseLedgerEntry[] = sorted.map((rate) => ({
+    gst_percent: rate,
+    tally_ledger_name: rate === 0 ? 'Purchases (Exempt)' : `Purchases @${rate}%`,
+  }));
+  // Add a catch-all fallback for any rate not explicitly listed
+  entries.push({ gst_percent: null, tally_ledger_name: 'Purchases' });
+  return entries;
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function PurchaseLedgerRow({
-  entry, onChange, onRemove,
+  entry, isSuggested, onChange, onRemove,
 }: {
   entry: PurchaseLedgerEntry;
+  isSuggested: boolean;
   onChange: (u: PurchaseLedgerEntry) => void;
   onRemove: () => void;
 }) {
@@ -57,14 +79,21 @@ function PurchaseLedgerRow({
           ))}
         </select>
       </div>
-      <div className="flex-1">
+      <div className="flex-1 relative">
         <input
           type="text"
           value={entry.tally_ledger_name}
           onChange={(e) => onChange({ ...entry, tally_ledger_name: e.target.value })}
           placeholder="Tally purchase ledger name (exact)"
-          className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm font-mono text-gray-900"
+          className={`w-full border rounded-md px-3 py-1.5 text-sm font-mono text-gray-900 ${
+            isSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-200'
+          }`}
         />
+        {isSuggested && (
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-amber-600 font-medium pointer-events-none">
+            suggested
+          </span>
+        )}
       </div>
       <button
         onClick={onRemove}
@@ -79,13 +108,8 @@ function PurchaseLedgerRow({
 // ─── Preview table ────────────────────────────────────────────────────────────
 
 function PreviewTable({
-  rows,
-  expenseLedgers,
-  suppliers,
-  stockItems,
-  onMapExpense,
-  onMapSupplier,
-  onMapStockItem,
+  rows, expenseLedgers, suppliers, stockItems,
+  onMapExpense, onMapSupplier, onMapStockItem,
 }: {
   rows: PreviewRow[];
   expenseLedgers: { tally_ledger_name: string }[];
@@ -109,9 +133,9 @@ function PreviewTable({
           <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
             <th className="px-4 py-3 text-left whitespace-nowrap">Invoice No</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Date</th>
-            <th className="px-4 py-3 text-left whitespace-nowrap">Vendor (Invoice)</th>
+            <th className="px-4 py-3 text-left whitespace-nowrap">Vendor</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Type</th>
-            <th className="px-4 py-3 text-left whitespace-nowrap">Tally Name / Details</th>
+            <th className="px-4 py-3 text-left whitespace-nowrap">Tally Ledger / Details</th>
             <th className="px-4 py-3 text-right whitespace-nowrap">Amount (₹)</th>
             <th className="px-4 py-3 text-left whitespace-nowrap">Notes</th>
           </tr>
@@ -235,13 +259,13 @@ export default function XmlGeneratorPage() {
   const [purchaseLedgers, setPurchaseLedgers] = useState<PurchaseLedgerEntry[]>([
     { gst_percent: null, tally_ledger_name: '' },
   ]);
+  // Track which ledger entries are auto-suggested (unsaved) vs confirmed
+  const [suggestedIndexes, setSuggestedIndexes] = useState<Set<number>>(new Set());
   const [savingMapping, setSavingMapping] = useState(false);
   const [mappingSaved, setMappingSaved] = useState(false);
 
-  // Voucher mode loaded from DB
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
 
-  // Unresolved items (suppliers, expense charges, stock items)
   interface UnresolvedSupplier { vendor_name: string; vendor_gstin: string | null; suggested: string; chosen: string; }
   interface UnresolvedCharge { description: string; suggested: string; chosen: string; }
   interface UnresolvedStockItem { description: string; suggested: string; chosen: string; }
@@ -270,12 +294,13 @@ export default function XmlGeneratorPage() {
     });
   }, [company, companyLoading, router]);
 
-  // Load purchase ledger config + voucher mode fresh from DB when company changes
+  // Load purchase ledger config + voucher mode from DB when company changes
   useEffect(() => {
     if (!company?.id) return;
     getCompany(company.id).then((fresh) => {
       if (fresh.purchase_ledger_config && fresh.purchase_ledger_config.length > 0) {
         setPurchaseLedgers(fresh.purchase_ledger_config);
+        setSuggestedIndexes(new Set()); // saved config — no suggestions pending
       }
       if (fresh.voucher_mode) setVoucherMode(fresh.voucher_mode);
     }).catch(() => {});
@@ -296,28 +321,37 @@ export default function XmlGeneratorPage() {
 
   useEffect(() => { setPreviewRows(null); setXmlBlob(null); }, [purchaseLedgers]);
 
-  const selectedCompany = company;
-
   const validLedgers = useMemo(
     () => purchaseLedgers.filter((p) => p.tally_ledger_name.trim() !== ''),
     [purchaseLedgers],
   );
 
+  const hasSuggestedPending = suggestedIndexes.size > 0;
+
   const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
     .replace(/[^a-zA-Z0-9._-]/g, '_');
 
-  function validate(): string | null {
+  // Preview only needs: company, tally_company_name, invoices
+  function validateForPreview(): string | null {
     if (!company) return 'No company selected.';
     if (!company.tally_company_name) return 'Tally Company Name is missing — update it in Companies first.';
-    if (validLedgers.length === 0) return 'Configure at least one purchase ledger mapping.';
     if (invoices.length === 0) return 'No accepted invoices found for the selected period.';
+    return null;
+  }
+
+  // XML generation additionally needs confirmed purchase ledger names
+  function validateForXml(): string | null {
+    const base = validateForPreview();
+    if (base) return base;
+    if (validLedgers.length === 0) return 'Configure at least one purchase ledger mapping and save it before generating XML.';
     return null;
   }
 
   // ── Step 2: Preview ──
   const handlePreview = async () => {
-    const err = validate();
+    const err = validateForPreview();
     if (err) { alert(err); return; }
+
     setPreviewing(true);
     setPreviewRows(null);
     setPreviewError('');
@@ -326,15 +360,26 @@ export default function XmlGeneratorPage() {
     setUnresolvedCharges([]);
     setUnresolvedStockItems([]);
     setResolvedKeys(new Set());
+
     try {
       const masters = await loadMasters(company!.id);
       setCachedMasters(masters);
       const fresh = await getCompany(company!.id);
       const mode = fresh.voucher_mode ?? 'accounting_only';
       setVoucherMode(mode);
+
+      // Auto-suggest purchase ledgers if none are configured yet
+      let ledgersToUse = validLedgers;
+      if (ledgersToUse.length === 0 && invoices.length > 0) {
+        const suggestions = autoSuggestPurchaseLedgers(invoices);
+        setPurchaseLedgers(suggestions);
+        setSuggestedIndexes(new Set(suggestions.map((_, i) => i)));
+        ledgersToUse = suggestions;
+      }
+
       const rows = buildTallyPreview({
         invoices, ...masters,
-        purchaseLedgers: validLedgers,
+        purchaseLedgers: ledgersToUse,
         tallyCompanyName: company!.tally_company_name!,
         voucherMode: mode,
         discountLedgerName: fresh.discount_ledger_name,
@@ -397,39 +442,27 @@ export default function XmlGeneratorPage() {
     const wsData = [
       ['Invoice No', 'Date', 'Vendor (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
       ...previewRows.map((r) => [
-        r.invoice_number,
-        r.invoice_date,
-        r.vendor_name,
-        r.party_ledger,
-        r.ledger_type,
-        r.tally_ledger_name,
-        r.amount,
-        r.status,
+        r.invoice_number, r.invoice_date, r.vendor_name, r.party_ledger,
+        r.ledger_type, r.tally_ledger_name, r.amount, r.status,
         r.skip_reason ?? r.warning ?? '',
       ]),
     ];
     const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [
-      { wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 },
-      { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 },
-    ];
+    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
     const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([wbout], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `${fileBase}_preview.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    a.href = url; a.download = `${fileBase}_preview.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
   // ── Step 3: Generate and download XML ──
   const handleGenerateXml = async () => {
-    const err = validate();
+    const err = validateForXml();
     if (err) { alert(err); return; }
     setGeneratingXml(true);
     setXmlBlob(null);
@@ -437,24 +470,19 @@ export default function XmlGeneratorPage() {
       const masters = await loadMasters(company!.id);
       const fresh = await getCompany(company!.id);
       const output = generateTallyXml({
-        invoices,
-        ...masters,
+        invoices, ...masters,
         purchaseLedgers: validLedgers,
-        tallyCompanyName: selectedCompany!.tally_company_name!,
+        tallyCompanyName: company!.tally_company_name!,
         voucherMode: fresh.voucher_mode ?? 'accounting_only',
         discountLedgerName: fresh.discount_ledger_name,
       });
       const blob = new Blob([output.xml], { type: 'application/xml' });
       setXmlBlob(blob);
       setXmlFilename(`${fileBase}_purchase.xml`);
-
-      // Trigger download immediately
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `${fileBase}_purchase.xml`;
-      a.click();
-      URL.revokeObjectURL(url);
+      a.href = url; a.download = `${fileBase}_purchase.xml`;
+      a.click(); URL.revokeObjectURL(url);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'XML generation failed');
     } finally {
@@ -462,7 +490,20 @@ export default function XmlGeneratorPage() {
     }
   };
 
-  // Preview summary counts
+  const handleSaveMapping = async () => {
+    if (!company) return;
+    setSavingMapping(true);
+    setMappingSaved(false);
+    try {
+      await savePurchaseLedgerConfig(company.id, purchaseLedgers);
+      setSuggestedIndexes(new Set()); // all confirmed after save
+      setMappingSaved(true);
+      setTimeout(() => setMappingSaved(false), 3000);
+    } finally {
+      setSavingMapping(false);
+    }
+  };
+
   const previewSkippedCount = previewRows?.filter((r) => r.status === 'Skipped').length ?? 0;
   const previewWarningCount = previewRows?.filter((r) => r.warning).length ?? 0;
   const previewInvoiceCount = previewRows
@@ -476,15 +517,15 @@ export default function XmlGeneratorPage() {
         <div className="mb-7">
           <h1 className="text-2xl font-bold text-gray-900">Export to Tally</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Preview ledger assignments and amounts, then download the XML for import into Tally.
+            Analyse ledger assignments and resolve exceptions, then download the XML for import into Tally.
           </p>
         </div>
 
-        {/* ── Step 1: Period + Purchase Ledger mapping ── */}
+        {/* ── Step 1: Period + Settings ── */}
         <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-4">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">1</span>
-            Financial Year &amp; Purchase Ledgers
+            Select Period &amp; Settings
           </h2>
 
           <div className="flex items-center gap-4 mb-5">
@@ -533,52 +574,60 @@ export default function XmlGeneratorPage() {
             </div>
           </div>
 
-          {/* Purchase ledger mapping */}
+          {/* Purchase Ledger Mapping */}
           <div className="border-t border-gray-100 pt-4">
-            <p className="text-xs font-semibold text-gray-600 mb-1">Purchase Ledger Mapping</p>
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold text-gray-600">Purchase Ledger Mapping</p>
+              {hasSuggestedPending && (
+                <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+                  Auto-suggested from invoices — review names and save
+                </span>
+              )}
+            </div>
             <p className="text-xs text-gray-400 mb-3">
-              Map each GST rate to the corresponding Tally purchase ledger. Add a fallback row (no rate) to catch unmapped rates.
+              Maps each GST rate to the exact Tally purchase ledger name.
+              {!hasSuggestedPending && validLedgers.length === 0 && invoices.length > 0 && (
+                <> Leave empty and click <strong>Preview</strong> — ledger names will be auto-suggested from your invoices.</>
+              )}
             </p>
             <div className="space-y-2.5">
               {purchaseLedgers.map((entry, idx) => (
                 <PurchaseLedgerRow
                   key={idx}
                   entry={entry}
-                  onChange={(u) =>
-                    setPurchaseLedgers((prev) => prev.map((r, i) => (i === idx ? u : r)))
-                  }
-                  onRemove={() =>
-                    setPurchaseLedgers((prev) => prev.filter((_, i) => i !== idx))
-                  }
+                  isSuggested={suggestedIndexes.has(idx)}
+                  onChange={(u) => {
+                    setPurchaseLedgers((prev) => prev.map((r, i) => (i === idx ? u : r)));
+                    // Editing a suggested row marks it as modified (still unsaved)
+                  }}
+                  onRemove={() => {
+                    setPurchaseLedgers((prev) => prev.filter((_, i) => i !== idx));
+                    setSuggestedIndexes((prev) => {
+                      const next = new Set<number>();
+                      prev.forEach((n) => { if (n < idx) next.add(n); else if (n > idx) next.add(n - 1); });
+                      return next;
+                    });
+                  }}
                 />
               ))}
             </div>
             <div className="flex items-center gap-4 mt-3">
               <button
-                onClick={() =>
-                  setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])
-                }
+                onClick={() => setPurchaseLedgers((prev) => [...prev, { gst_percent: null, tally_ledger_name: '' }])}
                 className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
               >
                 + Add row
               </button>
               <button
                 disabled={savingMapping || !company?.id}
-                onClick={async () => {
-                  if (!company) return;
-                  setSavingMapping(true);
-                  setMappingSaved(false);
-                  try {
-                    await savePurchaseLedgerConfig(company.id, purchaseLedgers);
-                    setMappingSaved(true);
-                    setTimeout(() => setMappingSaved(false), 3000);
-                  } finally {
-                    setSavingMapping(false);
-                  }
-                }}
-                className="text-sm px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                onClick={handleSaveMapping}
+                className={`text-sm px-3 py-1.5 rounded-md text-white disabled:opacity-40 transition-colors ${
+                  hasSuggestedPending
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
               >
-                {savingMapping ? 'Saving…' : 'Save Mapping'}
+                {savingMapping ? 'Saving…' : hasSuggestedPending ? 'Confirm & Save Mapping' : 'Save Mapping'}
               </button>
               {mappingSaved && <span className="text-xs text-green-600 font-medium">✓ Saved</span>}
             </div>
@@ -592,7 +641,11 @@ export default function XmlGeneratorPage() {
             Preview Ledger Assignments
           </h2>
           <p className="text-xs text-gray-400 mb-4">
-            Review every ledger name and amount before generating the XML. Red rows indicate issues that will cause that invoice to be skipped.
+            The system analyses your accepted invoices and shows every ledger entry that will be created in Tally.
+            Red rows indicate issues that will cause that invoice to be skipped.
+            {validLedgers.length === 0 && invoices.length > 0 && !previewing && !previewRows && (
+              <> Purchase ledger names will be <strong>auto-suggested</strong> when you click Preview.</>
+            )}
           </p>
 
           <button
@@ -600,7 +653,7 @@ export default function XmlGeneratorPage() {
             disabled={previewing || !company || invoices.length === 0}
             className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {previewing ? 'Building preview…' : 'Preview'}
+            {previewing ? 'Analysing…' : 'Preview'}
           </button>
 
           {previewError && (
@@ -622,7 +675,7 @@ export default function XmlGeneratorPage() {
                 {previewSkippedCount > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2">
                     <span className="text-sm font-semibold text-red-800">
-                      {previewSkippedCount} row{previewSkippedCount !== 1 ? 's' : ''} with errors (invoices will be skipped)
+                      {previewSkippedCount} row{previewSkippedCount !== 1 ? 's' : ''} with errors
                     </span>
                   </div>
                 )}
@@ -644,6 +697,21 @@ export default function XmlGeneratorPage() {
                 </button>
               </div>
 
+              {/* Auto-suggest notice */}
+              {hasSuggestedPending && (
+                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                  <svg className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div className="text-xs text-amber-800">
+                    <strong>Purchase ledger names were auto-suggested from your invoices.</strong>{' '}
+                    Review them in the configuration above — rename any that don&apos;t match your Tally chart of accounts — then click{' '}
+                    <button onClick={handleSaveMapping} className="underline font-semibold">Confirm &amp; Save Mapping</button>{' '}
+                    before generating XML.
+                  </div>
+                </div>
+              )}
+
               {/* Table */}
               <PreviewTable
                 rows={previewRows}
@@ -652,10 +720,8 @@ export default function XmlGeneratorPage() {
                 stockItems={cachedMasters?.stockItems ?? []}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
-                  try {
-                    await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description });
-                    handlePreview();
-                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                  try { await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description }); handlePreview(); }
+                  catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
                 }}
                 onMapSupplier={async (vendorName, ledgerName) => {
                   if (!company?.id) return;
@@ -667,10 +733,8 @@ export default function XmlGeneratorPage() {
                 }}
                 onMapStockItem={async (description, tallyItemName) => {
                   if (!company?.id) return;
-                  try {
-                    await addStockItem(company.id, { tally_item_name: tallyItemName, alias_name: description });
-                    handlePreview();
-                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                  try { await addStockItem(company.id, { tally_item_name: tallyItemName, alias_name: description }); handlePreview(); }
+                  catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
                 }}
               />
             </div>
@@ -685,7 +749,7 @@ export default function XmlGeneratorPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
               <h2 className="text-sm font-semibold text-gray-800">Resolve Unmapped Items</h2>
-              <span className="text-xs text-gray-500">Confirm or fix, then save to master — won't need to resolve again.</span>
+              <span className="text-xs text-gray-500">Confirm or fix, then save to master — won&apos;t need to resolve again.</span>
             </div>
             <div className="space-y-4">
               {unresolvedSuppliers.map((us, i) => {
@@ -705,7 +769,7 @@ export default function XmlGeneratorPage() {
                         <input value={us.chosen} onChange={(e) => setUnresolvedSuppliers((p) => p.map((s, j) => j === i ? { ...s, chosen: e.target.value } : s))}
                           placeholder="Exact Tally ledger name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                         {us.suggested && us.suggested !== us.chosen && (
-                          <button onClick={() => setUnresolvedSuppliers((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{us.suggested}"</button>
+                          <button onClick={() => setUnresolvedSuppliers((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: &ldquo;{us.suggested}&rdquo;</button>
                         )}
                       </div>
                       <div className="pt-4">
@@ -736,7 +800,7 @@ export default function XmlGeneratorPage() {
                     <div className="flex items-start gap-3 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Charge not mapped</p>
-                        <p className="text-sm font-medium text-gray-900">"{uc.description}"</p>
+                        <p className="text-sm font-medium text-gray-900">&ldquo;{uc.description}&rdquo;</p>
                       </div>
                       <div className="flex items-center gap-1 text-gray-400 pt-4">→</div>
                       <div className="flex-1 min-w-0">
@@ -744,7 +808,7 @@ export default function XmlGeneratorPage() {
                         <input value={uc.chosen} onChange={(e) => setUnresolvedCharges((p) => p.map((c, j) => j === i ? { ...c, chosen: e.target.value } : c))}
                           placeholder="Exact Tally ledger name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                         {uc.suggested && uc.suggested !== uc.chosen && (
-                          <button onClick={() => setUnresolvedCharges((p) => p.map((c, j) => j === i ? { ...c, chosen: uc.suggested } : c))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{uc.suggested}"</button>
+                          <button onClick={() => setUnresolvedCharges((p) => p.map((c, j) => j === i ? { ...c, chosen: uc.suggested } : c))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: &ldquo;{uc.suggested}&rdquo;</button>
                         )}
                       </div>
                       <div className="pt-4">
@@ -775,7 +839,7 @@ export default function XmlGeneratorPage() {
                     <div className="flex items-start gap-3 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Stock item not mapped</p>
-                        <p className="text-sm font-medium text-gray-900">"{us.description}"</p>
+                        <p className="text-sm font-medium text-gray-900">&ldquo;{us.description}&rdquo;</p>
                       </div>
                       <div className="flex items-center gap-1 text-gray-400 pt-4">→</div>
                       <div className="flex-1 min-w-0">
@@ -783,7 +847,7 @@ export default function XmlGeneratorPage() {
                         <input value={us.chosen} onChange={(e) => setUnresolvedStockItems((p) => p.map((s, j) => j === i ? { ...s, chosen: e.target.value } : s))}
                           placeholder="Exact Tally stock item name…" className="w-full border border-gray-300 rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                         {us.suggested && us.suggested !== us.chosen && (
-                          <button onClick={() => setUnresolvedStockItems((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: "{us.suggested}"</button>
+                          <button onClick={() => setUnresolvedStockItems((p) => p.map((s, j) => j === i ? { ...s, chosen: us.suggested } : s))} className="text-xs text-indigo-600 mt-1 hover:underline">Use: &ldquo;{us.suggested}&rdquo;</button>
                         )}
                       </div>
                       <div className="pt-4">
@@ -817,13 +881,28 @@ export default function XmlGeneratorPage() {
             Generate &amp; Download XML
           </h2>
           <p className="text-xs text-gray-400 mb-4">
-            Once you're satisfied with the preview, generate the Tally XML file. The file downloads automatically.
+            Once you&apos;re satisfied with the preview, generate the Tally XML file. The file downloads automatically.
           </p>
+
+          {hasSuggestedPending && (
+            <div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 text-sm text-amber-800">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <span>
+                Purchase ledger names are still <strong>auto-suggested</strong>.{' '}
+                <button onClick={handleSaveMapping} className="underline font-semibold">
+                  Confirm &amp; Save Mapping
+                </button>{' '}
+                above before generating XML.
+              </span>
+            </div>
+          )}
 
           <div className="flex items-center gap-4">
             <button
               onClick={handleGenerateXml}
-              disabled={generatingXml || !company || invoices.length === 0}
+              disabled={generatingXml || !company || invoices.length === 0 || hasSuggestedPending}
               className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -844,7 +923,7 @@ export default function XmlGeneratorPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800">
           <p className="font-semibold mb-1">How to import into Tally</p>
           <ol className="list-decimal list-inside space-y-1 text-blue-700">
-            <li>Open Tally and select the company <strong>{selectedCompany?.tally_company_name ?? '—'}</strong></li>
+            <li>Open Tally and select the company <strong>{company?.tally_company_name ?? '—'}</strong></li>
             <li>Go to <em>Gateway of Tally → Import Data → Vouchers</em></li>
             <li>Select the downloaded XML file</li>
             <li>Tally will create purchase vouchers for all included invoices</li>
