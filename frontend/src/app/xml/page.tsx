@@ -107,6 +107,19 @@ function PurchaseLedgerRow({
   );
 }
 
+// ─── Shared types ────────────────────────────────────────────────────────────
+
+function getErrMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'object' && e !== null && 'message' in e) return String((e as { message: unknown }).message);
+  return 'Unknown error';
+}
+
+type SuggestionItem =
+  | { kind: 'vendor';  vendorName: string; gstin: string;  ledger: string }
+  | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
+  | { kind: 'expense'; keyword: string;    tallyName: string };
+
 // ─── Flat Preview Table (one row per line item, Excel format) ─────────────────
 
 import type { SupplierMaster } from '@/lib/suppliers';
@@ -151,7 +164,7 @@ interface FlatDisplayRow {
 
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems, purchaseLedgers,
-  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger,
+  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onBulkAccept,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -163,6 +176,7 @@ function FlatPreviewTable({
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
   onMapTaxLedger: (type: 'CGST' | 'SGST' | 'IGST', name: string) => void;
+  onBulkAccept: (items: SuggestionItem[]) => Promise<void>;
 }) {
   const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
 
@@ -171,6 +185,10 @@ function FlatPreviewTable({
   const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
   const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
+
+  // Bulk-select state for inline accept
+  const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
+  const [bulkSaving, setBulkSaving] = React.useState(false);
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
@@ -208,13 +226,12 @@ function FlatPreviewTable({
     // ONE purchase ledger per invoice (not per item/rate)
     const hasInvGst = (invoice?.cgst ?? 0) > 0 || (invoice?.sgst ?? 0) > 0 || (invoice?.igst ?? 0) > 0;
     // Prefer catch-all (null) entry, then first purchase row from preview, then suggestion
+    // ONE purchase ledger per invoice — use catch-all (null gst_percent) entry, else first entry.
+    // Never use per-rate purchase rows from preview; all line items in one invoice share the same ledger.
     const invPlEntry = purchaseLedgers.find((p) => p.gst_percent === null && p.tally_ledger_name)
       ?? purchaseLedgers.find((p) => p.tally_ledger_name);
-    const invPlFromPreview = purchRows[0]; // first purchase row has the resolved ledger name
-    const invPlLedger = invPlFromPreview?.tally_ledger_name
-      ?? invPlEntry?.tally_ledger_name
-      ?? (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
-    const invPlSuggested = invPlFromPreview?.is_suggested !== false ? (invPlFromPreview?.is_suggested ?? !invPlEntry?.tally_ledger_name) : false;
+    const invPlLedger = invPlEntry?.tally_ledger_name ?? (hasInvGst ? 'GST PURCHASE' : 'PURCHASE');
+    const invPlSuggested = !invPlEntry?.tally_ledger_name;
 
     const charges = chargeRows.map((c) => ({
       desc: c.item_description ?? c.tally_ledger_name,
@@ -335,6 +352,52 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
+  // Rows that have at least one AI-suggested field (eligible for bulk accept)
+  const suggestableIndices = displayRows
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && r.charges.some((c) => c.suggested)))
+    .map(({ i }) => i);
+
+  const allSelected = suggestableIndices.length > 0 && suggestableIndices.every((i) => selectedRows.has(i));
+  const toggleAll = () => {
+    if (allSelected) { setSelectedRows(new Set()); }
+    else { setSelectedRows(new Set(suggestableIndices)); }
+  };
+  const toggleRow = (i: number) => setSelectedRows((prev) => {
+    const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s;
+  });
+
+  const handleBulkAccept = async () => {
+    setBulkSaving(true);
+    const items: SuggestionItem[] = [];
+    const seenVendor = new Set<string>();
+    const seenStock  = new Set<string>();
+    const seenExp    = new Set<string>();
+
+    for (const idx of Array.from(selectedRows)) {
+      const row = displayRows[idx];
+      if (row.vendorSuggested && !seenVendor.has(row.vendorName)) {
+        seenVendor.add(row.vendorName);
+        items.push({ kind: 'vendor', vendorName: row.vendorName, gstin: row.gstin, ledger: vendorEdits[row.vendorName] ?? row.vendorLedger });
+      }
+      if (row.stockItemSuggested && !seenStock.has(row.itemDesc)) {
+        seenStock.add(row.itemDesc);
+        const tallyName = stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem;
+        if (tallyName) items.push({ kind: 'stock', desc: row.itemDesc, hsn: row.hsn, tallyName });
+      }
+      if (row.isFirst) {
+        for (const ch of row.charges) {
+          if (ch.suggested && !seenExp.has(ch.desc)) {
+            seenExp.add(ch.desc);
+            items.push({ kind: 'expense', keyword: ch.desc, tallyName: chargeEdits[ch.desc] ?? ch.ledger });
+          }
+        }
+      }
+    }
+    try { await onBulkAccept(items); setSelectedRows(new Set()); }
+    finally { setBulkSaving(false); }
+  };
+
   // Dual-scroll: sync top scrollbar with table scroll
   const tableContainerRef = React.useRef<HTMLDivElement>(null);
   const topScrollRef = React.useRef<HTMLDivElement>(null);
@@ -365,6 +428,28 @@ function FlatPreviewTable({
 
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
+      {/* Bulk-accept action bar — shown when there are any suggestable rows */}
+      {suggestableIndices.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleAll}
+              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Select All
+          </label>
+          <button
+            onClick={handleBulkAccept}
+            disabled={bulkSaving || selectedRows.size === 0}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {bulkSaving ? 'Saving…' : `Accept ${selectedRows.size} out of ${suggestableIndices.length}`}
+          </button>
+          <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
+        </div>
+      )}
       {/* Top scrollbar mirror */}
       <div ref={topScrollRef} onScroll={onTopScroll} className="overflow-x-auto" style={{ height: 12 }}>
         <div style={{ width: tableScrollWidth, height: 1 }} />
@@ -374,6 +459,7 @@ function FlatPreviewTable({
         <table className="min-w-max text-xs border-collapse">
           <thead className="bg-gray-50 sticky top-0 z-10">
             <tr>
+              <TH> </TH>
               <TH>Date</TH>
               <TH>Invoice No</TH>
               <TH>Voucher Type</TH>
@@ -413,6 +499,8 @@ function FlatPreviewTable({
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
               const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
+              const isSuggestable = row.vendorSuggested || row.stockItemSuggested || (row.isFirst && row.charges.some((c) => c.suggested));
+              const isChecked = selectedRows.has(i);
 
               // Editable input for any suggested Tally field
               const EditableField = ({ value, suggested, color, onSave, placeholder }: {
@@ -454,6 +542,17 @@ function FlatPreviewTable({
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
+                  {/* Checkbox */}
+                  <td className="px-2 py-2 w-8 text-center">
+                    {isSuggestable && (
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleRow(i)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    )}
+                  </td>
                   {/* Date */}
                   <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
                   {/* Invoice No */}
@@ -669,20 +768,7 @@ function FlatPreviewTable({
 }
 
 
-// ─── Error helper ────────────────────────────────────────────────────────────
-
-function getErrMsg(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === 'object' && e !== null && 'message' in e) return String((e as { message: unknown }).message);
-  return 'Unknown error';
-}
-
-// ─── Suggestions panel ───────────────────────────────────────────────────────
-
-type SuggestionItem =
-  | { kind: 'vendor';  vendorName: string; gstin: string;  ledger: string }
-  | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
-  | { kind: 'expense'; keyword: string;    tallyName: string };
+// ─── Suggestions panel (unused — kept for reference) ─────────────────────────
 
 function SuggestionsPanel({
   previewRows, invoices, onAccept,
@@ -1301,42 +1387,7 @@ export default function XmlGeneratorPage() {
                 </div>
               )}
 
-              {/* Suggestions panel — bulk accept AI-suggested ledgers */}
-              <SuggestionsPanel
-                previewRows={previewRows}
-                invoices={invoices}
-                onAccept={async (items) => {
-                  if (!company?.id) return;
-                  const errs: string[] = [];
-                  for (const item of items) {
-                    try {
-                      if (item.kind === 'vendor') {
-                        await addSupplier(company.id, {
-                          vendor_name: item.vendorName,
-                          vendor_gstin: item.gstin,
-                          tally_ledger_name: item.ledger,
-                        });
-                      } else if (item.kind === 'stock') {
-                        await addStockItem(company.id, {
-                          tally_item_name: item.tallyName,
-                          alias_name: item.desc,
-                        });
-                      } else if (item.kind === 'expense') {
-                        await addExpenseLedger(company.id, {
-                          tally_ledger_name: item.tallyName,
-                          expense_keyword: item.keyword,
-                        });
-                      }
-                    } catch (e: unknown) {
-                      errs.push(getErrMsg(e));
-                    }
-                  }
-                  if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
-                  handlePreview();
-                }}
-              />
-
-              {/* Flat preview table — one row per line item */}
+              {/* Flat preview table — one row per line item, with inline bulk-accept checkboxes */}
               <FlatPreviewTable
                 rows={previewRows}
                 invoices={invoices}
@@ -1363,7 +1414,24 @@ export default function XmlGeneratorPage() {
                   catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapTaxLedger={(_type, _name) => {
-                  // Tax ledger edits are local to the preview — to persist, configure in Duties & Taxes master
+                  // Tax ledger edits are local to the preview — persist in Duties & Taxes master
+                }}
+                onBulkAccept={async (items) => {
+                  if (!company?.id) return;
+                  const errs: string[] = [];
+                  for (const item of items) {
+                    try {
+                      if (item.kind === 'vendor') {
+                        await addSupplier(company.id, { vendor_name: item.vendorName, vendor_gstin: item.gstin, tally_ledger_name: item.ledger });
+                      } else if (item.kind === 'stock') {
+                        await addStockItem(company.id, { tally_item_name: item.tallyName, alias_name: item.desc });
+                      } else if (item.kind === 'expense') {
+                        await addExpenseLedger(company.id, { tally_ledger_name: item.tallyName, expense_keyword: item.keyword });
+                      }
+                    } catch (e: unknown) { errs.push(getErrMsg(e)); }
+                  }
+                  if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
+                  handlePreview();
                 }}
               />
             </div>
