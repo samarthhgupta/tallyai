@@ -669,6 +669,170 @@ function FlatPreviewTable({
 }
 
 
+// ─── Error helper ────────────────────────────────────────────────────────────
+
+function getErrMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'object' && e !== null && 'message' in e) return String((e as { message: unknown }).message);
+  return 'Unknown error';
+}
+
+// ─── Suggestions panel ───────────────────────────────────────────────────────
+
+type SuggestionItem =
+  | { kind: 'vendor';  vendorName: string; gstin: string;  ledger: string }
+  | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
+  | { kind: 'expense'; keyword: string;    tallyName: string };
+
+function SuggestionsPanel({
+  previewRows, invoices, onAccept,
+}: {
+  previewRows: import('@/lib/xmlGenerator').PreviewRow[];
+  invoices: StoredInvoice[];
+  onAccept: (items: SuggestionItem[]) => Promise<void>;
+}) {
+  // Deduplicate suggestions from preview rows
+  const suggestions = React.useMemo<SuggestionItem[]>(() => {
+    const vendorSeen = new Set<string>();
+    const stockSeen  = new Set<string>();
+    const expSeen    = new Set<string>();
+    const out: SuggestionItem[] = [];
+
+    for (const r of previewRows) {
+      if (!r.is_suggested) continue;
+      if (r.ledger_type === 'Party') {
+        if (!vendorSeen.has(r.vendor_name)) {
+          vendorSeen.add(r.vendor_name);
+          const inv = invoices.find((i) => i.vendor_name === r.vendor_name);
+          out.push({ kind: 'vendor', vendorName: r.vendor_name, gstin: inv?.vendor_gstin ?? '', ledger: r.tally_ledger_name });
+        }
+      } else if (r.ledger_type === 'Inventory') {
+        const key = r.item_description ?? '';
+        if (key && !stockSeen.has(key)) {
+          stockSeen.add(key);
+          out.push({ kind: 'stock', desc: key, hsn: r.tally_ledger_name.split(' @ ')[0] ?? '', tallyName: r.tally_ledger_name });
+        }
+      } else if (r.ledger_type === 'Expense') {
+        const key = r.tally_ledger_name;
+        if (key && !expSeen.has(key)) {
+          expSeen.add(key);
+          out.push({ kind: 'expense', keyword: key, tallyName: key });
+        }
+      }
+    }
+    return out;
+  }, [previewRows, invoices]);
+
+  // Per-item editable names (key = index)
+  const [names, setNames] = React.useState<Record<number, string>>({});
+  const [selected, setSelected] = React.useState<Set<number>>(new Set());
+  const [saving, setSaving] = React.useState(false);
+  const [savedCount, setSavedCount] = React.useState(0);
+
+  // Reset when suggestions change
+  React.useEffect(() => {
+    setNames({});
+    const all = new Set(suggestions.map((_, i) => i));
+    setSelected(all);
+    setSavedCount(0);
+  }, [suggestions.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const allChecked = selected.size === suggestions.length && suggestions.length > 0;
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(suggestions.map((_, i) => i)));
+  const toggleOne = (i: number) => setSelected((prev) => { const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s; });
+
+  const handleAccept = async () => {
+    setSaving(true);
+    const items: SuggestionItem[] = [];
+    selected.forEach((i) => {
+      const base = suggestions[i];
+      const override = names[i]?.trim();
+      if (!override && !base) return;
+      if (base.kind === 'vendor')  items.push({ ...base, ledger:    override || base.ledger });
+      if (base.kind === 'stock')   items.push({ ...base, tallyName: override || base.tallyName });
+      if (base.kind === 'expense') items.push({ ...base, tallyName: override || base.tallyName });
+    });
+    try { await onAccept(items); setSavedCount(items.length); }
+    finally { setSaving(false); }
+  };
+
+  if (suggestions.length === 0) return null;
+
+  const vendors  = suggestions.filter((s) => s.kind === 'vendor');
+  const stocks   = suggestions.filter((s) => s.kind === 'stock');
+  const expenses = suggestions.filter((s) => s.kind === 'expense');
+
+  const Section = ({ title, color, items }: { title: string; color: string; items: SuggestionItem[] }) => {
+    if (items.length === 0) return null;
+    return (
+      <div>
+        <p className={`text-xs font-semibold uppercase tracking-wide mb-1 ${color}`}>{title}</p>
+        <div className="space-y-1">
+          {items.map((item) => {
+            const idx = suggestions.indexOf(item);
+            const checked = selected.has(idx);
+            const editedName = names[idx];
+            const defaultName = item.kind === 'vendor' ? item.ledger : item.tallyName;
+            const invoiceName = item.kind === 'vendor' ? item.vendorName : item.kind === 'stock' ? item.desc : item.keyword;
+            return (
+              <div key={idx} className="flex items-center gap-2">
+                <input type="checkbox" checked={checked} onChange={() => toggleOne(idx)}
+                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 shrink-0" />
+                <span className="text-gray-500 text-xs w-40 truncate shrink-0" title={invoiceName}>{invoiceName}</span>
+                <span className="text-gray-400 text-xs">→</span>
+                <input
+                  type="text"
+                  defaultValue={defaultName}
+                  onChange={(e) => setNames((prev) => ({ ...prev, [idx]: e.target.value }))}
+                  className="flex-1 border border-amber-200 rounded px-2 py-0.5 text-xs font-mono bg-amber-50 focus:ring-1 focus:ring-indigo-400 min-w-0"
+                  placeholder="Tally name…"
+                />
+                {editedName && editedName !== defaultName && (
+                  <span className="text-[10px] text-amber-600 shrink-0">edited</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="border border-amber-200 rounded-xl bg-amber-50/50 px-5 py-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-amber-800">
+            ✦ {suggestions.length} AI suggestion{suggestions.length !== 1 ? 's' : ''} — review and accept to save to masters
+          </span>
+          {savedCount > 0 && (
+            <span className="text-xs text-green-700 bg-green-100 border border-green-200 rounded px-2 py-0.5">{savedCount} saved ✓</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+            <input type="checkbox" checked={allChecked} onChange={toggleAll}
+              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+            Select all
+          </label>
+          <button
+            onClick={handleAccept}
+            disabled={saving || selected.size === 0}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {saving ? 'Saving…' : `Accept Selected (${selected.size})`}
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Section title={`Vendor Ledgers (${vendors.length})`}  color="text-purple-700" items={vendors} />
+        <Section title={`Stock Items (${stocks.length})`}      color="text-indigo-700" items={stocks} />
+        <Section title={`Expense Ledgers (${expenses.length})`} color="text-orange-700" items={expenses} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Shared master loader ─────────────────────────────────────────────────────
 
 async function loadMasters(companyId: string) {
@@ -1137,6 +1301,41 @@ export default function XmlGeneratorPage() {
                 </div>
               )}
 
+              {/* Suggestions panel — bulk accept AI-suggested ledgers */}
+              <SuggestionsPanel
+                previewRows={previewRows}
+                invoices={invoices}
+                onAccept={async (items) => {
+                  if (!company?.id) return;
+                  const errs: string[] = [];
+                  for (const item of items) {
+                    try {
+                      if (item.kind === 'vendor') {
+                        await addSupplier(company.id, {
+                          vendor_name: item.vendorName,
+                          vendor_gstin: item.gstin,
+                          tally_ledger_name: item.ledger,
+                        });
+                      } else if (item.kind === 'stock') {
+                        await addStockItem(company.id, {
+                          tally_item_name: item.tallyName,
+                          alias_name: item.desc,
+                        });
+                      } else if (item.kind === 'expense') {
+                        await addExpenseLedger(company.id, {
+                          tally_ledger_name: item.tallyName,
+                          expense_keyword: item.keyword,
+                        });
+                      }
+                    } catch (e: unknown) {
+                      errs.push(getErrMsg(e));
+                    }
+                  }
+                  if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
+                  handlePreview();
+                }}
+              />
+
               {/* Flat preview table — one row per line item */}
               <FlatPreviewTable
                 rows={previewRows}
@@ -1148,7 +1347,7 @@ export default function XmlGeneratorPage() {
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   try { await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description }); handlePreview(); }
-                  catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                  catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapSupplier={async (vendorName, ledgerName) => {
                   if (!company?.id) return;
@@ -1156,12 +1355,12 @@ export default function XmlGeneratorPage() {
                     const inv = invoices.find((i) => i.vendor_name === vendorName);
                     await addSupplier(company.id, { vendor_name: vendorName, vendor_gstin: inv?.vendor_gstin ?? '', tally_ledger_name: ledgerName });
                     handlePreview();
-                  } catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                  } catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapStockItem={async (description, tallyItemName) => {
                   if (!company?.id) return;
                   try { await addStockItem(company.id, { tally_item_name: tallyItemName, alias_name: description }); handlePreview(); }
-                  catch (e: unknown) { alert(e instanceof Error ? e.message : 'Failed to save'); }
+                  catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapTaxLedger={(_type, _name) => {
                   // Tax ledger edits are local to the preview — to persist, configure in Duties & Taxes master
