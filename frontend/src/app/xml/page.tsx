@@ -1150,6 +1150,21 @@ export default function XmlGeneratorPage() {
       const blob = new Blob([output.xml], { type: 'application/xml' });
       setXmlBlob(blob);
       setXmlFilename(`${fileBase}_purchase.xml`);
+
+      if (output.includedCount === 0) {
+        // All invoices skipped — show reasons instead of downloading an empty file
+        const reasons = output.skippedInvoices
+          .map((s) => `• ${s.invoice_number}: ${s.reason}`)
+          .join('\n');
+        alert(`No vouchers were generated — all invoices were skipped.\n\nReasons:\n${reasons}\n\nFix the issues above (usually: configure CGST/SGST/IGST ledgers in Duties & Taxes master) then try again.`);
+        return;
+      }
+
+      if (output.skippedInvoices.length > 0) {
+        const reasons = output.skippedInvoices.map((s) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
+        alert(`${output.includedCount} voucher(s) generated. ${output.skippedInvoices.length} invoice(s) were skipped:\n\n${reasons}`);
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = `${fileBase}_purchase.xml`;
