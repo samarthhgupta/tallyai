@@ -117,15 +117,16 @@ interface FlatDisplayRow {
   voucherType: string;
   vendorName: string;
   vendorLedger: string;
-  vendorUnmapped: boolean;
+  vendorSuggested: boolean;  // amber — AI guess, not from master
   gstin: string;
   gstRegType: string;
   // item-level
   purchaseLedger: string;
+  purchaseLedgerSuggested: boolean;
   itemDesc: string;
   hsn: string;
   stockItem: string;
-  stockItemUnmapped: boolean;
+  stockItemSuggested: boolean;  // amber — AI guess
   taxRate: number | null;
   qty: number | null;
   uom: string;
@@ -134,10 +135,10 @@ interface FlatDisplayRow {
   amount: number;
   // invoice-level shown only on first item row
   isFirst: boolean;
-  charges: Array<{ desc: string; ledger: string; unmapped: boolean; amount: number }>;
-  cgstLedger: string; cgstAmt: number;
-  sgstLedger: string; sgstAmt: number;
-  igstLedger: string; igstAmt: number;
+  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number }>;
+  cgstLedger: string; cgstAmt: number; cgstSuggested: boolean;
+  sgstLedger: string; sgstAmt: number; sgstSuggested: boolean;
+  igstLedger: string; igstAmt: number; igstSuggested: boolean;
   roLedger: string; roAmt: number;
 }
 
@@ -182,39 +183,39 @@ function FlatPreviewTable({
     const invoice  = invoices.find((i) => i.invoice_number === invNo);
     const supplier = suppliers.find((s) => s.tally_ledger_name === partyRow?.party_ledger);
 
-    const vendorLedger  = partyRow?.tally_ledger_name ?? '—';
-    const vendorUnmapped = partyRow?.status === 'Skipped';
+    const vendorLedger    = partyRow?.tally_ledger_name ?? '—';
+    const vendorSuggested = partyRow?.status === 'Suggested';
 
-    const charges = chargeRows.map((c) => {
-      const rawDesc = c.tally_ledger_name.replace(/^— NO LEDGER FOR "(.+)" —$/, '$1');
-      return {
-        desc: rawDesc,
-        ledger: c.tally_ledger_name.startsWith('—') ? '' : c.tally_ledger_name,
-        unmapped: !!(c.warning?.includes('No expense ledger')),
-        amount: c.amount,
-      };
-    });
+    const charges = chargeRows.map((c) => ({
+      desc: c.item_description ?? c.tally_ledger_name,
+      ledger: c.tally_ledger_name,
+      suggested: c.is_suggested === true,
+      amount: c.amount,
+    }));
 
     const invoiceTail = {
       charges,
       cgstLedger: cgst?.tally_ledger_name?.startsWith('—') ? '' : (cgst?.tally_ledger_name ?? ''),
       cgstAmt: cgst?.amount ?? 0,
+      cgstSuggested: cgst?.is_suggested === true,
       sgstLedger: sgst?.tally_ledger_name?.startsWith('—') ? '' : (sgst?.tally_ledger_name ?? ''),
       sgstAmt: sgst?.amount ?? 0,
+      sgstSuggested: sgst?.is_suggested === true,
       igstLedger: igst?.tally_ledger_name?.startsWith('—') ? '' : (igst?.tally_ledger_name ?? ''),
       igstAmt: igst?.amount ?? 0,
-      roLedger:  ro?.tally_ledger_name?.startsWith('(') ? '' : (ro?.tally_ledger_name ?? ''),
+      igstSuggested: igst?.is_suggested === true,
+      roLedger: ro?.tally_ledger_name?.startsWith('(') ? '' : (ro?.tally_ledger_name ?? ''),
       roAmt:  ro?.amount ?? 0,
     };
-    const emptyTail = { charges: [], cgstLedger: '', cgstAmt: 0, sgstLedger: '', sgstAmt: 0, igstLedger: '', igstAmt: 0, roLedger: '', roAmt: 0 };
+    const emptyTail = { charges: [], cgstLedger: '', cgstAmt: 0, cgstSuggested: false, sgstLedger: '', sgstAmt: 0, sgstSuggested: false, igstLedger: '', igstAmt: 0, igstSuggested: false, roLedger: '', roAmt: 0 };
 
     const base = {
-      invoiceDate: partyRow?.invoice_date ?? '',
+      invoiceDate: partyRow?.invoice_date ?? (invoice?.invoice_date ?? ''),
       invoiceNo: invNo,
       voucherType: partyRow?.voucher_type_name ?? '',
-      vendorName: partyRow?.vendor_name ?? '',
+      vendorName: partyRow?.vendor_name ?? (invoice?.vendor_name ?? ''),
       vendorLedger,
-      vendorUnmapped,
+      vendorSuggested,
       gstin: invoice?.vendor_gstin ?? '',
       gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
     };
@@ -222,10 +223,10 @@ function FlatPreviewTable({
     const itemsToRender = isInventoryMode ? invRows2 : purchRows;
 
     if (itemsToRender.length === 0) {
-      // No line items: just render one row for the invoice (e.g., supplier unmapped)
       displayRows.push({
         ...base, isFirst: true, ...invoiceTail,
-        purchaseLedger: '', itemDesc: '', hsn: '', stockItem: '', stockItemUnmapped: false,
+        purchaseLedger: '', purchaseLedgerSuggested: false,
+        itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
         taxRate: null, qty: null, uom: '', rate: null, disc: null,
         amount: Math.abs(partyRow?.amount ?? 0),
       });
@@ -235,21 +236,25 @@ function FlatPreviewTable({
     itemsToRender.forEach((row, idx) => {
       const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
       const gstPct   = lineItem?.gst_percent ?? null;
-      const plLedger = gstPct != null
-        ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))?.tally_ledger_name ?? ''
-        : (purchaseLedgers[0]?.tally_ledger_name ?? '');
-
+      const plRow    = gstPct != null
+        ? (purchaseLedgers.find((p) => p.gst_percent === gstPct) ?? purchaseLedgers.find((p) => p.gst_percent == null))
+        : purchaseLedgers[0];
+      const plLedger = plRow?.tally_ledger_name ?? '';
+      // For accounting mode, the Purchase row itself holds the tally ledger name + suggested flag
       const isInv = row.ledger_type === 'Inventory';
+      const purchaseLedger = isInv ? plLedger : row.tally_ledger_name;
+      const purchaseLedgerSuggested = isInv ? !plLedger : (row.is_suggested === true);
 
       displayRows.push({
         ...base,
         isFirst: idx === 0,
         ...(idx === 0 ? invoiceTail : emptyTail),
-        purchaseLedger: isInv ? plLedger : row.tally_ledger_name,
-        itemDesc: isInv ? (row.item_description ?? '') : '',
+        purchaseLedger,
+        purchaseLedgerSuggested,
+        itemDesc: isInv ? (row.item_description ?? '') : (lineItem?.description ?? ''),
         hsn: lineItem?.hsn ?? '',
-        stockItem: isInv ? (row.status === 'Skipped' ? '' : (row.stock_item_name ?? '')) : '',
-        stockItemUnmapped: isInv && row.status === 'Skipped',
+        stockItem: isInv ? (row.tally_ledger_name ?? '') : '',
+        stockItemSuggested: isInv && (row.is_suggested === true),
         taxRate: gstPct,
         qty:  isInv ? (row.qty ?? null)  : null,
         uom:  isInv ? (row.uom ?? '')    : '',
@@ -331,13 +336,12 @@ function FlatPreviewTable({
           {displayRows.map((row, i) => {
             const prevRow = displayRows[i - 1];
             const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
-            const hasError = row.vendorUnmapped || row.stockItemUnmapped;
-            const rowBg = hasError
-              ? 'bg-red-50'
-              : isNewInvoice
-              ? 'bg-white'
-              : 'bg-blue-50/20';
+            const rowBg = isNewInvoice ? 'bg-white' : 'bg-blue-50/20';
             const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
+            const Sug = ({ children, active }: { children: React.ReactNode; active: boolean }) =>
+              active
+                ? <span className="font-mono font-medium text-amber-700 bg-amber-50 px-1 py-0.5 rounded text-[11px]" title="AI suggestion — verify in Tally">{children} ✦</span>
+                : <span className="font-mono font-medium">{children}</span>;
 
             return (
               <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
@@ -354,14 +358,14 @@ function FlatPreviewTable({
                 {/* Vendor Ledger */}
                 <td className="px-3 py-2 whitespace-nowrap">
                   {row.isFirst ? (
-                    row.vendorUnmapped ? (
+                    suppliers.length > 0 && row.vendorSuggested ? (
                       <select defaultValue="" onChange={(e) => e.target.value && onMapSupplier(row.vendorName, e.target.value)}
-                        className="border border-red-300 rounded px-2 py-1 text-xs bg-white focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
-                        <option value="">Map supplier…</option>
+                        className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
+                        <option value="">{row.vendorLedger} (suggested)</option>
                         {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
                       </select>
                     ) : (
-                      <span className="font-mono font-medium text-purple-800">{row.vendorLedger}</span>
+                      <Sug active={row.vendorSuggested}><span className="text-purple-800">{row.vendorLedger}</span></Sug>
                     )
                   ) : null}
                 </td>
@@ -376,7 +380,9 @@ function FlatPreviewTable({
                   )}
                 </td>
                 {/* Purchase Ledger */}
-                <td className="px-3 py-2 font-mono text-blue-800 whitespace-nowrap">{row.purchaseLedger || '—'}</td>
+                <td className="px-3 py-2 whitespace-nowrap">
+                  <Sug active={row.purchaseLedgerSuggested}><span className="text-blue-800">{row.purchaseLedger || '—'}</span></Sug>
+                </td>
                 {/* Item Name + HSN */}
                 <td className="px-3 py-2 max-w-[220px]">
                   <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
@@ -384,14 +390,14 @@ function FlatPreviewTable({
                 </td>
                 {/* Stock Item */}
                 <td className="px-3 py-2 whitespace-nowrap">
-                  {row.stockItemUnmapped ? (
+                  {isInventoryMode && stockItems.length > 0 && row.stockItemSuggested ? (
                     <select defaultValue="" onChange={(e) => e.target.value && onMapStockItem(row.itemDesc, e.target.value)}
                       className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[180px]">
-                      <option value="">Map stock item…</option>
+                      <option value="">{row.stockItem} (suggested)</option>
                       {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
                     </select>
                   ) : (
-                    <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
+                    <Sug active={isInventoryMode && row.stockItemSuggested}><span className="text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span></Sug>
                   )}
                 </td>
                 {/* Tax Rate */}
@@ -415,15 +421,17 @@ function FlatPreviewTable({
                     <React.Fragment key={`ch${ci}`}>
                       <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {ch && (ch.unmapped ? (
-                          <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
-                            className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
-                            <option value="">Map ledger…</option>
-                            {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
-                          </select>
-                        ) : (
-                          <span className="font-mono text-orange-700">{ch.ledger}</span>
-                        ))}
+                        {ch && (
+                          expenseLedgers.length > 0 && ch.suggested ? (
+                            <select defaultValue="" onChange={(e) => e.target.value && onMapExpense(ch.desc, e.target.value)}
+                              className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 max-w-[160px]">
+                              <option value="">{ch.ledger} (suggested)</option>
+                              {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                            </select>
+                          ) : (
+                            <Sug active={ch.suggested}><span className="text-orange-700">{ch.ledger}</span></Sug>
+                          )
+                        )}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-gray-700">
                         {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
@@ -432,13 +440,13 @@ function FlatPreviewTable({
                   );
                 })}
                 {/* CGST */}
-                <td className="px-3 py-2 font-mono text-teal-700 whitespace-nowrap">{row.isFirst ? (row.cgstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.cgstSuggested}><span className="text-teal-700">{row.cgstLedger || '—'}</span></Sug> : ''}</td>
                 <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}</td>
                 {/* SGST */}
-                <td className="px-3 py-2 font-mono text-teal-700 whitespace-nowrap">{row.isFirst ? (row.sgstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.sgstSuggested}><span className="text-teal-700">{row.sgstLedger || '—'}</span></Sug> : ''}</td>
                 <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}</td>
                 {/* IGST */}
-                <td className="px-3 py-2 font-mono text-cyan-700 whitespace-nowrap">{row.isFirst ? (row.igstLedger || '—') : ''}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{row.isFirst ? <Sug active={row.igstSuggested}><span className="text-cyan-700">{row.igstLedger || '—'}</span></Sug> : ''}</td>
                 <td className="px-3 py-2 text-right font-mono text-gray-700">{row.isFirst && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}</td>
                 {/* Round Off */}
                 <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">{row.isFirst ? (row.roLedger || '') : ''}</td>
@@ -699,10 +707,17 @@ export default function XmlGeneratorPage() {
     }
   };
 
-  const previewSkippedCount = previewRows?.filter((r) => r.status === 'Skipped').length ?? 0;
-  const previewWarningCount = previewRows?.filter((r) => r.warning).length ?? 0;
-  const previewInvoiceCount = previewRows
-    ? new Set(previewRows.filter((r) => r.status === 'OK').map((r) => r.invoice_number)).size
+  const previewSkippedCount  = previewRows?.filter((r) => r.status === 'Skipped').length ?? 0;
+  const previewSuggestedCount = previewRows?.filter((r) => r.status === 'Suggested').length ?? 0;
+  const previewWarningCount  = previewRows?.filter((r) => r.warning).length ?? 0;
+  // An invoice is "ready" if it has no Skipped rows (Suggested rows are AI-filled and included in XML)
+  const previewInvoiceCount  = previewRows
+    ? new Set(
+        previewRows
+          .filter((r) => r.status !== 'Skipped')
+          .map((r) => r.invoice_number)
+          .filter((n) => !previewRows.some((r) => r.invoice_number === n && r.status === 'Skipped'))
+      ).size
     : 0;
 
   return (
@@ -867,6 +882,13 @@ export default function XmlGeneratorPage() {
                     {previewInvoiceCount} invoice{previewInvoiceCount !== 1 ? 's' : ''} ready
                   </span>
                 </div>
+                {previewSuggestedCount > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+                    <span className="text-sm font-semibold text-amber-800">
+                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''} — verify ✦
+                    </span>
+                  </div>
+                )}
                 {previewSkippedCount > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2">
                     <span className="text-sm font-semibold text-red-800">
@@ -875,8 +897,8 @@ export default function XmlGeneratorPage() {
                   </div>
                 )}
                 {previewWarningCount > 0 && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
-                    <span className="text-sm font-semibold text-amber-800">
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2">
+                    <span className="text-sm font-semibold text-gray-600">
                       {previewWarningCount} warning{previewWarningCount !== 1 ? 's' : ''}
                     </span>
                   </div>

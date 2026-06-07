@@ -656,7 +656,8 @@ export interface PreviewRow {
   ledger_type: 'Party' | 'Purchase' | 'CGST' | 'SGST' | 'IGST' | 'Expense' | 'Round Off' | 'Inventory' | 'Discount';
   tally_ledger_name: string;
   amount: number;
-  status: 'OK' | 'Skipped';
+  status: 'OK' | 'Skipped' | 'Suggested';
+  is_suggested?: boolean;
   skip_reason?: string;
   warning?: string;
   // Inventory-mode fields
@@ -685,20 +686,18 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-    if (!supplier) {
-      rows.push({ ...makeBase(inv, '—', voucherTypeName), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
-      continue;
-    }
-    const partyLedger = supplier.tally_ledger_name;
+    const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
+    const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
     const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
     const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
 
-    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: 'OK' });
+    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
 
     for (const row of hsnRows) {
       const ledger = findPurchaseLedger(input.purchaseLedgers, row.gst_percent);
-      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: ledger ?? `— NO LEDGER FOR ${row.gst_percent}% GST —`, amount: row.taxable, status: ledger ? 'OK' : 'Skipped', skip_reason: ledger ? undefined : `No purchase ledger mapped for GST rate ${row.gst_percent}%` });
+      const suggestedPurchase = hasGst ? 'GST PURCHASE' : 'PURCHASE';
+      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: ledger ?? suggestedPurchase, amount: row.taxable, status: ledger ? 'OK' : 'Suggested', is_suggested: !ledger });
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
@@ -710,20 +709,20 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
       if (cgstTotal > 0) {
         const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate);
-        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? '— NO CGST LEDGER —', amount: cgstTotal, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No CGST ledger configured in Duties & Taxes master' });
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: cgstTotal, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
       const sgstTotal = hsnRows.reduce((s, r) => s + r.sgst, 0);
       if (sgstTotal > 0) {
         const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate);
-        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? '— NO SGST LEDGER —', amount: sgstTotal, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No SGST ledger configured in Duties & Taxes master' });
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: sgstTotal, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     } else {
       const igstTotal = hsnRows.reduce((s, r) => s + r.igst, 0);
       if (igstTotal > 0) {
         const rate = hsnRows[0]?.gst_percent ?? 0;
         const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate);
-        rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? '— NO IGST LEDGER —', amount: igstTotal, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No IGST ledger configured in Duties & Taxes master' });
+        rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: igstTotal, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     }
 
@@ -731,7 +730,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
         const l = findExpenseLedger(input.expenseLedgers, charge.description);
-        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? `— NO LEDGER FOR "${charge.description}" —`, amount: charge.amount, status: 'OK', warning: l ? undefined : `No expense ledger mapped for "${charge.description}" — excluded from XML` });
+        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? charge.description, amount: charge.amount, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     }
 
@@ -750,11 +749,8 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-    if (!supplier) {
-      rows.push({ ...makeBase(inv, '—', voucherTypeName), ledger_type: 'Party', tally_ledger_name: '— NOT FOUND IN MASTER —', amount: -inv.total, status: 'Skipped', skip_reason: `Supplier "${inv.vendor_name}" not found in Supplier Master` });
-      continue;
-    }
-    const partyLedger = supplier.tally_ledger_name;
+    const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
+    const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
     let totalItemsAmount = 0;
 
@@ -765,12 +761,13 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       totalItemsAmount += itemNet;
       const uom = item.uom || stockItem?.unit || 'NOS';
       const purchaseLedger = findPurchaseLedger(input.purchaseLedgers, item.gst_percent);
+      const hsnRate = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : `${desc} @ ${item.gst_percent ?? 0}%`;
       rows.push({
         ...base, ledger_type: 'Inventory',
-        tally_ledger_name: stockItem ? stockItem.tally_item_name : `— NO STOCK ITEM FOR "${desc}" —`,
+        tally_ledger_name: stockItem ? stockItem.tally_item_name : hsnRate,
         amount: itemNet,
-        status: stockItem ? 'OK' : 'Skipped',
-        skip_reason: stockItem ? undefined : `Stock item "${desc}" not in Stock Item Master`,
+        status: stockItem ? 'OK' : 'Suggested',
+        is_suggested: !stockItem,
         warning: (stockItem && !purchaseLedger) ? `No purchase ledger for GST ${item.gst_percent}%` : undefined,
         stock_item_name: stockItem?.tally_item_name,
         qty: item.qty, rate: item.rate, uom,
@@ -779,7 +776,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       });
     }
 
-    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: 'OK' });
+    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
       const hasDiscountLedger = !!(input.discountLedgerName);
@@ -791,24 +788,24 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       if (inv.cgst > 0) {
         const rate = taxable > 0 ? Math.round((inv.cgst / taxable) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
-        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? '— NO CGST LEDGER —', amount: inv.cgst, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No CGST ledger configured in Duties & Taxes master' });
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: inv.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
       if (inv.sgst > 0) {
         const rate = taxable > 0 ? Math.round((inv.sgst / taxable) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
-        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? '— NO SGST LEDGER —', amount: inv.sgst, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No SGST ledger configured in Duties & Taxes master' });
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: inv.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     } else if (inv.igst > 0) {
       const rate = taxable > 0 ? Math.round((inv.igst / taxable) * 100) : 0;
       const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
-      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? '— NO IGST LEDGER —', amount: inv.igst, status: l ? 'OK' : 'Skipped', skip_reason: l ? undefined : 'No IGST ledger configured in Duties & Taxes master' });
+      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: inv.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
 
     if (inv.charges) {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
         const l = findExpenseLedger(input.expenseLedgers, charge.description);
-        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? `— NO LEDGER FOR "${charge.description}" —`, amount: charge.amount, status: 'OK', warning: l ? undefined : `No expense ledger mapped for "${charge.description}" — excluded from XML` });
+        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? charge.description, amount: charge.amount, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     }
 
