@@ -408,6 +408,7 @@ function wrapVoucher(
         <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>${vendorGstin ? `\n        <PARTYGSTIN>${esc(vendorGstin)}</PARTYGSTIN>` : ''}
         <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
         <VOUCHERTYPENAME>${esc(voucherTypeName)}</VOUCHERTYPENAME>
+        <ISINVENTORYAFFECTED>Yes</ISINVENTORYAFFECTED>
         <PARTYNAME>${esc(inv.vendor_name)}</PARTYNAME>${cmpGstin ? `\n        <CMPGSTIN>${esc(cmpGstin)}</CMPGSTIN>` : ''}
         <PARTYLEDGERNAME>${esc(partyLedger)}</PARTYLEDGERNAME>
         <VOUCHERNUMBER>${esc(inv.invoice_number)}</VOUCHERNUMBER>${cmpGstin ? '\n        <CMPGSTREGISTRATIONTYPE>Regular</CMPGSTREGISTRATIONTYPE>' : ''}${cmpState ? `\n        <CMPGSTSTATE>${esc(cmpState)}</CMPGSTSTATE>` : ''}
