@@ -790,6 +790,97 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 // ledgers and stock items referenced in the export batch. Import this FIRST
 // in Tally before importing the vouchers XML — Tally silently skips masters
 // that already exist, so it is safe to re-import.
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// TALLY XML IMPORT — VERIFIED WORKING SCHEMA (tested June 2025)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// OUTPUT FORMAT REQUIREMENTS (critical — any deviation causes silent rejection):
+//
+//   1. ENCODING     UTF-16 LE with BOM (bytes FF FE at start of file).
+//                   Tally rejects UTF-8 files silently.
+//                   See triggerDownload() in xml/page.tsx.
+//
+//   2. NO XML DECL  Do NOT include <?xml version="1.0"?> — Tally's export
+//                   omits it and the import parser expects no declaration.
+//
+//   3. SENTINEL     Tally stores "Not Applicable" fields as the literal Unicode
+//                   control character U+0004 (EOT) followed by " Not Applicable".
+//                   Write this as the actual character , NOT the XML entity
+//                   &#4; — the UTF-16 encoder writes strings verbatim, so any
+//                   XML entity text ends up as literal characters in the file.
+//                   Same rule applies to  Applicable,  Any, etc.
+//
+//   4. CURRENCY     Use the actual ₹ character (U+20B9), NOT &#x20B9;.
+//                   Same reason as above — the encoder writes it verbatim.
+//
+// ══════════════════════════════════════════════════════════════════════════════
+// VERIFIED FIELD ORDER PER MASTER TYPE (reverse-engineered from Tally export)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ALL 5 MASTER TYPES share this common tail structure (after the type-specific
+// header fields):
+//   [LEDGER_BOOLEANS] → SORTPOSITION → ALTERID →
+//   [LEDGER_EMPTY_LISTS: SERVICETAXDETAILS, LBTREGNDETAILS, VATDETAILS, SALESTAXCESSDETAILS] →
+//   GSTDETAILS.LIST → HSNDETAILS.LIST → MSMEREGISTRATIONDETAILS.LIST →
+//   LANGUAGENAME.LIST → [LEDGER_TAIL_LISTS_1: XBRLDETAIL..TCSMETHODOFCALCULATION] →
+//   LEDGSTREGDETAILS.LIST → LEDMAILINGDETAILS.LIST →
+//   [LEDGER_TAIL_LISTS_2: GSTRECONPREFIXSUFFIXDETAILS..DEFMULTIPLETOPHONENO]
+//
+// ── 1. SUNDRY CREDITORS (suppliers) ──────────────────────────────────────────
+//   OLDMAILINGNAME.LIST → OLDAUDITENTRYIDS.LIST → STARTINGFROM → GUID →
+//   CURRENCYNAME(₹) → PRIORSTATENAME → GSTREGISTRATIONTYPE → VATDEALERTYPE →
+//   PARENT(Sundry Creditors) → TAXCLASSIFICATIONNAME → TAXTYPE(Others) →
+//   COUNTRYOFRESIDENCE(India) → LEDADDLALLOCTYPE → GSTTYPE → APPROPRIATEFOR →
+//   PARTYGSTIN → GSTTYPEOFSUPPLY(Services) → OLDLEDSTATENAME →
+//   SERVICECATEGORY → EXCISELEDGERCLASSIFICATION → EXCISEDUTYTYPE →
+//   EXCISENATUREOFPURCHASE → LEDGERFBTCATEGORY → OLDCOUNTRYNAME(India) →
+//   [tail]
+//   LEDGSTREGDETAILS: APPLICABLEFROM, GSTREGISTRATIONTYPE, STATE, PLACEOFSUPPLY,
+//                     GSTIN, ISOTHTERRITORYASSESSEE(No), CONSIDERPURCHASEFOREXPORT(No),
+//                     ISTRANSPORTER(No), ISCOMMONPARTY(No)
+//   LEDMAILINGDETAILS: APPLICABLEFROM, MAILINGNAME, STATE, COUNTRY(India)
+//
+// ── 2. PURCHASE LEDGERS ────────────────────────────────────────────────────────
+//   OLDAUDITENTRYIDS.LIST → STARTINGFROM → GUID →
+//   CURRENCYNAME(₹) → PARENT(Purchase Accounts) → GSTAPPLICABLE → TAXTYPE(Others) →
+//   GSTTYPEOFSUPPLY(Goods) → VATAPPLICABLE → AFFECTSSTOCK(Yes) →
+//   TAXCLASSIFICATIONNAME → GSTTYPE → APPROPRIATEFOR → SERVICECATEGORY →
+//   EXCISE* → LEDGERFBTCATEGORY → [tail]
+//   GSTDETAILS.LIST: APPLICABLEFROM, TAXABILITY(Taxable), SRCOFGSTDETAILS,
+//                    STATEWISEDETAILS with CGST/SGST/IGST/Cess/StateCess rates
+//   LEDMAILINGDETAILS: APPLICABLEFROM, MAILINGNAME
+//
+// ── 3. DUTIES & TAXES ──────────────────────────────────────────────────────────
+//   OLDAUDITENTRYIDS.LIST → STARTINGFROM → GUID →
+//   CURRENCYNAME(₹) → PARENT(Duties & Taxes) → TAXCLASSIFICATIONNAME →
+//   TAXTYPE(GST) → GSTTYPE → APPROPRIATEFOR →
+//   GSTDUTYHEAD(CGST|SGST/UTGST|IGST) → GSTTYPEOFSUPPLY(Services) →
+//   ROUNDINGMETHOD → SERVICECATEGORY → EXCISE* → LEDGERFBTCATEGORY → [tail]
+//   LEDGSTREGDETAILS: empty    LEDMAILINGDETAILS: empty
+//   NOTE: No OLDMAILINGNAME.LIST for this type.
+//
+// ── 4. EXPENSE / CHARGE LEDGERS ────────────────────────────────────────────────
+//   OLDMAILINGNAME.LIST → OLDAUDITENTRYIDS.LIST → STARTINGFROM → GUID →
+//   CURRENCYNAME(₹) → PARENT(Indirect Expenses) → GSTAPPLICABLE →
+//   TAXCLASSIFICATIONNAME → TAXTYPE(Others) → LEDADDLALLOCTYPE → GSTTYPE →
+//   APPROPRIATEFOR → GSTTYPEOFSUPPLY(Services) → SERVICECATEGORY → EXCISE* →
+//   LEDGERFBTCATEGORY → VATAPPLICABLE → [tail]
+//   GSTDETAILS.LIST: same structure as Purchase with actual GST rate
+//   HSNDETAILS.LIST: APPLICABLEFROM, HSNCODE(SAC), SRCOFHSNDETAILS
+//   LEDMAILINGDETAILS: APPLICABLEFROM, MAILINGNAME
+//   NOTE: VATAPPLICABLE comes AFTER LEDGERFBTCATEGORY (not before it).
+//
+// ── 5. STOCK ITEMS ─────────────────────────────────────────────────────────────
+//   Emit UNIT blocks first (TYPEOFUPDATEACTIVITY=Migration, OBJECTUPDATEACTION=Alter).
+//   Then STOCKITEM blocks: PARENT(empty) → GSTAPPLICABLE → GSTTYPEOFSUPPLY(Goods) →
+//   BASEUNITS → booleans → GSTDETAILS.LIST(with rates) → HSNDETAILS.LIST →
+//   LANGUAGENAME.LIST
+//
+// IMPORT ORDER: Always import masters BEFORE vouchers. Within masters, the
+// combined XML emits in this order: Creditors → Purchase → Duties → Expense →
+// Units → Stock Items. Tally skips duplicates safely on re-import.
+// ══════════════════════════════════════════════════════════════════════════════
 
 // Returns the FY start date in YYYYMMDD Tally format.
 // Uses the financialYear string from XmlGeneratorInput (e.g. 'FY 2024-25')
