@@ -23,6 +23,7 @@ const EMPTY_FORM = {
   alias_name: '',
   unit: '',
   hsn_code: '',
+  gst_percent: '',
 };
 
 export default function StockItemsPage() {
@@ -79,6 +80,7 @@ export default function StockItemsPage() {
       alias_name: item.alias_name ?? '',
       unit: item.unit ?? '',
       hsn_code: item.hsn_code ?? '',
+      gst_percent: item.gst_percent != null ? String(item.gst_percent) : '',
     });
     setFormError('');
     setShowForm(true);
@@ -91,11 +93,13 @@ export default function StockItemsPage() {
     setSaving(true);
     setFormError('');
     try {
+      const gstPct = form.gst_percent !== '' ? parseFloat(form.gst_percent) : undefined;
       const params = {
         tally_item_name: form.tally_item_name, // stored exactly as typed
         alias_name: form.alias_name || undefined,
         unit: form.unit || undefined,
         hsn_code: form.hsn_code || undefined,
+        gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
       };
       if (editingId) {
         await updateStockItem(editingId, params);
@@ -125,12 +129,12 @@ export default function StockItemsPage() {
   // ── Excel template download ──────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Tally Stock Item Name', 'Alias Name', 'Unit', 'HSN Code'],
-      ['A4 Copier Paper Ream', 'A4 Paper', 'BOX', '48025590'],
-      ['Ball Pen Blue 10 Pcs', 'Ball Pen Blue', 'PKT', '96081010'],
-      ['Stapler Machine', '', 'NOS', '83050000'],
+      ['Tally Stock Item Name', 'Alias Name', 'Unit', 'HSN Code', 'GST %'],
+      ['A4 Copier Paper Ream', 'A4 Paper', 'BOX', '48025590', 12],
+      ['Ball Pen Blue 10 Pcs', 'Ball Pen Blue', 'PKT', '96081010', 12],
+      ['Stapler Machine', '', 'NOS', '83050000', 18],
     ]);
-    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
     XLSX.writeFile(wb, 'TallyAI_StockItem_Master_Template.xlsx');
@@ -170,6 +174,7 @@ export default function StockItemsPage() {
       const aliasCol = colIdx(['alias', 'description', 'invoice description', 'invoice item']);
       const unitCol = colIdx(['unit', 'uom', 'u/m']);
       const hsnCol = colIdx(['hsn', 'hsn code', 'hsn/sac']);
+      const gstCol = colIdx(['gst %', 'gst percent', 'gst rate', 'gst']);
 
       if (nameCol === -1) {
         setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '—', reason: 'Could not find Tally Stock Item Name column' }] });
@@ -177,12 +182,17 @@ export default function StockItemsPage() {
       }
 
       const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
-      const rows = dataRows.map((r) => ({
-        tally_item_name: String(r[nameCol] ?? ''), // NOT trimmed
-        alias_name: aliasCol !== -1 ? String(r[aliasCol] ?? '') : '',
-        unit: unitCol !== -1 ? String(r[unitCol] ?? '') : '',
-        hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
-      }));
+      const rows = dataRows.map((r) => {
+        const rawGst = gstCol !== -1 ? r[gstCol] : undefined;
+        const gstPct = rawGst !== undefined && rawGst !== '' ? parseFloat(String(rawGst)) : null;
+        return {
+          tally_item_name: String(r[nameCol] ?? ''), // NOT trimmed
+          alias_name: aliasCol !== -1 ? String(r[aliasCol] ?? '') : '',
+          unit: unitCol !== -1 ? String(r[unitCol] ?? '') : '',
+          hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
+          gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
+        };
+      });
 
       const result = await bulkUpsertStockItems(company.id, rows);
       setImportResult(result);
@@ -202,9 +212,10 @@ export default function StockItemsPage() {
       'Alias Name': s.alias_name ?? '',
       'Unit': s.unit ?? '',
       'HSN Code': s.hsn_code ?? '',
+      'GST %': s.gst_percent ?? '',
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 30 }, { wch: 10 }, { wch: 15 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
     XLSX.writeFile(wb, `StockItems_${company?.name ?? 'export'}.xlsx`);
@@ -370,6 +381,17 @@ export default function StockItemsPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. 48025590" />
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    GST %
+                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input value={form.gst_percent}
+                    onChange={(e) => setForm({ ...form, gst_percent: e.target.value })}
+                    type="number" min="0" max="100" step="0.01"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="e.g. 12" />
+                </div>
               </div>
               {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
@@ -399,6 +421,7 @@ export default function StockItemsPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Alias / Invoice Description</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Unit</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">HSN</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">GST %</th>
                     <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
@@ -409,6 +432,7 @@ export default function StockItemsPage() {
                       <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">—</span>}</td>
                       <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '—'}</td>
                       <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.hsn_code || '—'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.gst_percent != null ? `${s.gst_percent}%` : '—'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
                           <button onClick={() => openEdit(s)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>

@@ -53,7 +53,7 @@ interface InvoiceAcceptPayload {
   invoiceNo: string;
   vendorName: string; vendorGstin: string; vendorLedger: string;
   purchaseLedger: string;
-  stockItems: Array<{ desc: string; hsn: string; gst_percent?: number; tallyName: string }>;
+  stockItems: Array<{ desc: string; hsn: string; uom: string; gst_percent?: number; tallyName: string }>;
   charges: Array<{ keyword: string; tallyName: string; gst_percent?: number; sac_code?: string }>;
   cgstLedger: string; sgstLedger: string; igstLedger: string;
   roLedger: string;
@@ -353,7 +353,7 @@ function FlatPreviewTable({
         if (r.itemDesc) {
           const tallyName = stockItemEdits[`${invNo}_${r.itemDesc}`] ?? r.stockItem;
           if (tallyName) {
-            stockItems.push({ desc: r.itemDesc, hsn: r.hsn, gst_percent: r.taxRate ?? undefined, tallyName });
+            stockItems.push({ desc: r.itemDesc, hsn: r.hsn, uom: r.uom, gst_percent: r.taxRate ?? undefined, tallyName });
             lockedStock[r.itemDesc] = tallyName;
           }
         }
@@ -1378,6 +1378,7 @@ export default function XmlGeneratorPage() {
                             tally_item_name: si.tallyName,
                             alias_name: si.desc,
                             hsn_code: si.hsn || undefined,
+                            unit: si.uom || undefined,
                             gst_percent: si.gst_percent ?? null,
                           });
                         }
