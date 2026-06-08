@@ -469,7 +469,7 @@ function invLedgerEntry(opts: {
     `\n        <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>` +
     rateBlock +
     `\n        <LEDGERNAME>${esc(opts.ledgerName)}</LEDGERNAME>` +
-    `\n        <GSTCLASS>&#4; Not Applicable</GSTCLASS>` +
+    `\n        <GSTCLASS> Not Applicable</GSTCLASS>` +
     `\n        <ISDEEMEDPOSITIVE>${opts.isdeemedpositive}</ISDEEMEDPOSITIVE>` +
     `\n        <LEDGERFROMITEM>No</LEDGERFROMITEM>` +
     `\n        <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>` +
@@ -555,8 +555,8 @@ function buildAllInventoryEntry(
   return (
     `\n      <ALLINVENTORYENTRIES.LIST>` +
     `\n        <STOCKITEMNAME>${esc(stockItem.tally_item_name)}</STOCKITEMNAME>` +
-    `\n        <GSTOVRDNINELIGIBLEITC>&#4; Not Applicable</GSTOVRDNINELIGIBLEITC>` +
-    `\n        <GSTOVRDNISREVCHARGEAPPL>&#4; Not Applicable</GSTOVRDNISREVCHARGEAPPL>` +
+    `\n        <GSTOVRDNINELIGIBLEITC> Not Applicable</GSTOVRDNINELIGIBLEITC>` +
+    `\n        <GSTOVRDNISREVCHARGEAPPL> Not Applicable</GSTOVRDNISREVCHARGEAPPL>` +
     `\n        <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>` +
     `\n        <GSTSOURCETYPE>Stock Item</GSTSOURCETYPE>` +
     `\n        <GSTITEMSOURCE>${esc(stockItem.tally_item_name)}</GSTITEMSOURCE>` +
@@ -586,9 +586,9 @@ function buildAllInventoryEntry(
     `\n          <GODOWNNAME>Main Location</GODOWNNAME>` +
     `\n          <BATCHNAME>Primary Batch</BATCHNAME>` +
     `\n          <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>` +
-    `\n          <INDENTNO>&#4; Not Applicable</INDENTNO>` +
-    `\n          <ORDERNO>&#4; Not Applicable</ORDERNO>` +
-    `\n          <TRACKINGNUMBER>&#4; Not Applicable</TRACKINGNUMBER>` +
+    `\n          <INDENTNO> Not Applicable</INDENTNO>` +
+    `\n          <ORDERNO> Not Applicable</ORDERNO>` +
+    `\n          <TRACKINGNUMBER> Not Applicable</TRACKINGNUMBER>` +
     `\n          <DYNAMICCSTISCLEARED>No</DYNAMICCSTISCLEARED>` +
     `\n          <AMOUNT>${fmt2(negAmt)}</AMOUNT>` +
     `\n          <ACTUALQTY> ${fmt2(item.qty)} ${esc(uom)}</ACTUALQTY>` +
@@ -599,7 +599,7 @@ function buildAllInventoryEntry(
     `\n        <ACCOUNTINGALLOCATIONS.LIST>` +
     `\n          <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>` +
     `\n          <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>` +
-    `\n          <GSTCLASS>&#4; Not Applicable</GSTCLASS>` +
+    `\n          <GSTCLASS> Not Applicable</GSTCLASS>` +
     `\n          <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>` +
     `\n          <LEDGERFROMITEM>No</LEDGERFROMITEM>` +
     `\n          <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>` +
@@ -1000,14 +1000,14 @@ function masterLedgerBlock(
       <STARTINGFROM>${fyStart}</STARTINGFROM>
       <GUID></GUID>
       ${coreFields}
-      <TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>
-      <GSTTYPE>&#4; Not Applicable</GSTTYPE>
-      <APPROPRIATEFOR>&#4; Not Applicable</APPROPRIATEFOR>
-      <SERVICECATEGORY>&#4; Not Applicable</SERVICECATEGORY>
-      <EXCISELEDGERCLASSIFICATION>&#4; Not Applicable</EXCISELEDGERCLASSIFICATION>
-      <EXCISEDUTYTYPE>&#4; Not Applicable</EXCISEDUTYTYPE>
-      <EXCISENATUREOFPURCHASE>&#4; Not Applicable</EXCISENATUREOFPURCHASE>
-      <LEDGERFBTCATEGORY>&#4; Not Applicable</LEDGERFBTCATEGORY>${LEDGER_BOOLEANS}${LEDGER_EMPTY_LISTS}
+      <TAXCLASSIFICATIONNAME> Not Applicable</TAXCLASSIFICATIONNAME>
+      <GSTTYPE> Not Applicable</GSTTYPE>
+      <APPROPRIATEFOR> Not Applicable</APPROPRIATEFOR>
+      <SERVICECATEGORY> Not Applicable</SERVICECATEGORY>
+      <EXCISELEDGERCLASSIFICATION> Not Applicable</EXCISELEDGERCLASSIFICATION>
+      <EXCISEDUTYTYPE> Not Applicable</EXCISEDUTYTYPE>
+      <EXCISENATUREOFPURCHASE> Not Applicable</EXCISENATUREOFPURCHASE>
+      <LEDGERFBTCATEGORY> Not Applicable</LEDGERFBTCATEGORY>${LEDGER_BOOLEANS}${LEDGER_EMPTY_LISTS}
       <GSTDETAILS.LIST>${gstBlock}</GSTDETAILS.LIST>
       <HSNDETAILS.LIST>${hsnBlock}</HSNDETAILS.LIST>
       <MSMEREGISTRATIONDETAILS.LIST>      </MSMEREGISTRATIONDETAILS.LIST>
@@ -1064,18 +1064,18 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
       <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
       <VATDEALERTYPE>${regType}</VATDEALERTYPE>
       <PARENT>Sundry Creditors</PARENT>
-      <TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>
+      <TAXCLASSIFICATIONNAME> Not Applicable</TAXCLASSIFICATIONNAME>
       <TAXTYPE>Others</TAXTYPE>
       <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
-      <LEDADDLALLOCTYPE>&#4; Not Applicable</LEDADDLALLOCTYPE>
-      <GSTTYPE>&#4; Not Applicable</GSTTYPE>
-      <APPROPRIATEFOR>&#4; Not Applicable</APPROPRIATEFOR>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
+      <LEDADDLALLOCTYPE> Not Applicable</LEDADDLALLOCTYPE>
+      <GSTTYPE> Not Applicable</GSTTYPE>
+      <APPROPRIATEFOR> Not Applicable</APPROPRIATEFOR>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
       <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>${vendorState ? `\n      <OLDLEDSTATENAME>${esc(vendorState)}</OLDLEDSTATENAME>` : ''}
-      <SERVICECATEGORY>&#4; Not Applicable</SERVICECATEGORY>
-      <EXCISELEDGERCLASSIFICATION>&#4; Not Applicable</EXCISELEDGERCLASSIFICATION>
-      <EXCISEDUTYTYPE>&#4; Not Applicable</EXCISEDUTYTYPE>
-      <EXCISENATUREOFPURCHASE>&#4; Not Applicable</EXCISENATUREOFPURCHASE>
-      <LEDGERFBTCATEGORY>&#4; Not Applicable</LEDGERFBTCATEGORY>
+      <SERVICECATEGORY> Not Applicable</SERVICECATEGORY>
+      <EXCISELEDGERCLASSIFICATION> Not Applicable</EXCISELEDGERCLASSIFICATION>
+      <EXCISEDUTYTYPE> Not Applicable</EXCISEDUTYTYPE>
+      <EXCISENATUREOFPURCHASE> Not Applicable</EXCISENATUREOFPURCHASE>
+      <LEDGERFBTCATEGORY> Not Applicable</LEDGERFBTCATEGORY>
       <OLDCOUNTRYNAME>India</OLDCOUNTRYNAME>${LEDGER_BOOLEANS}
       <SORTPOSITION> 1000</SORTPOSITION>
       <ALTERID> 0</ALTERID>${LEDGER_EMPTY_LISTS}
@@ -1097,10 +1097,10 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): string {
   const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
       <PARENT>Purchase Accounts</PARENT>
-      <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
       <TAXTYPE>Others</TAXTYPE>
       <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
-      <VATAPPLICABLE>&#4; Applicable</VATAPPLICABLE>
+      <VATAPPLICABLE> Applicable</VATAPPLICABLE>
       <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`;
 
   const gstBlock = `
@@ -1113,7 +1113,7 @@ function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): str
         <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
         <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
         <STATEWISEDETAILS.LIST>
-          <STATENAME>&#4; Any</STATENAME>
+          <STATENAME> Any</STATENAME>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
             <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
@@ -1131,7 +1131,7 @@ function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): str
           </RATEDETAILS.LIST>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
-            <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+            <GSTRATEVALUATIONTYPE> Not Applicable</GSTRATEVALUATIONTYPE>
           </RATEDETAILS.LIST>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
@@ -1159,7 +1159,7 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster, fyStart: string): string {
       <TAXTYPE>GST</TAXTYPE>
       <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>
       <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
-      <ROUNDINGMETHOD>&#4; Not Applicable</ROUNDINGMETHOD>`;
+      <ROUNDINGMETHOD> Not Applicable</ROUNDINGMETHOD>`;
   return masterLedgerBlock(esc(dt.tally_ledger_name), fyStart, coreFields, '', '', '      ', '      ');
 }
 
@@ -1169,10 +1169,10 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
 
   const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
       <PARENT>Indirect Expenses</PARENT>
-      <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
       <TAXTYPE>Others</TAXTYPE>
       <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
-      <VATAPPLICABLE>&#4; Not Applicable</VATAPPLICABLE>`;
+      <VATAPPLICABLE> Not Applicable</VATAPPLICABLE>`;
 
   const gstBlock = gst
     ? `
@@ -1185,7 +1185,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
         <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
         <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
         <STATEWISEDETAILS.LIST>
-          <STATENAME>&#4; Any</STATENAME>
+          <STATENAME> Any</STATENAME>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
             <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
@@ -1203,7 +1203,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
           </RATEDETAILS.LIST>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
-            <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+            <GSTRATEVALUATIONTYPE> Not Applicable</GSTRATEVALUATIONTYPE>
           </RATEDETAILS.LIST>
           <RATEDETAILS.LIST>
             <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
@@ -1290,7 +1290,7 @@ function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: st
           <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
           <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
           <STATEWISEDETAILS.LIST>
-            <STATENAME>&#4; Any</STATENAME>
+            <STATENAME> Any</STATENAME>
             <RATEDETAILS.LIST>
               <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
               <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
@@ -1308,7 +1308,7 @@ function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: st
             </RATEDETAILS.LIST>
             <RATEDETAILS.LIST>
               <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+              <GSTRATEVALUATIONTYPE> Not Applicable</GSTRATEVALUATIONTYPE>
             </RATEDETAILS.LIST>
             <RATEDETAILS.LIST>
               <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
@@ -1333,7 +1333,7 @@ function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: st
         <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
         <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
         <PARENT/>
-        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+        <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
         <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
         <BASEUNITS>${esc(unit)}</BASEUNITS>
         <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
