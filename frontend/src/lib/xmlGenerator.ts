@@ -875,16 +875,25 @@ const UNIT_FORMAL_NAMES: Record<string, string> = {
 };
 
 function buildUnitBlock(unitName: string): string {
-  const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} (Unit)`;
+  const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} Unit`;
+  const gstRepUom = `${unitName.toUpperCase()}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <UNIT NAME="${esc(unitName)}" ACTION="Alter">
+      <UNIT NAME="${esc(unitName)}" ACTION="Create" RESERVEDNAME="">
         <NAME>${esc(unitName)}</NAME>
-        <ORIGINALNAME>${esc(unitName)}</ORIGINALNAME>
-        <FORMALNAME>${esc(formalName)}</FORMALNAME>
-        <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+        <ORIGINALNAME>${esc(formalName)}</ORIGINALNAME>
+        <GSTREPORUOM>${esc(gstRepUom)}</GSTREPORUOM>
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>
+        <ISGSTEXCLUDED>No</ISGSTEXCLUDED>
+        <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+        <DECIMALPLACES>2</DECIMALPLACES>
+        <REPORTINGUQCDETAILS.LIST>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <REPORTINGUQCNAME>${esc(gstRepUom)}</REPORTINGUQCNAME>
+        </REPORTINGUQCDETAILS.LIST>
       </UNIT>
     </TALLYMESSAGE>`;
 }
