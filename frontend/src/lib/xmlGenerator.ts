@@ -878,7 +878,7 @@ function buildUnitBlock(unitName: string): string {
   const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} (Unit)`;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <UNIT NAME="${esc(unitName)}" ACTION="Create">
+      <UNIT NAME="${esc(unitName)}" ACTION="Alter">
         <NAME>${esc(unitName)}</NAME>
         <ORIGINALNAME>${esc(unitName)}</ORIGINALNAME>
         <FORMALNAME>${esc(formalName)}</FORMALNAME>
