@@ -193,8 +193,26 @@ export async function deleteSupplier(id: string): Promise<void> {
   if (error) throw error;
 }
 
+// Word-overlap similarity check — returns true if the two names share enough significant words.
+// Prevents learnVendorName from overwriting vendor_name with a completely unrelated business name
+// when the supplier master has an incorrect GSTIN assigned to it.
+function namesAreSimilar(a: string, b: string): boolean {
+  const words = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+  const wa = words(a);
+  const wb = words(b);
+  if (!wa.length || !wb.length) return true; // can't judge, allow
+  const shorter = wa.length <= wb.length ? wa : wb;
+  const longer  = wa.length <= wb.length ? wb : wa;
+  const hits = shorter.filter((w) => longer.some((lw) => lw.includes(w) || w.includes(lw)));
+  // Require at least one overlapping significant word
+  return hits.length >= 1;
+}
+
 // Auto-learn: called when invoice is accepted.
-// Updates vendor_name from invoice if GSTIN matches.
+// Updates vendor_name from invoice if GSTIN matches AND the invoice name is similar
+// enough to tally_ledger_name. Skips silently if names share no significant words —
+// this prevents a wrong GSTIN in the master from mapping an unrelated vendor name.
 // NEVER touches tally_ledger_name.
 export async function learnVendorName(
   companyId: string,
@@ -204,6 +222,26 @@ export async function learnVendorName(
   if (!gstin || !invoiceVendorName) return;
   const normGstin = normaliseGstin(gstin);
   if (!normGstin) return;
+
+  // Fetch existing record to similarity-check before overwriting vendor_name
+  const { data: existing } = await db()
+    .from('supplier_masters')
+    .select('tally_ledger_name, vendor_name')
+    .eq('company_id', companyId)
+    .eq('vendor_gstin', normGstin)
+    .single();
+
+  if (!existing) return;
+
+  // Guard: only learn if invoice name shares at least one significant word with the Tally ledger name.
+  // If there is zero word overlap (e.g. "SHRI VINAYAK TRADERS" vs "Shri Ganesh Traders"),
+  // the GSTIN in the master is likely wrong — skip silently rather than corrupt vendor_name.
+  if (!namesAreSimilar(invoiceVendorName, existing.tally_ledger_name)) {
+    console.warn(
+      `learnVendorName: skipped — invoice name "${invoiceVendorName}" shares no words with ledger "${existing.tally_ledger_name}" (GSTIN ${normGstin}). Check supplier master for wrong GSTIN.`,
+    );
+    return;
+  }
 
   const { error } = await db()
     .from('supplier_masters')
