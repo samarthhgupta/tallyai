@@ -800,24 +800,155 @@ function fyStartFromString(financialYear?: string): string {
   return `${fyYear}0401`;
 }
 
-function masterLedgerBlock(name: string, fields: string): string {
+// Tally-native boolean flags — same set Tally itself exports for every ledger
+const LEDGER_BOOLEANS = `
+      <ISBILLWISEON>No</ISBILLWISEON>
+      <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
+      <ISINTERESTON>No</ISINTERESTON>
+      <ALLOWINMOBILE>No</ALLOWINMOBILE>
+      <ISCOSTTRACKINGON>No</ISCOSTTRACKINGON>
+      <ISBENEFICIARYCODEON>No</ISBENEFICIARYCODEON>
+      <ISEXPORTONVCHCREATE>No</ISEXPORTONVCHCREATE>
+      <PLASINCOMEEXPENSE>No</PLASINCOMEEXPENSE>
+      <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+      <ISDELETED>No</ISDELETED>
+      <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+      <ASORIGINAL>Yes</ASORIGINAL>
+      <ISCONDENSED>No</ISCONDENSED>
+      <AFFECTSSTOCK>No</AFFECTSSTOCK>
+      <ISRATEINCLUSIVEVAT>No</ISRATEINCLUSIVEVAT>
+      <FORPAYROLL>No</FORPAYROLL>
+      <ISABCENABLED>No</ISABCENABLED>
+      <ISCREDITDAYSCHKON>No</ISCREDITDAYSCHKON>
+      <INTERESTONBILLWISE>No</INTERESTONBILLWISE>
+      <OVERRIDEINTEREST>No</OVERRIDEINTEREST>
+      <OVERRIDEADVINTEREST>No</OVERRIDEADVINTEREST>
+      <USEFORVAT>No</USEFORVAT>
+      <IGNORETDSEXEMPT>No</IGNORETDSEXEMPT>
+      <ISTCSAPPLICABLE>No</ISTCSAPPLICABLE>
+      <ISTDSAPPLICABLE>No</ISTDSAPPLICABLE>
+      <ISFBTAPPLICABLE>No</ISFBTAPPLICABLE>
+      <ISGSTAPPLICABLE>No</ISGSTAPPLICABLE>
+      <ISEXCISEAPPLICABLE>No</ISEXCISEAPPLICABLE>
+      <ISTDSEXPENSE>No</ISTDSEXPENSE>
+      <ISEDLIAPPLICABLE>No</ISEDLIAPPLICABLE>
+      <ISRELATEDPARTY>No</ISRELATEDPARTY>
+      <USEFORESIELIGIBILITY>No</USEFORESIELIGIBILITY>
+      <ISINTERESTINCLLASTDAY>No</ISINTERESTINCLLASTDAY>
+      <APPROPRIATETAXVALUE>No</APPROPRIATETAXVALUE>
+      <ISBEHAVEASDUTY>No</ISBEHAVEASDUTY>
+      <INTERESTINCLDAYOFADDITION>No</INTERESTINCLDAYOFADDITION>
+      <INTERESTINCLDAYOFDEDUCTION>No</INTERESTINCLDAYOFDEDUCTION>
+      <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
+      <IGNOREMISMATCHWITHWARNING>No</IGNOREMISMATCHWITHWARNING>
+      <USEASNOTIONALBANK>No</USEASNOTIONALBANK>
+      <BEHAVEASPAYMENTGATEWAY>No</BEHAVEASPAYMENTGATEWAY>
+      <OVERRIDECREDITLIMIT>No</OVERRIDECREDITLIMIT>
+      <ISAGAINSTFORMC>No</ISAGAINSTFORMC>
+      <ISCHEQUEPRINTINGENABLED>Yes</ISCHEQUEPRINTINGENABLED>
+      <ISPAYUPLOAD>No</ISPAYUPLOAD>
+      <ISPAYBATCHONLYSAL>No</ISPAYBATCHONLYSAL>
+      <ISBNFCODESUPPORTED>No</ISBNFCODESUPPORTED>
+      <ALLOWEXPORTWITHERRORS>No</ALLOWEXPORTWITHERRORS>
+      <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
+      <ISTRANSPORTER>No</ISTRANSPORTER>
+      <ISECASHLEDGER>No</ISECASHLEDGER>
+      <USEFORNOTIONALITC>No</USEFORNOTIONALITC>
+      <ISECOMMOPERATOR>No</ISECOMMOPERATOR>
+      <AUDITED>No</AUDITED>`;
+
+// Empty list elements — same set Tally exports for every ledger
+const LEDGER_EMPTY_LISTS = `
+      <SERVICETAXDETAILS.LIST>      </SERVICETAXDETAILS.LIST>
+      <LBTREGNDETAILS.LIST>      </LBTREGNDETAILS.LIST>
+      <VATDETAILS.LIST>      </VATDETAILS.LIST>
+      <SALESTAXCESSDETAILS.LIST>      </SALESTAXCESSDETAILS.LIST>
+      <MSMEREGISTRATIONDETAILS.LIST>      </MSMEREGISTRATIONDETAILS.LIST>`;
+
+const LEDGER_TAIL_LISTS = `
+      <XBRLDETAIL.LIST>      </XBRLDETAIL.LIST>
+      <AUDITDETAILS.LIST>      </AUDITDETAILS.LIST>
+      <SCHVIDETAILS.LIST>      </SCHVIDETAILS.LIST>
+      <EXCISETARIFFDETAILS.LIST>      </EXCISETARIFFDETAILS.LIST>
+      <TCSCATEGORYDETAILS.LIST>      </TCSCATEGORYDETAILS.LIST>
+      <TDSCATEGORYDETAILS.LIST>      </TDSCATEGORYDETAILS.LIST>
+      <SLABPERIOD.LIST>      </SLABPERIOD.LIST>
+      <GRATUITYPERIOD.LIST>      </GRATUITYPERIOD.LIST>
+      <ADDITIONALCOMPUTATIONS.LIST>      </ADDITIONALCOMPUTATIONS.LIST>
+      <EXCISEJURISDICTIONDETAILS.LIST>      </EXCISEJURISDICTIONDETAILS.LIST>
+      <EXCLUDEDTAXATIONS.LIST>      </EXCLUDEDTAXATIONS.LIST>
+      <BANKALLOCATIONS.LIST>      </BANKALLOCATIONS.LIST>
+      <PAYMENTDETAILS.LIST>      </PAYMENTDETAILS.LIST>
+      <BANKEXPORTFORMATS.LIST>      </BANKEXPORTFORMATS.LIST>
+      <BILLALLOCATIONS.LIST>      </BILLALLOCATIONS.LIST>
+      <INTERESTCOLLECTION.LIST>      </INTERESTCOLLECTION.LIST>
+      <LEDGERCLOSINGVALUES.LIST>      </LEDGERCLOSINGVALUES.LIST>
+      <LEDGERAUDITCLASS.LIST>      </LEDGERAUDITCLASS.LIST>
+      <OLDAUDITENTRIES.LIST>      </OLDAUDITENTRIES.LIST>
+      <TDSEXEMPTIONRULES.LIST>      </TDSEXEMPTIONRULES.LIST>
+      <DEDUCTINSAMEVCHRULES.LIST>      </DEDUCTINSAMEVCHRULES.LIST>
+      <LOWERDEDUCTION.LIST>      </LOWERDEDUCTION.LIST>
+      <STXABATEMENTDETAILS.LIST>      </STXABATEMENTDETAILS.LIST>
+      <LEDMULTIADDRESSLIST.LIST>      </LEDMULTIADDRESSLIST.LIST>
+      <STXTAXDETAILS.LIST>      </STXTAXDETAILS.LIST>
+      <CHEQUERANGE.LIST>      </CHEQUERANGE.LIST>
+      <DEFAULTVCHCHEQUEDETAILS.LIST>      </DEFAULTVCHCHEQUEDETAILS.LIST>
+      <ACCOUNTAUDITENTRIES.LIST>      </ACCOUNTAUDITENTRIES.LIST>
+      <AUDITENTRIES.LIST>      </AUDITENTRIES.LIST>
+      <BRSIMPORTEDINFO.LIST>      </BRSIMPORTEDINFO.LIST>
+      <AUTOBRSCONFIGS.LIST>      </AUTOBRSCONFIGS.LIST>
+      <BANKURENTRIES.LIST>      </BANKURENTRIES.LIST>
+      <DEFAULTCHEQUEDETAILS.LIST>      </DEFAULTCHEQUEDETAILS.LIST>
+      <DEFAULTOPENINGCHEQUEDETAILS.LIST>      </DEFAULTOPENINGCHEQUEDETAILS.LIST>
+      <CANCELLEDPAYALLOCATIONS.LIST>      </CANCELLEDPAYALLOCATIONS.LIST>
+      <ECHEQUEPRINTLOCATION.LIST>      </ECHEQUEPRINTLOCATION.LIST>
+      <ECHEQUEPAYABLELOCATION.LIST>      </ECHEQUEPAYABLELOCATION.LIST>
+      <EDDPRINTLOCATION.LIST>      </EDDPRINTLOCATION.LIST>
+      <EDDPAYABLELOCATION.LIST>      </EDDPAYABLELOCATION.LIST>
+      <AVAILABLETRANSACTIONTYPES.LIST>      </AVAILABLETRANSACTIONTYPES.LIST>
+      <LEDPAYINSCONFIGS.LIST>      </LEDPAYINSCONFIGS.LIST>
+      <TYPECODEDETAILS.LIST>      </TYPECODEDETAILS.LIST>
+      <FIELDVALIDATIONDETAILS.LIST>      </FIELDVALIDATIONDETAILS.LIST>
+      <INPUTCRALLOCS.LIST>      </INPUTCRALLOCS.LIST>
+      <TCSMETHODOFCALCULATION.LIST>      </TCSMETHODOFCALCULATION.LIST>
+      <GSTRECONPREFIXSUFFIXDETAILS.LIST>      </GSTRECONPREFIXSUFFIXDETAILS.LIST>
+      <CONTACTDETAILS.LIST>      </CONTACTDETAILS.LIST>
+      <GSTCLASSFNIGSTRATES.LIST>      </GSTCLASSFNIGSTRATES.LIST>
+      <EXTARIFFDUTYHEADDETAILS.LIST>      </EXTARIFFDUTYHEADDETAILS.LIST>
+      <TEMPGSTITEMSLABRATES.LIST>      </TEMPGSTITEMSLABRATES.LIST>
+      <LEDGSTADDRESS.LIST>      </LEDGSTADDRESS.LIST>
+      <VOUCHERTYPEPRODUCTCODES.LIST>      </VOUCHERTYPEPRODUCTCODES.LIST>
+      <LEDADDRESS.LIST>      </LEDADDRESS.LIST>
+      <DEFMULTIPLETOPHONENO.LIST>      </DEFMULTIPLETOPHONENO.LIST>`;
+
+function masterLedgerBlock(
+  name: string,
+  fyStart: string,
+  coreFields: string,
+  gstBlock: string,
+  hsnBlock: string,
+  ledgstRegBlock: string,
+  mailingBlock: string,
+): string {
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <LEDGER NAME="${name}" RESERVEDNAME="">
-        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
-        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
-        ${fields}
-        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
-        <ISDELETED>No</ISDELETED>
-        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
-        <ASORIGINAL>Yes</ASORIGINAL>
-        <LANGUAGENAME.LIST>
-          <NAME.LIST TYPE="String">
-            <NAME>${name}</NAME>
-          </NAME.LIST>
-          <LANGUAGEID> 1033</LANGUAGEID>
-        </LANGUAGENAME.LIST>
-      </LEDGER>
+      <STARTINGFROM>${fyStart}</STARTINGFROM>
+      <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+      ${coreFields}
+      <TYPEOFUPDATEACTIVITY>Split</TYPEOFUPDATEACTIVITY>
+      <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>${LEDGER_BOOLEANS}${LEDGER_EMPTY_LISTS}
+      <GSTDETAILS.LIST>${gstBlock}</GSTDETAILS.LIST>
+      <HSNDETAILS.LIST>${hsnBlock}</HSNDETAILS.LIST>${LEDGER_TAIL_LISTS}
+      <LEDGSTREGDETAILS.LIST>${ledgstRegBlock}</LEDGSTREGDETAILS.LIST>
+      <LEDMAILINGDETAILS.LIST>${mailingBlock}</LEDMAILINGDETAILS.LIST>
+      <LANGUAGENAME.LIST>
+       <NAME.LIST TYPE="String">
+        <NAME>${name}</NAME>
+       </NAME.LIST>
+       <LANGUAGEID> 1033</LANGUAGEID>
+      </LANGUAGENAME.LIST>
+     </LEDGER>
     </TALLYMESSAGE>`;
 }
 
@@ -825,129 +956,163 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
   const vendorState = stateFromGstin(s.vendor_gstin);
 
-  const ledgstReg = s.vendor_gstin
+  const coreFields = `<PARENT>Sundry Creditors</PARENT>
+      <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}`;
+
+  const ledgstRegBlock = s.vendor_gstin
     ? `
-        <LEDGSTREGDETAILS.LIST>
-          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-          <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
-          <STATE>${esc(vendorState)}</STATE>
-          <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
-          <GSTIN>${esc(s.vendor_gstin)}</GSTIN>
-          <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
-          <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
-          <ISTRANSPORTER>No</ISTRANSPORTER>
-          <ISCOMMONPARTY>No</ISCOMMONPARTY>
-        </LEDGSTREGDETAILS.LIST>
-        <LEDMAILINGDETAILS.LIST>
-          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-          <MAILINGNAME>${esc(s.tally_ledger_name)}</MAILINGNAME>${vendorState ? `\n          <STATE>${esc(vendorState)}</STATE>` : ''}
-          <COUNTRY>India</COUNTRY>
-        </LEDMAILINGDETAILS.LIST>`
-    : `\n        <LEDGSTREGDETAILS.LIST> </LEDGSTREGDETAILS.LIST>`;
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+        <STATE>${esc(vendorState)}</STATE>
+        <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
+        <GSTIN>${esc(s.vendor_gstin)}</GSTIN>
+        <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
+        <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
+        <ISTRANSPORTER>No</ISTRANSPORTER>
+        <ISCOMMONPARTY>No</ISCOMMONPARTY>
+      `
+    : '      ';
 
-  return masterLedgerBlock(esc(s.tally_ledger_name), `
-        <PARENT>Sundry Creditors</PARENT>
-        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>${s.vendor_gstin ? `\n        <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
-        <ISBILLWISEON>No</ISBILLWISEON>` + ledgstReg);
+  const mailingBlock = s.vendor_gstin
+    ? `
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <MAILINGNAME>${esc(s.tally_ledger_name)}</MAILINGNAME>${vendorState ? `\n        <STATE>${esc(vendorState)}</STATE>` : ''}
+        <COUNTRY>India</COUNTRY>
+      `
+    : '      ';
+
+  return masterLedgerBlock(esc(s.tally_ledger_name), fyStart, coreFields, '', '', ledgstRegBlock, mailingBlock);
 }
 
-function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry): string {
-  return masterLedgerBlock(esc(pl.tally_ledger_name), `
-        <PARENT>Purchase Accounts</PARENT>
-        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <TAXTYPE>Others</TAXTYPE>
-        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
-        <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
-        <ISBILLWISEON>No</ISBILLWISEON>
-        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
-        <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`);
+function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): string {
+  const coreFields = `<PARENT>Purchase Accounts</PARENT>
+      <TAXTYPE>Others</TAXTYPE>
+      <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+      <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`;
+
+  const gstBlock = `
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <TAXABILITY>Taxable</TAXABILITY>
+        <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
+        <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
+        <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+        <ISNONGSTGOODS>No</ISNONGSTGOODS>
+        <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
+        <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
+        <STATEWISEDETAILS.LIST>
+          <STATENAME>&#4; Any</STATENAME>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> 0</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> 0</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> 0</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+          </RATEDETAILS.LIST>
+          <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
+        </STATEWISEDETAILS.LIST>
+        <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
+        <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
+      `;
+
+  const mailingBlock = `
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <MAILINGNAME>${esc(pl.tally_ledger_name)}</MAILINGNAME>
+      `;
+
+  return masterLedgerBlock(esc(pl.tally_ledger_name), fyStart, coreFields, gstBlock, '', '      ', mailingBlock);
 }
 
-function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
+function buildTaxLedgerBlock(dt: DutiesTaxesMaster, fyStart: string): string {
   const dutyHeadMap: Record<string, string> = { CGST: 'CGST', SGST: 'SGST/UTGST', IGST: 'IGST' };
   const dutyHead = dutyHeadMap[dt.tax_component] ?? dt.tax_component;
-  return masterLedgerBlock(esc(dt.tally_ledger_name), `
-        <PARENT>Duties &amp; Taxes</PARENT>
-        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <TAXTYPE>GST</TAXTYPE>
-        <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>
-        <ISBILLWISEON>No</ISBILLWISEON>
-        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
-        <AFFECTSSTOCK>No</AFFECTSSTOCK>`);
+  const coreFields = `<PARENT>Duties &amp; Taxes</PARENT>
+      <TAXTYPE>GST</TAXTYPE>
+      <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>`;
+  return masterLedgerBlock(esc(dt.tally_ledger_name), fyStart, coreFields, '', '', '      ', '      ');
 }
 
 function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): string {
   const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
   const half = gst ? gst / 2 : 0;
 
-  const gstDetails = gst
+  const coreFields = `<PARENT>Indirect Expenses</PARENT>
+      <TAXTYPE>Others</TAXTYPE>
+      <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`;
+
+  const gstBlock = gst
     ? `
-        <GSTDETAILS.LIST>
-          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-          <TAXABILITY>Taxable</TAXABILITY>
-          <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
-          <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
-          <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
-          <ISNONGSTGOODS>No</ISNONGSTGOODS>
-          <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
-          <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
-          <STATEWISEDETAILS.LIST>
-            <STATENAME>&#4; Any</STATENAME>
-            <RATEDETAILS.LIST>
-              <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
-              <GSTRATE> ${half}</GSTRATE>
-            </RATEDETAILS.LIST>
-            <RATEDETAILS.LIST>
-              <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
-              <GSTRATE> ${half}</GSTRATE>
-            </RATEDETAILS.LIST>
-            <RATEDETAILS.LIST>
-              <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
-              <GSTRATE> ${gst}</GSTRATE>
-            </RATEDETAILS.LIST>
-            <RATEDETAILS.LIST>
-              <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
-            </RATEDETAILS.LIST>
-            <RATEDETAILS.LIST>
-              <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
-              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
-            </RATEDETAILS.LIST>
-            <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
-          </STATEWISEDETAILS.LIST>
-          <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
-          <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
-        </GSTDETAILS.LIST>`
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <TAXABILITY>Taxable</TAXABILITY>
+        <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
+        <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
+        <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+        <ISNONGSTGOODS>No</ISNONGSTGOODS>
+        <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
+        <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
+        <STATEWISEDETAILS.LIST>
+          <STATENAME>&#4; Any</STATENAME>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> ${half}</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> ${half}</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            <GSTRATE> ${gst}</GSTRATE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+          </RATEDETAILS.LIST>
+          <RATEDETAILS.LIST>
+            <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+            <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+          </RATEDETAILS.LIST>
+          <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
+        </STATEWISEDETAILS.LIST>
+        <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
+        <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
+      `
     : '';
 
-  const hsnDetails = el.sac_code
+  const hsnBlock = el.sac_code
     ? `
-        <HSNDETAILS.LIST>
-          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-          <HSNCODE>${esc(el.sac_code)}</HSNCODE>
-          <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
-        </HSNDETAILS.LIST>`
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <HSNCODE>${esc(el.sac_code)}</HSNCODE>
+        <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
+      `
     : '';
 
-  const mailingDetails = `
-        <LEDMAILINGDETAILS.LIST>
-          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-          <MAILINGNAME>${esc(el.tally_ledger_name)}</MAILINGNAME>
-        </LEDMAILINGDETAILS.LIST>`;
+  const mailingBlock = `
+        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+        <MAILINGNAME>${esc(el.tally_ledger_name)}</MAILINGNAME>
+      `;
 
-  return masterLedgerBlock(esc(el.tally_ledger_name), `
-        <PARENT>Indirect Expenses</PARENT>
-        <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <TAXTYPE>Others</TAXTYPE>
-        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
-        <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
-        <ISBILLWISEON>No</ISBILLWISEON>
-        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
-        <AFFECTSSTOCK>No</AFFECTSSTOCK>` + gstDetails + hsnDetails + mailingDetails);
+  return masterLedgerBlock(esc(el.tally_ledger_name), fyStart, coreFields, gstBlock, hsnBlock, '      ', mailingBlock);
 }
 
 const UNIT_FORMAL_NAMES: Record<string, string> = {
@@ -1099,7 +1264,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
       const pl = inv.tally_ledger_acceptance?.purchaseLedger;
       if (pl && !seenPurchase.has(pl)) {
         seenPurchase.add(pl);
-        messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
+        messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }, fyStart));
       }
     }
   }
@@ -1109,7 +1274,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
     for (const dt of input.dutiesTaxes) {
       if (!seenDuties.has(dt.tally_ledger_name)) {
         seenDuties.add(dt.tally_ledger_name);
-        messages.push(buildTaxLedgerBlock(dt));
+        messages.push(buildTaxLedgerBlock(dt, fyStart));
       }
     }
   }
