@@ -1025,37 +1025,73 @@ function masterLedgerBlock(
 
 function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
+  const name = esc(s.tally_ledger_name);
   const vendorState = stateFromGstin(s.vendor_gstin);
-
-  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-      <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
-      <PARENT>Sundry Creditors</PARENT>
-      <TAXTYPE>Others</TAXTYPE>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
-      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`;
 
   const ledgstRegBlock = s.vendor_gstin
     ? `
-        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
-        <STATE>${esc(vendorState)}</STATE>
-        <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
-        <GSTIN>${esc(s.vendor_gstin)}</GSTIN>
-        <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
-        <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
-        <ISTRANSPORTER>No</ISTRANSPORTER>
-        <ISCOMMONPARTY>No</ISCOMMONPARTY>
+       <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+       <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+       <STATE>${esc(vendorState)}</STATE>
+       <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
+       <GSTIN>${esc(s.vendor_gstin)}</GSTIN>
+       <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
+       <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
+       <ISTRANSPORTER>No</ISTRANSPORTER>
+       <ISCOMMONPARTY>No</ISCOMMONPARTY>
       `
     : '      ';
 
-  const mailingBlock = s.vendor_gstin
-    ? `
-        <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
-        <MAILINGNAME>${esc(s.tally_ledger_name)}</MAILINGNAME>${vendorState ? `\n        <STATE>${esc(vendorState)}</STATE>` : ''}
-        <COUNTRY>India</COUNTRY>
-      `
-    : '      ';
+  const mailingBlock = `
+       <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+       <MAILINGNAME>${name}</MAILINGNAME>${vendorState ? `\n       <STATE>${esc(vendorState)}</STATE>` : ''}
+       <COUNTRY>India</COUNTRY>
+      `;
 
-  return masterLedgerBlock(esc(s.tally_ledger_name), fyStart, coreFields, '', '', ledgstRegBlock, mailingBlock);
+  // Exact field order matching Tally's own export for Sundry Creditor ledgers
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+     <LEDGER NAME="${name}" RESERVEDNAME="">
+      <OLDMAILINGNAME.LIST TYPE="String">
+       <OLDMAILINGNAME>${name}</OLDMAILINGNAME>
+      </OLDMAILINGNAME.LIST>
+      <OLDAUDITENTRYIDS.LIST TYPE="Number">
+       <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+      </OLDAUDITENTRYIDS.LIST>
+      <STARTINGFROM>${fyStart}</STARTINGFROM>
+      <GUID></GUID>
+      <CURRENCYNAME>&#x20B9;</CURRENCYNAME>${vendorState ? `\n      <PRIORSTATENAME>${esc(vendorState)}</PRIORSTATENAME>` : ''}
+      <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+      <VATDEALERTYPE>${regType}</VATDEALERTYPE>
+      <PARENT>Sundry Creditors</PARENT>
+      <TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>
+      <TAXTYPE>Others</TAXTYPE>
+      <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+      <LEDADDLALLOCTYPE>&#4; Not Applicable</LEDADDLALLOCTYPE>
+      <GSTTYPE>&#4; Not Applicable</GSTTYPE>
+      <APPROPRIATEFOR>&#4; Not Applicable</APPROPRIATEFOR>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
+      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>${vendorState ? `\n      <OLDLEDSTATENAME>${esc(vendorState)}</OLDLEDSTATENAME>` : ''}
+      <SERVICECATEGORY>&#4; Not Applicable</SERVICECATEGORY>
+      <EXCISELEDGERCLASSIFICATION>&#4; Not Applicable</EXCISELEDGERCLASSIFICATION>
+      <EXCISEDUTYTYPE>&#4; Not Applicable</EXCISEDUTYTYPE>
+      <EXCISENATUREOFPURCHASE>&#4; Not Applicable</EXCISENATUREOFPURCHASE>
+      <LEDGERFBTCATEGORY>&#4; Not Applicable</LEDGERFBTCATEGORY>
+      <OLDCOUNTRYNAME>India</OLDCOUNTRYNAME>${LEDGER_BOOLEANS}
+      <SORTPOSITION> 1000</SORTPOSITION>
+      <ALTERID> 0</ALTERID>${LEDGER_EMPTY_LISTS}
+      <GSTDETAILS.LIST>      </GSTDETAILS.LIST>
+      <HSNDETAILS.LIST>      </HSNDETAILS.LIST>
+      <MSMEREGISTRATIONDETAILS.LIST>      </MSMEREGISTRATIONDETAILS.LIST>
+      <LANGUAGENAME.LIST>
+       <NAME.LIST TYPE="String">
+        <NAME>${name}</NAME>
+       </NAME.LIST>
+       <LANGUAGEID> 1033</LANGUAGEID>
+      </LANGUAGENAME.LIST>${LEDGER_TAIL_LISTS_1}
+      <LEDGSTREGDETAILS.LIST>${ledgstRegBlock}</LEDGSTREGDETAILS.LIST>
+      <LEDMAILINGDETAILS.LIST>${mailingBlock}</LEDMAILINGDETAILS.LIST>${LEDGER_TAIL_LISTS_2}
+     </LEDGER>
+    </TALLYMESSAGE>`;
 }
 
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): string {
