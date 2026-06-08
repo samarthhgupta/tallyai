@@ -190,7 +190,12 @@ function findExpenseLedger(expenseLedgers: ExpenseLedgerMaster[], description: s
   return fuzzy?.tally_ledger_name ?? null;
 }
 
-function findStockItem(stockItems: StockItemMaster[], description: string): StockItemMaster | null {
+function findStockItem(
+  stockItems: StockItemMaster[],
+  description: string,
+  hsn?: string,
+  gstRate?: number,
+): StockItemMaster | null {
   const q = norm(description);
   const byAlias = stockItems.find((s) => s.alias_name && norm(s.alias_name) === q);
   if (byAlias) return byAlias;
@@ -200,7 +205,25 @@ function findStockItem(stockItems: StockItemMaster[], description: string): Stoc
     (s) => s.alias_name && (norm(s.alias_name).includes(q) || q.includes(norm(s.alias_name))),
   );
   if (partialAlias) return partialAlias;
-  return suggestStockItem(stockItems, description);
+  const fuzzy = suggestStockItem(stockItems, description);
+  if (fuzzy) return fuzzy;
+  // HSN + GST rate match — stock items named "{HSN} @ {RATE}%" are looked up by code+rate
+  if (hsn && gstRate != null) {
+    const cleanHsn = hsn.replace(/[\s.]/g, '');
+    const byHsn = stockItems.find(
+      (s) =>
+        s.hsn_code &&
+        s.hsn_code.replace(/[\s.]/g, '') === cleanHsn &&
+        s.gst_percent === gstRate,
+    );
+    if (byHsn) return byHsn;
+    // Rate-only HSN match (consolidated item without rate distinction)
+    const byHsnOnly = stockItems.find(
+      (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
+    );
+    if (byHsnOnly) return byHsnOnly;
+  }
+  return null;
 }
 
 // ─── HSN summary for accounting_only mode ────────────────────────────────────
@@ -678,9 +701,9 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 
   for (const item of inv.line_items) {
     const desc = item.description ?? '';
-    const stockItem = findStockItem(input.stockItems, desc);
+    const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
     if (!stockItem) {
-      warnings.push(`Stock item "${desc}" not mapped — line item excluded from inventory entries`);
+      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped — line item excluded from inventory entries`);
       continue;
     }
     const itemNet = calcLineAmount(item);
@@ -689,7 +712,9 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   }
 
   if (invEntries.length === 0) {
-    return { xml: null, skip: 'No line items could be mapped to stock items in master', warnings };
+    // No line items mapped to stock items — fall back to accounting-only mode so the invoice is not lost
+    warnings.push(`No line items could be mapped to stock items — falling back to accounting-only mode`);
+    return buildAccountingOnlyVoucher(inv, input);
   }
 
   // Ledger entries — LEDGERENTRIES.LIST (inventory mode)
@@ -1569,7 +1594,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
     const invoiceRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       for (const item of inv.line_items) {
-        const stockItem = findStockItem(input.stockItems, item.description ?? '');
+        const stockItem = findStockItem(input.stockItems, item.description ?? '', item.hsn, item.gst_percent);
         if (stockItem && !invoiceRateMap.has(stockItem.tally_item_name)) {
           invoiceRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
         }
@@ -1827,7 +1852,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     for (const item of inv.line_items) {
       const desc = item.description ?? '';
-      const stockItem = findStockItem(input.stockItems, desc);
+      const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
       const itemNet = calcLineAmount(item);
       totalItemsAmount += itemNet;
       const uom = item.uom || stockItem?.unit || 'NOS';
