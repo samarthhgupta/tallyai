@@ -1484,6 +1484,7 @@ export default function XmlGeneratorPage() {
                 { type: 'expense_ledgers'  as MasterType, label: 'Expense / Charge Ledgers', color: 'bg-orange-600 hover:bg-orange-700' },
                 { type: 'duties_taxes'     as MasterType, label: 'Duties & Taxes',           color: 'bg-teal-600 hover:bg-teal-700' },
                 { type: 'suppliers'        as MasterType, label: 'Sundry Creditors',         color: 'bg-purple-600 hover:bg-purple-700' },
+                { type: 'ledgers_only'     as MasterType, label: 'All Ledgers (Combined)',   color: 'bg-gray-700 hover:bg-gray-800' },
               ] as const).map(({ type, label, color }) => (
                 <button
                   key={type}
