@@ -9,7 +9,7 @@ import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
-import { generateTallyXml, generateMastersXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
+import { generateCombinedXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -1092,8 +1092,6 @@ export default function XmlGeneratorPage() {
   const [generatingXml, setGeneratingXml] = useState(false);
   const [xmlBlob, setXmlBlob] = useState<Blob | null>(null);
   const [xmlFilename, setXmlFilename] = useState('');
-  const [generatingMasters, setGeneratingMasters] = useState(false);
-  const [mastersBlob, setMastersBlob] = useState<Blob | null>(null);
 
   const [loadError, setLoadError] = useState('');
 
@@ -1236,8 +1234,7 @@ export default function XmlGeneratorPage() {
     document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
-  // ── Step 3: Generate and download XML ──
-  const handleGenerateXml = async () => {
+  const handleDownloadCombinedXml = async () => {
     const err = validateForXml();
     if (err) { alert(err); return; }
     setGeneratingXml(true);
@@ -1245,67 +1242,33 @@ export default function XmlGeneratorPage() {
     try {
       const masters = await loadMasters(company!.id);
       const fresh = await getCompany(company!.id);
-      const output = generateTallyXml({
+      const output = generateCombinedXml({
         invoices, ...masters,
         purchaseLedgers: validLedgers,
         tallyCompanyName: company!.tally_company_name!,
         voucherMode: fresh.voucher_mode ?? 'accounting_only',
         discountLedgerName: fresh.discount_ledger_name,
+        companyGstin: fresh.gstin ?? undefined,
+        companyState: fresh.gstin ? undefined : undefined,
       });
       const blob = new Blob([output.xml], { type: 'application/xml' });
       setXmlBlob(blob);
-      setXmlFilename(`${fileBase}_purchase.xml`);
-
-      if (output.includedCount === 0) {
-        // All invoices skipped — show reasons instead of downloading an empty file
-        const reasons = output.skippedInvoices
-          .map((s) => `• ${s.invoice_number}: ${s.reason}`)
-          .join('\n');
-        alert(`No vouchers were generated — all invoices were skipped.\n\nReasons:\n${reasons}\n\nFix the issues above (usually: configure CGST/SGST/IGST ledgers in Duties & Taxes master) then try again.`);
-        return;
-      }
+      setXmlFilename(`${fileBase}_tally_import.xml`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${fileBase}_tally_import.xml`;
+      a.click();
+      URL.revokeObjectURL(url);
 
       if (output.skippedInvoices.length > 0) {
-        const reasons = output.skippedInvoices.map((s) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
-        alert(`${output.includedCount} voucher(s) generated. ${output.skippedInvoices.length} invoice(s) were skipped:\n\n${reasons}`);
+        const msgs = output.skippedInvoices.map((s) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
+        alert(`XML generated. ${output.includedCount} voucher(s) included.\n\n${output.skippedInvoices.length} skipped:\n${msgs}`);
       }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `${fileBase}_purchase.xml`;
-      a.click(); URL.revokeObjectURL(url);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'XML generation failed');
+      alert(`Error generating XML: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setGeneratingXml(false);
-    }
-  };
-
-  const handleGenerateMastersXml = async () => {
-    const err = validateForXml();
-    if (err) { alert(err); return; }
-    setGeneratingMasters(true);
-    setMastersBlob(null);
-    try {
-      const masters = await loadMasters(company!.id);
-      const fresh = await getCompany(company!.id);
-      const xml = generateMastersXml({
-        invoices, ...masters,
-        purchaseLedgers: validLedgers,
-        tallyCompanyName: company!.tally_company_name!,
-        voucherMode: fresh.voucher_mode ?? 'accounting_only',
-        discountLedgerName: fresh.discount_ledger_name,
-      });
-      const blob = new Blob([xml], { type: 'application/xml' });
-      setMastersBlob(blob);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `${fileBase}_masters.xml`;
-      a.click(); URL.revokeObjectURL(url);
-    } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Masters XML generation failed');
-    } finally {
-      setGeneratingMasters(false);
     }
   };
 
@@ -1699,32 +1662,19 @@ export default function XmlGeneratorPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={handleGenerateMastersXml}
-              disabled={generatingMasters || !company || invoices.length === 0 || hasSuggestedPending}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              {generatingMasters ? 'Generating…' : '1. Download Masters XML'}
-            </button>
-
-            <button
-              onClick={handleGenerateXml}
+              onClick={handleDownloadCombinedXml}
               disabled={generatingXml || !company || invoices.length === 0 || hasSuggestedPending}
               className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              {generatingXml ? 'Generating…' : '2. Download Vouchers XML'}
+              {generatingXml ? 'Generating…' : 'Download Tally XML'}
             </button>
 
-            {(mastersBlob || xmlBlob) && (
+            {xmlBlob && (
               <span className="text-xs text-gray-500 ml-1">
-                {mastersBlob && <span className="font-mono">…_masters.xml</span>}
-                {mastersBlob && xmlBlob && <span className="mx-1">·</span>}
-                {xmlBlob && <span className="font-mono">{xmlFilename}</span>}
+                <span className="font-mono">{xmlFilename}</span>
                 <span className="ml-1">downloaded</span>
               </span>
             )}

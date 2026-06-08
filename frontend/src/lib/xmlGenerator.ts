@@ -809,14 +809,31 @@ function masterLedgerBlock(name: string, fields: string): string {
 }
 
 function buildSupplierMasterBlock(s: SupplierMaster): string {
-  const gstin = s.vendor_gstin ? `<PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : '';
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
+  const vendorState = stateFromGstin(s.vendor_gstin);
+
+  const ledgstReg = s.vendor_gstin
+    ? `
+        <LEDGSTREGDETAILS.LIST>
+          <APPLICABLEFROM>20170701</APPLICABLEFROM>
+          <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+          <STATE>${esc(vendorState)}</STATE>
+          <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
+          <GSTIN>${esc(s.vendor_gstin)}</GSTIN>
+          <ISOTHTERRITORYASSESSEE>No</ISOTHTERRITORYASSESSEE>
+          <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
+          <ISTRANSPORTER>No</ISTRANSPORTER>
+          <ISCOMMONPARTY>No</ISCOMMONPARTY>
+        </LEDGSTREGDETAILS.LIST>`
+    : `\n        <LEDGSTREGDETAILS.LIST> </LEDGSTREGDETAILS.LIST>`;
+
   return masterLedgerBlock(esc(s.tally_ledger_name), `
         <PARENT>Sundry Creditors</PARENT>
         <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
-        ${gstin}
-        <ISBILLWISEON>No</ISBILLWISEON>`);
+        <TAXTYPE>Others</TAXTYPE>
+        <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>${s.vendor_gstin ? `\n        <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
+        <ISBILLWISEON>Yes</ISBILLWISEON>` + ledgstReg);
 }
 
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry): string {
@@ -960,6 +977,90 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
+}
+
+/** Single XML file: masters section first, vouchers section second.
+ *  Tally processes both in order — creates ledgers/items, then imports vouchers.
+ *  Safe to import into a Tally company that already has some of these masters. */
+export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResult {
+  // Build master blocks (same logic as generateMastersXml but return raw message strings)
+  const masterMessages: string[] = [];
+
+  const seenSuppliers = new Set<string>();
+  for (const inv of input.invoices) {
+    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+    if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
+      seenSuppliers.add(supplier.tally_ledger_name);
+      masterMessages.push(buildSupplierMasterBlock(supplier));
+    }
+  }
+  for (const pl of input.purchaseLedgers) {
+    if (pl.tally_ledger_name.trim()) masterMessages.push(buildPurchaseLedgerBlock(pl));
+  }
+  for (const dt of input.dutiesTaxes) {
+    masterMessages.push(buildTaxLedgerBlock(dt));
+  }
+  for (const el of input.expenseLedgers) {
+    masterMessages.push(buildExpenseLedgerBlock(el));
+  }
+  if (input.voucherMode === 'inventory') {
+    const itemRateMap = new Map<string, number>();
+    for (const inv of input.invoices) {
+      for (const item of inv.line_items) {
+        const stockItem = findStockItem(input.stockItems, item.description ?? '');
+        if (stockItem && !itemRateMap.has(stockItem.tally_item_name)) {
+          itemRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
+        }
+      }
+    }
+    for (const [, stockItem] of input.stockItems
+      .filter((s) => itemRateMap.has(s.tally_item_name))
+      .map((s) => [s.tally_item_name, s] as const)) {
+      const rate = itemRateMap.get(stockItem.tally_item_name) ?? 0;
+      masterMessages.push(buildStockItemBlock(stockItem, rate));
+    }
+  }
+
+  // Build voucher blocks
+  const skipped: XmlGeneratorResult['skippedInvoices'] = [];
+  const allWarnings: XmlGeneratorResult['warnings'] = [];
+  const voucherBlocks: string[] = [];
+  const isInventory = input.voucherMode === 'inventory';
+
+  for (const inv of input.invoices) {
+    const result = isInventory ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
+    result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
+    if (!result.xml || result.skip) {
+      skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });
+    } else {
+      voucherBlocks.push(result.xml);
+    }
+  }
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+      </REQUESTDESC>
+      <REQUESTDATA>${masterMessages.join('')}
+      </REQUESTDATA>
+    </IMPORTDATA>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+      </REQUESTDESC>
+      <REQUESTDATA>${voucherBlocks.join('')}
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+  return { xml, includedCount: voucherBlocks.length, skippedInvoices: skipped, warnings: allWarnings };
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
