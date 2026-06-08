@@ -305,20 +305,14 @@ function FlatPreviewTable({
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
   // One checkbox per INVOICE — only for invoices that have at least one suggested field.
-  // selectedRows stores invoice numbers (strings), not row indices.
-  // "suggestable" invoices = invoices whose first row has vendorSuggested, or any row has stockItemSuggested/expense suggested.
+  // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
   const suggestableInvoices: string[] = [];
   {
     const seen = new Set<string>();
     for (const row of displayRows) {
       if (!seen.has(row.invoiceNo)) {
         seen.add(row.invoiceNo);
-        // Gather all display rows for this invoice
-        const invRows = displayRows.filter((r) => r.invoiceNo === row.invoiceNo);
-        const hasSuggestion = invRows.some(
-          (r) => r.vendorSuggested || r.stockItemSuggested || (r.isFirst && (r.charges.some((c) => c.suggested) || r.roSuggested)),
-        );
-        if (hasSuggestion) suggestableInvoices.push(row.invoiceNo);
+        if (!lockedInvoices[row.invoiceNo]) suggestableInvoices.push(row.invoiceNo);
       }
     }
   }
