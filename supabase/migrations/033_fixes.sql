@@ -44,7 +44,7 @@ WHERE
 UPDATE expense_ledger_masters
 SET
   gst_percent = v.gst_percent,
-  sac_code    = COALESCE(NULLIF(sac_code, ''), v.sac_code)
+  sac_code    = COALESCE(NULLIF(expense_ledger_masters.sac_code, ''), v.sac_code)
 FROM (VALUES
   ('freight',                    5.00,  '996511'),
   ('freight charges',            5.00,  '996511'),
