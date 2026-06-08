@@ -50,7 +50,7 @@ export interface XmlGeneratorInput {
   dutiesTaxes: DutiesTaxesMaster[];
   stockItems: StockItemMaster[];
   expenseLedgers: ExpenseLedgerMaster[];
-  purchaseLedgers: PurchaseLedgerEntry[];   // maps gst_percent → purchase ledger name
+  purchaseLedgers?: PurchaseLedgerEntry[];  // deprecated — purchase ledger now read per-invoice from tally_ledger_acceptance
   voucherTypes: VoucherTypeMaster[];        // maps purchase category → voucher type name
   tallyCompanyName: string;                 // sacred — used verbatim in XML header
   voucherMode?: 'accounting_only' | 'inventory'; // default: accounting_only
@@ -165,12 +165,6 @@ function findTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string, rate
   return consolidated?.tally_ledger_name ?? null;
 }
 
-function findPurchaseLedger(purchaseLedgers: PurchaseLedgerEntry[], gst_percent: number): string | null {
-  const specific = purchaseLedgers.find((p) => p.gst_percent === gst_percent);
-  if (specific) return specific.tally_ledger_name;
-  const fallback = purchaseLedgers.find((p) => p.gst_percent == null);
-  return fallback?.tally_ledger_name ?? null;
-}
 
 function findExpenseLedger(expenseLedgers: ExpenseLedgerMaster[], description: string): string | null {
   const q = norm(description);
@@ -425,12 +419,11 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const entries: string[] = [];
   entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-inv.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
 
+  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
+  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`, warnings };
+
   for (const row of hsnRows) {
-    const ledger = findPurchaseLedger(input.purchaseLedgers, row.gst_percent);
-    const name = ledger ?? input.purchaseLedgers[0]?.tally_ledger_name;
-    if (!ledger) warnings.push(`No purchase ledger mapped for GST rate ${row.gst_percent}% — using first available`);
-    if (!name) return { xml: null, skip: `No purchase ledger configured for rate ${row.gst_percent}%`, warnings };
-    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(name)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
 
   if (hasDiscountLedger) {
@@ -671,6 +664,9 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
+  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
+  if (!purchaseLedger) warnings.push(`No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`);
+
   let totalItemsAmount = 0;
   const invEntries: string[] = [];
 
@@ -683,9 +679,6 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     }
     const itemNet = calcLineAmount(item);
     totalItemsAmount += itemNet;
-    const purchaseLedger = findPurchaseLedger(input.purchaseLedgers, item.gst_percent)
-      ?? input.purchaseLedgers[0]?.tally_ledger_name ?? '';
-    if (!purchaseLedger) warnings.push(`No purchase ledger for GST rate ${item.gst_percent}% on item "${desc}"`);
     invEntries.push(buildAllInventoryEntry(stockItem, item, purchaseLedger));
   }
 
@@ -928,9 +921,14 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
     }
   }
 
-  // 2. Purchase account ledgers (all configured)
-  for (const pl of input.purchaseLedgers) {
-    if (pl.tally_ledger_name.trim()) messages.push(buildPurchaseLedgerBlock(pl));
+  // 2. Purchase account ledgers — collected from accepted invoices
+  const seenPurchase = new Set<string>();
+  for (const inv of input.invoices) {
+    const pl = inv.tally_ledger_acceptance?.purchaseLedger;
+    if (pl && !seenPurchase.has(pl)) {
+      seenPurchase.add(pl);
+      messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
+    }
   }
 
   // 3. GST duty/tax ledgers (all configured)
@@ -995,8 +993,14 @@ export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResul
       masterMessages.push(buildSupplierMasterBlock(supplier));
     }
   }
-  for (const pl of input.purchaseLedgers) {
-    if (pl.tally_ledger_name.trim()) masterMessages.push(buildPurchaseLedgerBlock(pl));
+  // Purchase account ledgers — collected from accepted invoices
+  const seenPurchaseCombined = new Set<string>();
+  for (const inv of input.invoices) {
+    const pl = inv.tally_ledger_acceptance?.purchaseLedger;
+    if (pl && !seenPurchaseCombined.has(pl)) {
+      seenPurchaseCombined.add(pl);
+      masterMessages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
+    }
   }
   for (const dt of input.dutiesTaxes) {
     masterMessages.push(buildTaxLedgerBlock(dt));
@@ -1150,10 +1154,10 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
 
+    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     for (const row of hsnRows) {
-      const ledger = findPurchaseLedger(input.purchaseLedgers, row.gst_percent);
       const suggestedPurchase = hasGst ? 'GST PURCHASE' : 'PURCHASE';
-      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: ledger ?? suggestedPurchase, amount: row.taxable, status: ledger ? 'OK' : 'Suggested', is_suggested: !ledger });
+      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: row.taxable, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
@@ -1208,6 +1212,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
+    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     let totalItemsAmount = 0;
 
     for (const item of inv.line_items) {
@@ -1216,7 +1221,6 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       const itemNet = calcLineAmount(item);
       totalItemsAmount += itemNet;
       const uom = item.uom || stockItem?.unit || 'NOS';
-      const purchaseLedger = findPurchaseLedger(input.purchaseLedgers, item.gst_percent);
       const hsnRate = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : `${desc} @ ${item.gst_percent ?? 0}%`;
       rows.push({
         ...base, ledger_type: 'Inventory',
@@ -1224,7 +1228,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
         amount: itemNet,
         status: stockItem ? 'OK' : 'Suggested',
         is_suggested: !stockItem,
-        warning: (stockItem && !purchaseLedger) ? `No purchase ledger for GST ${item.gst_percent}%` : undefined,
+        warning: (stockItem && !acceptedPurchaseLedger) ? `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first` : undefined,
         stock_item_name: stockItem?.tally_item_name,
         qty: item.qty, rate: item.rate, uom,
         disc_percent: item.disc_percent > 0 ? item.disc_percent : undefined,
