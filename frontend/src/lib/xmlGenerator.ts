@@ -149,12 +149,17 @@ function findSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorN
     const g = norm(gstin);
     const byGstin = suppliers.find((s) => norm(s.vendor_gstin ?? '') === g);
     if (byGstin) return byGstin;
+    // Invoice has a GSTIN but it didn't match any supplier — do NOT fuzzy-name-match.
+    // GSTIN is the definitive identifier; a name-based guess with an unmatched GSTIN would
+    // map the invoice to the wrong Tally ledger (e.g. "SHRI VINAYAK TRADERS" wrongly matched
+    // to "Shri Ganesh Traders" because both names share the words "Shri" and "Traders").
+    return null;
   }
-  // Exact name match
+  // No GSTIN on invoice — exact name match then fuzzy
   const vn = norm(vendorName);
   const exact = suppliers.find((s) => norm(s.vendor_name) === vn || norm(s.tally_ledger_name) === vn);
   if (exact) return exact;
-  // Fuzzy match — handles name variations like "SAVIK AGENCIES - (2022 Onwards)" vs "Savik Agencies"
+  // Fuzzy match only for invoices without a GSTIN (e.g. unregistered suppliers)
   return suggestSupplier(suppliers, gstin, vendorName);
 }
 
