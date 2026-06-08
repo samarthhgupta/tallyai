@@ -512,8 +512,14 @@ function FlatPreviewTable({
               const isInvSuggestable = !isLocked && suggestableInvoices.includes(row.invoiceNo);
               const isChecked = selectedInvoices.has(row.invoiceNo);
 
-              // When locked, use the frozen accepted values
-              const effectiveVendorLedger   = locked?.vendorLedger   ?? (vendorEdits[row.vendorName] ?? row.vendorLedger);
+              // For vendor ledger: if the fresh supplier master lookup is definitive (GSTIN matched,
+              // not suggested), always use the fresh value — even for locked invoices. This ensures
+              // that if the supplier master was corrected after acceptance, the preview and XML reflect
+              // the current master, not a stale acceptance snapshot.
+              // For all other fields: frozen accepted values take precedence when invoice is locked.
+              const effectiveVendorLedger = !row.vendorSuggested
+                ? row.vendorLedger
+                : (locked?.vendorLedger ?? (vendorEdits[row.vendorName] ?? row.vendorLedger));
               const effectivePurchaseLedger = locked?.purchaseLedger ?? (purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger);
               const effectiveStockItem      = locked?.stock[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem);
               const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
