@@ -1112,6 +1112,7 @@ export default function XmlGeneratorPage() {
     return {
       invoices, ...masters,
       tallyCompanyName: company!.tally_company_name!,
+      financialYear: selectedFY,
       voucherMode,
       discountLedgerName: fresh.discount_ledger_name,
       companyGstin: fresh.gstin ?? undefined,

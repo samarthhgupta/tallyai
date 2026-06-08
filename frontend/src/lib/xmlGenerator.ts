@@ -53,6 +53,7 @@ export interface XmlGeneratorInput {
   purchaseLedgers?: PurchaseLedgerEntry[];  // deprecated — purchase ledger now read per-invoice from tally_ledger_acceptance
   voucherTypes: VoucherTypeMaster[];        // maps purchase category → voucher type name
   tallyCompanyName: string;                 // sacred — used verbatim in XML header
+  financialYear?: string;                   // e.g. 'FY 2024-25' — drives APPLICABLEFROM dates
   voucherMode?: 'accounting_only' | 'inventory'; // default: accounting_only
   discountLedgerName?: string | null;       // Tally ledger for bill-level discounts (P&L)
   companyGstin?: string;                    // company's own GSTIN (optional)
@@ -785,7 +786,15 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 // in Tally before importing the vouchers XML — Tally silently skips masters
 // that already exist, so it is safe to re-import.
 
-function currentFyStart(): string {
+// Returns the FY start date in YYYYMMDD Tally format.
+// Uses the financialYear string from XmlGeneratorInput (e.g. 'FY 2024-25')
+// which reflects the period the user has selected in TallyAI.
+function fyStartFromString(financialYear?: string): string {
+  if (financialYear) {
+    const m = financialYear.match(/FY (\d{4})/);
+    if (m) return `${m[1]}0401`;
+  }
+  // Fallback: derive from system date (should not normally be reached)
   const now = new Date();
   const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   return `${fyYear}0401`;
@@ -812,11 +821,10 @@ function masterLedgerBlock(name: string, fields: string): string {
     </TALLYMESSAGE>`;
 }
 
-function buildSupplierMasterBlock(s: SupplierMaster): string {
+function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
   const vendorState = stateFromGstin(s.vendor_gstin);
 
-  const fyStart = currentFyStart();
   const ledgstReg = s.vendor_gstin
     ? `
         <LEDGSTREGDETAILS.LIST>
@@ -869,10 +877,9 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
         <AFFECTSSTOCK>No</AFFECTSSTOCK>`);
 }
 
-function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
+function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): string {
   const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
   const half = gst ? gst / 2 : 0;
-  const fyStart = currentFyStart();
 
   const gstDetails = gst
     ? `
@@ -958,10 +965,10 @@ const UNIT_FORMAL_NAMES: Record<string, string> = {
   'Bag': 'Bags', 'BAG': 'Bags', 'bag': 'Bags',
 };
 
-function buildUnitBlock(unitName: string): string {
+function buildUnitBlock(unitName: string, fyStart: string): string {
   const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} Unit`;
   const gstRepUom = `${unitName.toUpperCase()}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
-  const fyStart2 = currentFyStart();
+  const fyStart2 = fyStart;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <UNIT NAME="${esc(unitName)}" RESERVEDNAME="">
@@ -985,10 +992,9 @@ function buildUnitBlock(unitName: string): string {
     </TALLYMESSAGE>`;
 }
 
-function buildStockItemBlock(s: StockItemMaster, gstPercent: number): string {
+function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: string): string {
   const halfRate = gstPercent / 2;
   const unit = s.unit || 'Nos';
-  const fyStart = currentFyStart();
 
   const gstDetailsBlock = gstPercent > 0 ? `
         <GSTDETAILS.LIST>
@@ -1068,6 +1074,7 @@ export type MasterType = 'all' | 'stock_items' | 'purchase_ledgers' | 'expense_l
 
 function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string[] {
   const messages: string[] = [];
+  const fyStart = fyStartFromString(input.financialYear);
 
   const includeSuppliers  = type === 'all' || type === 'suppliers';
   const includePurchase   = type === 'all' || type === 'purchase_ledgers';
@@ -1081,7 +1088,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
       const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
       if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
         seenSuppliers.add(supplier.tally_ledger_name);
-        messages.push(buildSupplierMasterBlock(supplier));
+        messages.push(buildSupplierMasterBlock(supplier, fyStart));
       }
     }
   }
@@ -1112,7 +1119,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
     for (const el of input.expenseLedgers) {
       if (!seenExpense.has(el.tally_ledger_name)) {
         seenExpense.add(el.tally_ledger_name);
-        messages.push(buildExpenseLedgerBlock(el));
+        messages.push(buildExpenseLedgerBlock(el, fyStart));
       }
     }
   }
@@ -1138,12 +1145,12 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
     const seenUnits = new Set<string>();
     for (const s of itemsToExport) {
       const unit = s.unit || 'Nos';
-      if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitBlock(unit)); }
+      if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitBlock(unit, fyStart)); }
     }
     for (const stockItem of itemsToExport) {
       // Prefer stored gst_percent from master; fall back to invoice-extracted rate
       const rate = stockItem.gst_percent ?? invoiceRateMap.get(stockItem.tally_item_name) ?? 0;
-      messages.push(buildStockItemBlock(stockItem, rate));
+      messages.push(buildStockItemBlock(stockItem, rate, fyStart));
     }
   }
 
