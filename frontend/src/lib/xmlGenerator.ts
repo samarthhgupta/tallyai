@@ -859,12 +859,29 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
         <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`);
 }
 
+const UNIT_FORMAL_NAMES: Record<string, string> = {
+  'Nos': 'Numbers', 'NOS': 'Numbers', 'nos': 'Numbers',
+  'Pcs': 'Pieces', 'PCS': 'Pieces', 'pcs': 'Pieces', 'pc': 'Pieces', 'PC': 'Pieces',
+  'Kg': 'Kilograms', 'KG': 'Kilograms', 'kg': 'Kilograms',
+  'Gm': 'Grams', 'GM': 'Grams', 'gm': 'Grams', 'g': 'Grams',
+  'Mtr': 'Metres', 'MTR': 'Metres', 'mtr': 'Metres', 'm': 'Metres',
+  'Ltr': 'Litres', 'LTR': 'Litres', 'ltr': 'Litres', 'L': 'Litres',
+  'Box': 'Boxes', 'BOX': 'Boxes', 'box': 'Boxes',
+  'Set': 'Sets', 'SET': 'Sets', 'set': 'Sets',
+  'Doz': 'Dozens', 'DOZ': 'Dozens', 'doz': 'Dozens',
+  'Pair': 'Pairs', 'PAIR': 'Pairs', 'pair': 'Pairs',
+  'Roll': 'Rolls', 'ROLL': 'Rolls', 'roll': 'Rolls',
+  'Bag': 'Bags', 'BAG': 'Bags', 'bag': 'Bags',
+};
+
 function buildUnitBlock(unitName: string): string {
+  const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} (Unit)`;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <UNIT NAME="${esc(unitName)}" ACTION="Create">
         <NAME>${esc(unitName)}</NAME>
         <ORIGINALNAME>${esc(unitName)}</ORIGINALNAME>
+        <FORMALNAME>${esc(formalName)}</FORMALNAME>
         <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
