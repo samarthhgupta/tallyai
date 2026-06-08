@@ -36,6 +36,43 @@ export interface ExpenseLedgerImportResult {
   errors: Array<{ row: number; ledger: string; reason: string }>;
 }
 
+// Built-in defaults for common expense types — used to auto-fill SAC + GST %
+// when no extracted data is available (fallback lookup).
+export const EXPENSE_DEFAULTS: Record<string, { sac_code: string; gst_percent: number }> = {
+  'freight':           { sac_code: '996511', gst_percent: 5  },
+  'freight charges':   { sac_code: '996511', gst_percent: 5  },
+  'freight & forwarding': { sac_code: '996511', gst_percent: 5 },
+  'freight forwarding': { sac_code: '996511', gst_percent: 5 },
+  'delivery charges':  { sac_code: '996511', gst_percent: 5  },
+  'transport':         { sac_code: '996511', gst_percent: 5  },
+  'transportation':    { sac_code: '996511', gst_percent: 5  },
+  'transportation charges': { sac_code: '996511', gst_percent: 5 },
+  'courier':           { sac_code: '996812', gst_percent: 18 },
+  'courier charges':   { sac_code: '996812', gst_percent: 18 },
+  'postage':           { sac_code: '996811', gst_percent: 18 },
+  'postage & telegram': { sac_code: '996811', gst_percent: 18 },
+  'packing':           { sac_code: '998540', gst_percent: 18 },
+  'packing charges':   { sac_code: '998540', gst_percent: 18 },
+  'packaging charges': { sac_code: '998540', gst_percent: 18 },
+  'loading':           { sac_code: '996719', gst_percent: 18 },
+  'unloading':         { sac_code: '996719', gst_percent: 18 },
+  'loading charges':   { sac_code: '996719', gst_percent: 18 },
+  'loading & unloading': { sac_code: '996719', gst_percent: 18 },
+  'handling charges':  { sac_code: '996719', gst_percent: 18 },
+  'insurance':         { sac_code: '997135', gst_percent: 18 },
+  'insurance charges': { sac_code: '997135', gst_percent: 18 },
+  'labour':            { sac_code: '998519', gst_percent: 18 },
+  'labour charges':    { sac_code: '998519', gst_percent: 18 },
+  'accounting charges': { sac_code: '998211', gst_percent: 18 },
+  'round off':         { sac_code: '',        gst_percent: 0  },
+  'rounding off':      { sac_code: '',        gst_percent: 0  },
+};
+
+export function getExpenseDefaults(description: string): { sac_code: string; gst_percent: number } | null {
+  const key = description.toLowerCase().trim();
+  return EXPENSE_DEFAULTS[key] ?? null;
+}
+
 // Common expense types shown as quick-add suggestions in the UI
 export const COMMON_EXPENSES = [
   'Freight Charges', 'Courier Charges', 'Packing Charges',

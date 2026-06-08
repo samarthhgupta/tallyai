@@ -7,7 +7,7 @@ import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAccepta
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
-import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
+import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
@@ -54,7 +54,7 @@ interface InvoiceAcceptPayload {
   vendorName: string; vendorGstin: string; vendorLedger: string;
   purchaseLedger: string;
   stockItems: Array<{ desc: string; hsn: string; tallyName: string }>;
-  charges: Array<{ keyword: string; tallyName: string }>;
+  charges: Array<{ keyword: string; tallyName: string; gst_percent?: number; sac_code?: string }>;
   cgstLedger: string; sgstLedger: string; igstLedger: string;
   roLedger: string;
   taxType: 'cgst_sgst' | 'igst' | 'none';
@@ -109,7 +109,7 @@ interface FlatDisplayRow {
   igstAmt: number;
   // invoice-level — only on first row
   isFirst: boolean;
-  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number }>;
+  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number; gst_percent?: number; sac_code?: string }>;
   roLedger: string; roSuggested: boolean; roAmt: number;
 }
 
@@ -189,6 +189,8 @@ function FlatPreviewTable({
       ledger: c.tally_ledger_name,
       suggested: c.is_suggested === true,
       amount: c.amount,
+      gst_percent: c.charge_gst_percent,
+      sac_code: c.charge_sac_code,
     }));
 
     // Tax ledger info lives in base (repeats every row); amounts computed per item
@@ -360,6 +362,8 @@ function FlatPreviewTable({
       const charges: InvoiceAcceptPayload['charges'] = (firstRow.charges ?? []).map((ch) => ({
         keyword: ch.desc,
         tallyName: chargeEdits[ch.desc] ?? ch.ledger,
+        gst_percent: ch.gst_percent,
+        sac_code: ch.sac_code,
       }));
 
       const roLedger = roLedgerEdits[invNo] ?? firstRow.roLedger;
@@ -1319,7 +1323,16 @@ export default function XmlGeneratorPage() {
                 initialLockedInvoices={initialLockedInvoices}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
-                  try { await addExpenseLedger(company.id, { tally_ledger_name: ledgerName, expense_keyword: description }); handlePreview(); }
+                  try {
+                    const defaults = getExpenseDefaults(description);
+                    await addExpenseLedger(company.id, {
+                      tally_ledger_name: ledgerName,
+                      expense_keyword: description,
+                      sac_code: defaults?.sac_code || undefined,
+                      gst_percent: defaults?.gst_percent ?? null,
+                    });
+                    handlePreview();
+                  }
                   catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapSupplier={async (vendorName, ledgerName) => {
@@ -1368,7 +1381,20 @@ export default function XmlGeneratorPage() {
                     for (const ch of p.charges) {
                       if (ch.tallyName && !seenExp.has(ch.keyword)) {
                         seenExp.add(ch.keyword);
-                        try { await addExpenseLedger(company.id, { tally_ledger_name: ch.tallyName, expense_keyword: ch.keyword }); }
+                        // Use extracted GST/SAC from invoice; fall back to built-in lookup
+                        const defaults = getExpenseDefaults(ch.keyword);
+                        const gstPct = (ch.gst_percent != null && ch.gst_percent > 0)
+                          ? ch.gst_percent
+                          : (defaults?.gst_percent ?? null);
+                        const sacCode = ch.sac_code || defaults?.sac_code || undefined;
+                        try {
+                          await addExpenseLedger(company.id, {
+                            tally_ledger_name: ch.tallyName,
+                            expense_keyword: ch.keyword,
+                            gst_percent: gstPct,
+                            sac_code: sacCode,
+                          });
+                        }
                         catch (e) { errs.push(`Expense "${ch.keyword}": ${getErrMsg(e)}`); }
                       }
                     }

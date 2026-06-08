@@ -1230,6 +1230,9 @@ export interface PreviewRow {
   uom?: string;
   disc_percent?: number;
   item_description?: string;
+  // Expense/charge fields — from extracted invoice charge data
+  charge_gst_percent?: number;
+  charge_sac_code?: string;
 }
 
 export function buildTallyPreview(input: XmlGeneratorInput): PreviewRow[] {
@@ -1293,7 +1296,17 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
         const l = findExpenseLedger(input.expenseLedgers, charge.description);
-        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? charge.description, amount: charge.amount, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+        rows.push({
+          ...base,
+          ledger_type: 'Expense',
+          tally_ledger_name: l ?? charge.description,
+          amount: charge.amount,
+          status: l ? 'OK' : 'Suggested',
+          is_suggested: !l,
+          item_description: charge.description,
+          charge_gst_percent: charge.gst_percent ?? undefined,
+          charge_sac_code: (charge as { sac?: string }).sac ?? undefined,
+        });
       }
     }
 
@@ -1368,7 +1381,17 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
         const l = findExpenseLedger(input.expenseLedgers, charge.description);
-        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: l ?? charge.description, amount: charge.amount, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+        rows.push({
+          ...base,
+          ledger_type: 'Expense',
+          tally_ledger_name: l ?? charge.description,
+          amount: charge.amount,
+          status: l ? 'OK' : 'Suggested',
+          is_suggested: !l,
+          item_description: charge.description,
+          charge_gst_percent: charge.gst_percent ?? undefined,
+          charge_sac_code: (charge as { sac?: string }).sac ?? undefined,
+        });
       }
     }
 
