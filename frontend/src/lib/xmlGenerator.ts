@@ -1043,9 +1043,6 @@ export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>All Masters</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${esc(input.tallyCompanyName)}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>${messages.join('')}
       </REQUESTDATA>
