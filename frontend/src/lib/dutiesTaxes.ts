@@ -55,14 +55,17 @@ export async function addDutiesTaxes(
   const user = (await getSupabase().auth.getUser()).data.user;
   const { data, error } = await db()
     .from('duties_taxes_masters')
-    .insert({
-      company_id: companyId,
-      created_by: user?.id,
-      tax_component: params.tax_component,
-      tax_rate: params.tax_rate,
-      tally_ledger_name: params.tally_ledger_name, // NO trim
-      updated_at: new Date().toISOString(),
-    })
+    .upsert(
+      {
+        company_id: companyId,
+        created_by: user?.id,
+        tax_component: params.tax_component,
+        tax_rate: params.tax_rate,
+        tally_ledger_name: params.tally_ledger_name, // NO trim
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'company_id,tax_component,tax_rate,tally_ledger_name', ignoreDuplicates: true },
+    )
     .select()
     .single();
   if (error) throw error;

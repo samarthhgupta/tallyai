@@ -1357,9 +1357,9 @@ export default function XmlGeneratorPage() {
                   const seenVendor = new Set<string>();
                   const seenStock  = new Set<string>();
                   const seenExp    = new Set<string>();
-                  const seenCgst   = new Set<string>();
-                  const seenSgst   = new Set<string>();
-                  const seenIgst   = new Set<string>();
+                  let seenCgst   = false;
+                  let seenSgst   = false;
+                  let seenIgst   = false;
                   const seenRo     = new Set<string>();
 
                   for (const p of payloads) {
@@ -1407,19 +1407,19 @@ export default function XmlGeneratorPage() {
                     }
                     // 4. Tax ledgers → duties_taxes_masters (consolidated, null rate)
                     if (p.taxType === 'cgst_sgst') {
-                      if (p.cgstLedger && !seenCgst.has(p.cgstLedger)) {
-                        seenCgst.add(p.cgstLedger);
+                      if (p.cgstLedger && !seenCgst) {
+                        seenCgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'CGST', tax_rate: null, tally_ledger_name: p.cgstLedger }); }
                         catch (e) { errs.push(`CGST ledger: ${getErrMsg(e)}`); }
                       }
-                      if (p.sgstLedger && !seenSgst.has(p.sgstLedger)) {
-                        seenSgst.add(p.sgstLedger);
+                      if (p.sgstLedger && !seenSgst) {
+                        seenSgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'SGST', tax_rate: null, tally_ledger_name: p.sgstLedger }); }
                         catch (e) { errs.push(`SGST ledger: ${getErrMsg(e)}`); }
                       }
                     } else if (p.taxType === 'igst') {
-                      if (p.igstLedger && !seenIgst.has(p.igstLedger)) {
-                        seenIgst.add(p.igstLedger);
+                      if (p.igstLedger && !seenIgst) {
+                        seenIgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'IGST', tax_rate: null, tally_ledger_name: p.igstLedger }); }
                         catch (e) { errs.push(`IGST ledger: ${getErrMsg(e)}`); }
                       }
