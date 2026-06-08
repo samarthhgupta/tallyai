@@ -994,6 +994,10 @@ function masterLedgerBlock(
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <LEDGER NAME="${name}" RESERVEDNAME="">
+      <OLDAUDITENTRYIDS.LIST TYPE="Number">
+       <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+      </OLDAUDITENTRYIDS.LIST>
+      <STARTINGFROM>${fyStart}</STARTINGFROM>
       <GUID></GUID>
       ${coreFields}
       <TAXCLASSIFICATIONNAME>&#4; Not Applicable</TAXCLASSIFICATIONNAME>
@@ -1023,10 +1027,11 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
   const vendorState = stateFromGstin(s.vendor_gstin);
 
-  const coreFields = `<PARENT>Sundry Creditors</PARENT>
-      <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-      <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
-      <TAXTYPE>Others</TAXTYPE>`;
+  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+      <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+      <PARENT>Sundry Creditors</PARENT>
+      <TAXTYPE>Others</TAXTYPE>${s.vendor_gstin ? `\n      <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
+      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`;
 
   const ledgstRegBlock = s.vendor_gstin
     ? `
@@ -1054,10 +1059,12 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
 }
 
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): string {
-  const coreFields = `<PARENT>Purchase Accounts</PARENT>
-      <TAXTYPE>Others</TAXTYPE>
+  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+      <PARENT>Purchase Accounts</PARENT>
       <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+      <TAXTYPE>Others</TAXTYPE>
       <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+      <VATAPPLICABLE>&#4; Applicable</VATAPPLICABLE>
       <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`;
 
   const gstBlock = `
@@ -1111,9 +1118,12 @@ function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): str
 function buildTaxLedgerBlock(dt: DutiesTaxesMaster, fyStart: string): string {
   const dutyHeadMap: Record<string, string> = { CGST: 'CGST', SGST: 'SGST/UTGST', IGST: 'IGST' };
   const dutyHead = dutyHeadMap[dt.tax_component] ?? dt.tax_component;
-  const coreFields = `<PARENT>Duties &amp; Taxes</PARENT>
+  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+      <PARENT>Duties &amp; Taxes</PARENT>
       <TAXTYPE>GST</TAXTYPE>
-      <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>`;
+      <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>
+      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+      <ROUNDINGMETHOD>&#4; Not Applicable</ROUNDINGMETHOD>`;
   return masterLedgerBlock(esc(dt.tally_ledger_name), fyStart, coreFields, '', '', '      ', '      ');
 }
 
@@ -1121,10 +1131,12 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
   const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
   const half = gst ? gst / 2 : 0;
 
-  const coreFields = `<PARENT>Indirect Expenses</PARENT>
-      <TAXTYPE>Others</TAXTYPE>
+  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+      <PARENT>Indirect Expenses</PARENT>
       <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
-      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`;
+      <TAXTYPE>Others</TAXTYPE>
+      <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+      <VATAPPLICABLE>&#4; Not Applicable</VATAPPLICABLE>`;
 
   const gstBlock = gst
     ? `
