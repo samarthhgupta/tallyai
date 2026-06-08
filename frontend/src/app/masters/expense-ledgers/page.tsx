@@ -23,6 +23,7 @@ const EMPTY_FORM = {
   tally_ledger_name: '',
   expense_keyword: '',
   sac_code: '',
+  gst_percent: '',
 };
 
 export default function ExpenseLedgersPage() {
@@ -78,6 +79,7 @@ export default function ExpenseLedgersPage() {
       tally_ledger_name: l.tally_ledger_name,
       expense_keyword: l.expense_keyword ?? '',
       sac_code: l.sac_code ?? '',
+      gst_percent: l.gst_percent != null ? String(l.gst_percent) : '',
     });
     setFormError('');
     setShowForm(true);
@@ -90,10 +92,12 @@ export default function ExpenseLedgersPage() {
     setSaving(true);
     setFormError('');
     try {
+      const gstPct = form.gst_percent !== '' ? parseFloat(form.gst_percent) : undefined;
       const params = {
         tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
         expense_keyword: form.expense_keyword || undefined,
         sac_code: form.sac_code || undefined,
+        gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
       };
       if (editingId) {
         await updateExpenseLedger(editingId, params);
@@ -123,14 +127,14 @@ export default function ExpenseLedgersPage() {
   // ── Excel template download ──────────────────────────────────────────────
   const downloadTemplate = () => {
     const ws = XLSX.utils.aoa_to_sheet([
-      ['Tally Ledger Name', 'Expense Keyword', 'SAC Code'],
-      ['Freight Charges', 'freight', '996511'],
-      ['Courier Charges', 'courier', '996812'],
-      ['Packing Charges', 'packing', ''],
-      ['Loading & Unloading', 'loading', ''],
-      ['Insurance Charges', 'insurance', '997135'],
+      ['Tally Ledger Name', 'Expense Keyword', 'SAC Code', 'GST %'],
+      ['Freight Charges', 'freight', '996511', 18],
+      ['Courier Charges', 'courier', '996812', 18],
+      ['Packing Charges', 'packing', '', ''],
+      ['Loading & Unloading', 'loading', '', ''],
+      ['Insurance Charges', 'insurance', '997135', 18],
     ]);
-    ws['!cols'] = [{ wch: 35 }, { wch: 25 }, { wch: 12 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 25 }, { wch: 12 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Expense Ledgers');
     XLSX.writeFile(wb, 'TallyAI_ExpenseLedger_Master_Template.xlsx');
@@ -169,6 +173,7 @@ export default function ExpenseLedgersPage() {
       const ledgerCol = colIdx(['tally ledger name', 'ledger name', 'ledger', 'tally ledger', 'name', 'particulars']);
       const keywordCol = colIdx(['expense keyword', 'keyword', 'description', 'expense type']);
       const sacCol = colIdx(['sac code', 'sac', 'hsn/sac']);
+      const gstCol = colIdx(['gst %', 'gst percent', 'gst rate', 'gst']);
 
       if (ledgerCol === -1) {
         setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, ledger: '—', reason: 'Could not find Tally Ledger Name column' }] });
@@ -176,11 +181,16 @@ export default function ExpenseLedgersPage() {
       }
 
       const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
-      const rows = dataRows.map((r) => ({
-        tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed
-        expense_keyword: keywordCol !== -1 ? String(r[keywordCol] ?? '') : '',
-        sac_code: sacCol !== -1 ? String(r[sacCol] ?? '') : '',
-      }));
+      const rows = dataRows.map((r) => {
+        const rawGst = gstCol !== -1 ? r[gstCol] : undefined;
+        const gstPct = rawGst !== undefined && rawGst !== '' ? parseFloat(String(rawGst)) : null;
+        return {
+          tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed
+          expense_keyword: keywordCol !== -1 ? String(r[keywordCol] ?? '') : '',
+          sac_code: sacCol !== -1 ? String(r[sacCol] ?? '') : '',
+          gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
+        };
+      });
 
       const result = await bulkUpsertExpenseLedgers(company.id, rows);
       setImportResult(result);
@@ -199,9 +209,10 @@ export default function ExpenseLedgersPage() {
       'Tally Ledger Name': l.tally_ledger_name,
       'Expense Keyword': l.expense_keyword ?? '',
       'SAC Code': l.sac_code ?? '',
+      'GST %': l.gst_percent ?? '',
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 35 }, { wch: 25 }, { wch: 12 }];
+    ws['!cols'] = [{ wch: 35 }, { wch: 25 }, { wch: 12 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Expense Ledgers');
     XLSX.writeFile(wb, `ExpenseLedgers_${company?.name ?? 'export'}.xlsx`);
@@ -303,7 +314,8 @@ export default function ExpenseLedgersPage() {
                 <p className="font-semibold">Expected columns:</p>
                 <p>• <strong>Tally Ledger Name</strong> — exact expense ledger name as in Tally (required)</p>
                 <p>• <strong>Expense Keyword</strong> — the word/phrase on invoices that maps to this ledger (optional)</p>
-                <p>• <strong>SAC Code</strong> — optional, not required for XML generation</p>
+                <p>• <strong>SAC Code</strong> — optional SAC/HSN code for this expense type</p>
+                <p>• <strong>GST %</strong> — optional total GST rate (e.g. 18); used in Tally GST details</p>
                 <p className="mt-1 text-amber-700">Ledger names are stored exactly as in your file — no changes are made.</p>
               </div>
 
@@ -375,6 +387,18 @@ export default function ExpenseLedgersPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. 996511" />
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    GST %
+                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <input value={form.gst_percent}
+                    onChange={(e) => setForm({ ...form, gst_percent: e.target.value })}
+                    type="number" min="0" max="100" step="0.01"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="e.g. 18" />
+                  <p className="text-xs text-gray-400 mt-1">Used in Tally GST details block.</p>
+                </div>
               </div>
               {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
@@ -403,6 +427,7 @@ export default function ExpenseLedgersPage() {
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Ledger Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Expense Keyword</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">SAC</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">GST %</th>
                     <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
@@ -417,6 +442,7 @@ export default function ExpenseLedgersPage() {
                         }
                       </td>
                       <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.sac_code || '—'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.gst_percent != null ? `${l.gst_percent}%` : '—'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
                           <button onClick={() => openEdit(l)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>

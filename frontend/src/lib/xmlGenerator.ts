@@ -863,6 +863,67 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
 }
 
 function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
+  const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
+  const half = gst ? gst / 2 : 0;
+
+  const gstDetails = gst
+    ? `
+        <GSTDETAILS.LIST>
+          <APPLICABLEFROM>20180401</APPLICABLEFROM>
+          <TAXABILITY>Taxable</TAXABILITY>
+          <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
+          <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
+          <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+          <ISNONGSTGOODS>No</ISNONGSTGOODS>
+          <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
+          <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
+          <STATEWISEDETAILS.LIST>
+            <STATENAME>&#4; Any</STATENAME>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${half}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${half}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${gst}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>&#4; Not Applicable</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
+          </STATEWISEDETAILS.LIST>
+          <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
+          <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
+        </GSTDETAILS.LIST>`
+    : '';
+
+  const hsnDetails = el.sac_code
+    ? `
+        <HSNDETAILS.LIST>
+          <APPLICABLEFROM>20180401</APPLICABLEFROM>
+          <HSNCODE>${esc(el.sac_code)}</HSNCODE>
+          <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
+        </HSNDETAILS.LIST>`
+    : '';
+
+  const mailingDetails = `
+        <LEDMAILINGDETAILS.LIST>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <MAILINGNAME>${esc(el.tally_ledger_name)}</MAILINGNAME>
+        </LEDMAILINGDETAILS.LIST>`;
+
   return masterLedgerBlock(esc(el.tally_ledger_name), `
         <PARENT>Indirect Expenses</PARENT>
         <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
@@ -871,7 +932,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
         <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
         <ISBILLWISEON>No</ISBILLWISEON>
         <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
-        <AFFECTSSTOCK>No</AFFECTSSTOCK>`);
+        <AFFECTSSTOCK>No</AFFECTSSTOCK>` + gstDetails + hsnDetails + mailingDetails);
 }
 
 const UNIT_FORMAL_NAMES: Record<string, string> = {

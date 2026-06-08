@@ -18,6 +18,7 @@ export interface ExpenseLedgerMaster {
   tally_ledger_name: string;  // sacred — stored and output exactly as entered
   expense_keyword: string | null;
   sac_code: string | null;
+  gst_percent: number | null;  // total GST rate (e.g. 18); null = omit GSTDETAILS.LIST
   created_at: string;
   updated_at: string;
 }
@@ -26,6 +27,7 @@ export interface ExpenseLedgerImportRow {
   tally_ledger_name: string;
   expense_keyword?: string;
   sac_code?: string;
+  gst_percent?: number | null;
 }
 
 export interface ExpenseLedgerImportResult {
@@ -60,6 +62,7 @@ export async function addExpenseLedger(
     tally_ledger_name: string; // stored EXACTLY as provided — no trim
     expense_keyword?: string;
     sac_code?: string;
+    gst_percent?: number | null;
   },
 ): Promise<ExpenseLedgerMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;
@@ -69,6 +72,7 @@ export async function addExpenseLedger(
     tally_ledger_name: params.tally_ledger_name, // NO trim
     expense_keyword: params.expense_keyword ?? null,
     sac_code: params.sac_code ?? null,
+    gst_percent: params.gst_percent ?? null,
     updated_at: new Date().toISOString(),
   };
 
@@ -85,7 +89,7 @@ export async function addExpenseLedger(
 
   if (existing?.id) {
     await db().from('expense_ledger_masters')
-      .update({ expense_keyword: row.expense_keyword, sac_code: row.sac_code, updated_at: row.updated_at })
+      .update({ expense_keyword: row.expense_keyword, sac_code: row.sac_code, gst_percent: row.gst_percent, updated_at: row.updated_at })
       .eq('id', existing.id);
   }
 
@@ -98,7 +102,7 @@ export async function addExpenseLedger(
 
 export async function updateExpenseLedger(
   id: string,
-  params: Partial<Pick<ExpenseLedgerMaster, 'tally_ledger_name' | 'expense_keyword' | 'sac_code'>>,
+  params: Partial<Pick<ExpenseLedgerMaster, 'tally_ledger_name' | 'expense_keyword' | 'sac_code' | 'gst_percent'>>,
 ): Promise<void> {
   const { error } = await db()
     .from('expense_ledger_masters')
@@ -150,6 +154,7 @@ export async function bulkUpsertExpenseLedgers(
       tally_ledger_name: ledger, // NO trim — sacred
       expense_keyword: row.expense_keyword || null,
       sac_code: row.sac_code || null,
+      gst_percent: row.gst_percent ?? null,
       updated_at: now,
     };
 
