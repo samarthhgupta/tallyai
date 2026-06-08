@@ -1299,6 +1299,214 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
 }
 
 
+const UNIT_FORMAL_NAMES: Record<string, string> = {
+  'Nos': 'Numbers', 'NOS': 'Numbers', 'nos': 'Numbers',
+  'Pcs': 'Pieces', 'PCS': 'Pieces', 'pcs': 'Pieces', 'pc': 'Pieces', 'PC': 'Pieces',
+  'Kg': 'Kilograms', 'KG': 'Kilograms', 'kg': 'Kilograms',
+  'Gm': 'Grams', 'GM': 'Grams', 'gm': 'Grams', 'g': 'Grams',
+  'Mtr': 'Metres', 'MTR': 'Metres', 'mtr': 'Metres', 'm': 'Metres',
+  'Ltr': 'Litres', 'LTR': 'Litres', 'ltr': 'Litres', 'L': 'Litres',
+  'Box': 'Boxes', 'BOX': 'Boxes', 'box': 'Boxes',
+  'Set': 'Sets', 'SET': 'Sets', 'set': 'Sets',
+  'Doz': 'Dozens', 'DOZ': 'Dozens', 'doz': 'Dozens',
+  'Pair': 'Pairs', 'PAIR': 'Pairs', 'pair': 'Pairs',
+  'Roll': 'Rolls', 'ROLL': 'Rolls', 'roll': 'Rolls',
+  'Bag': 'Bags', 'BAG': 'Bags', 'bag': 'Bags',
+};
+
+function buildUnitBlock(unitName: string, fyStart: string): string {
+  const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} Unit`;
+  const gstRepUom = `${unitName.toUpperCase()}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
+  const fyStart2 = fyStart;
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <UNIT NAME="${esc(unitName)}" RESERVEDNAME="">
+        <NAME>${esc(unitName)}</NAME>
+        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
+        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
+        <ORIGINALNAME>${esc(formalName)}</ORIGINALNAME>
+        <GSTREPORUOM>${esc(gstRepUom)}</GSTREPORUOM>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>
+        <ISGSTEXCLUDED>No</ISGSTEXCLUDED>
+        <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+        <DECIMALPLACES>2</DECIMALPLACES>
+        <REPORTINGUQCDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart2}</APPLICABLEFROM>
+          <REPORTINGUQCNAME>${esc(gstRepUom)}</REPORTINGUQCNAME>
+        </REPORTINGUQCDETAILS.LIST>
+      </UNIT>
+    </TALLYMESSAGE>`;
+}
+
+function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: string): string {
+  const halfRate = gstPercent / 2;
+  const unit = s.unit || 'Nos';
+
+  const gstDetailsBlock = gstPercent > 0 ? `
+        <GSTDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+          <CALCULATIONTYPE>On Value</CALCULATIONTYPE>
+          <TAXABILITY>Taxable</TAXABILITY>
+          <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
+          <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
+          <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+          <ISNONGSTGOODS>No</ISNONGSTGOODS>
+          <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
+          <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
+          <STATEWISEDETAILS.LIST>
+            <STATENAME> Any</STATENAME>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${gstPercent}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE> Not Applicable</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
+          </STATEWISEDETAILS.LIST>
+          <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
+          <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
+        </GSTDETAILS.LIST>` : '';
+
+  const hsnBlock = s.hsn_code ? `
+        <HSNDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+          <HSNCODE>${esc(s.hsn_code)}</HSNCODE>
+          <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
+        </HSNDETAILS.LIST>` : '';
+
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <STOCKITEM NAME="${esc(s.tally_item_name)}" RESERVEDNAME="">
+        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
+        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
+        <PARENT/>
+        <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
+        <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+        <BASEUNITS>${esc(unit)}</BASEUNITS>
+        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
+        <ISBATCHWISEON>No</ISBATCHWISEON>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>${gstDetailsBlock}${hsnBlock}
+        <LANGUAGENAME.LIST>
+          <NAME.LIST TYPE="String">
+            <NAME>${esc(s.tally_item_name)}</NAME>
+          </NAME.LIST>
+          <LANGUAGEID> 1033</LANGUAGEID>
+        </LANGUAGENAME.LIST>
+      </STOCKITEM>
+    </TALLYMESSAGE>`;
+}
+
+export type MasterType = 'all' | 'stock_items' | 'purchase_ledgers' | 'expense_ledgers' | 'duties_taxes' | 'suppliers' | 'ledgers_only';
+
+function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string[] {
+  const messages: string[] = [];
+  const fyStart = fyStartFromString(input.financialYear);
+
+  const includeSuppliers  = type === 'all' || type === 'suppliers'  || type === 'ledgers_only';
+  const includePurchase   = type === 'all' || type === 'purchase_ledgers' || type === 'ledgers_only';
+  const includeDuties     = type === 'all' || type === 'duties_taxes'     || type === 'ledgers_only';
+  const includeExpense    = type === 'all' || type === 'expense_ledgers'  || type === 'ledgers_only';
+  const includeStockItems = type === 'all' || type === 'stock_items';
+
+  if (includeSuppliers) {
+    const seenSuppliers = new Set<string>();
+    for (const inv of input.invoices) {
+      const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+      if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
+        seenSuppliers.add(supplier.tally_ledger_name);
+        messages.push(buildSupplierMasterBlock(supplier, fyStart));
+      }
+    }
+  }
+
+  if (includePurchase) {
+    const seenPurchase = new Set<string>();
+    for (const inv of input.invoices) {
+      const pl = inv.tally_ledger_acceptance?.purchaseLedger;
+      if (pl && !seenPurchase.has(pl)) {
+        seenPurchase.add(pl);
+        messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }, fyStart));
+      }
+    }
+  }
+
+  if (includeDuties) {
+    const seenDuties = new Set<string>();
+    for (const dt of input.dutiesTaxes) {
+      if (!seenDuties.has(dt.tally_ledger_name)) {
+        seenDuties.add(dt.tally_ledger_name);
+        messages.push(buildTaxLedgerBlock(dt, fyStart));
+      }
+    }
+  }
+
+  if (includeExpense) {
+    const seenExpense = new Set<string>();
+    for (const el of input.expenseLedgers) {
+      if (!seenExpense.has(el.tally_ledger_name)) {
+        seenExpense.add(el.tally_ledger_name);
+        messages.push(buildExpenseLedgerBlock(el, fyStart));
+      }
+    }
+  }
+
+  if (includeStockItems) {
+    // Build a map of invoice-extracted GST rates as fallback when master has no gst_percent
+    const invoiceRateMap = new Map<string, number>();
+    for (const inv of input.invoices) {
+      for (const item of inv.line_items) {
+        const stockItem = findStockItem(input.stockItems, item.description ?? '');
+        if (stockItem && !invoiceRateMap.has(stockItem.tally_item_name)) {
+          invoiceRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
+        }
+      }
+    }
+
+    // In inventory mode, only emit items that appear in the current invoice batch.
+    // In standalone masters export (non-inventory), emit all stock items.
+    const itemsToExport = input.voucherMode === 'inventory'
+      ? input.stockItems.filter((s) => invoiceRateMap.has(s.tally_item_name))
+      : input.stockItems;
+
+    const seenUnits = new Set<string>();
+    for (const s of itemsToExport) {
+      const unit = s.unit || 'Nos';
+      if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitBlock(unit, fyStart)); }
+    }
+    for (const stockItem of itemsToExport) {
+      // Prefer stored gst_percent from master; fall back to invoice-extracted rate
+      const rate = stockItem.gst_percent ?? invoiceRateMap.get(stockItem.tally_item_name) ?? 0;
+      messages.push(buildStockItemBlock(stockItem, rate, fyStart));
+    }
+  }
+
+  return messages;
+}
+
+
 export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 'all'): string {
   const messages = buildMasterMessages(input, type);
   return `<ENVELOPE>
