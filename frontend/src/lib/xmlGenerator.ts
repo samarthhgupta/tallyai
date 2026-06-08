@@ -1060,7 +1060,7 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
       </OLDAUDITENTRYIDS.LIST>
       <STARTINGFROM>${fyStart}</STARTINGFROM>
       <GUID></GUID>
-      <CURRENCYNAME>&#x20B9;</CURRENCYNAME>${vendorState ? `\n      <PRIORSTATENAME>${esc(vendorState)}</PRIORSTATENAME>` : ''}
+      <CURRENCYNAME>₹</CURRENCYNAME>${vendorState ? `\n      <PRIORSTATENAME>${esc(vendorState)}</PRIORSTATENAME>` : ''}
       <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
       <VATDEALERTYPE>${regType}</VATDEALERTYPE>
       <PARENT>Sundry Creditors</PARENT>
@@ -1095,7 +1095,7 @@ function buildSupplierMasterBlock(s: SupplierMaster, fyStart: string): string {
 }
 
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): string {
-  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+  const coreFields = `<CURRENCYNAME>₹</CURRENCYNAME>
       <PARENT>Purchase Accounts</PARENT>
       <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
       <TAXTYPE>Others</TAXTYPE>
@@ -1154,7 +1154,7 @@ function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry, fyStart: string): str
 function buildTaxLedgerBlock(dt: DutiesTaxesMaster, fyStart: string): string {
   const dutyHeadMap: Record<string, string> = { CGST: 'CGST', SGST: 'SGST/UTGST', IGST: 'IGST' };
   const dutyHead = dutyHeadMap[dt.tax_component] ?? dt.tax_component;
-  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+  const coreFields = `<CURRENCYNAME>₹</CURRENCYNAME>
       <PARENT>Duties &amp; Taxes</PARENT>
       <TAXTYPE>GST</TAXTYPE>
       <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>
@@ -1167,7 +1167,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
   const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
   const half = gst ? gst / 2 : 0;
 
-  const coreFields = `<CURRENCYNAME>&#x20B9;</CURRENCYNAME>
+  const coreFields = `<CURRENCYNAME>₹</CURRENCYNAME>
       <PARENT>Indirect Expenses</PARENT>
       <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
       <TAXTYPE>Others</TAXTYPE>
