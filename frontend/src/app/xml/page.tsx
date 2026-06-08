@@ -9,7 +9,7 @@ import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
-import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow } from '@/lib/xmlGenerator';
+import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -1126,16 +1126,16 @@ export default function XmlGeneratorPage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleDownloadMastersXml = async () => {
+  const handleDownloadMastersXml = async (type: MasterType, label: string) => {
     const err = validateForXml();
     if (err) { alert(err); return; }
     setGeneratingXml(true);
     try {
       const input = await buildXmlInput();
-      const xml = generateMastersXml(input);
-      triggerDownload(xml, `${fileBase}_masters.xml`);
+      const xml = generateMastersXml(input, type);
+      triggerDownload(xml, `${fileBase}_masters_${type}.xml`);
     } catch (e: unknown) {
-      alert(`Error generating masters XML: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Error generating ${label} XML: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setGeneratingXml(false);
     }
@@ -1430,20 +1430,38 @@ export default function XmlGeneratorPage() {
             Generate &amp; Download XML
           </h2>
           <p className="text-xs text-gray-400 mb-4">
-            Once you&apos;re satisfied with the preview, generate the Tally XML file. The file downloads automatically.
+            Import masters first (each type separately), then import vouchers. Each button downloads one XML file.
           </p>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleDownloadMastersXml}
-              disabled={generatingXml || !company || invoices.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              {generatingXml ? 'Generating…' : '1. Download Masters XML'}
-            </button>
+          {/* Master XML buttons — one per master type */}
+          <div className="mb-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Masters (import in order)</p>
+            <div className="flex flex-wrap gap-2">
+              {([
+                { type: 'stock_items'      as MasterType, label: 'Stock Items',             color: 'bg-indigo-600 hover:bg-indigo-700' },
+                { type: 'purchase_ledgers' as MasterType, label: 'Purchase Ledgers',        color: 'bg-blue-600 hover:bg-blue-700' },
+                { type: 'expense_ledgers'  as MasterType, label: 'Expense / Charge Ledgers', color: 'bg-orange-600 hover:bg-orange-700' },
+                { type: 'duties_taxes'     as MasterType, label: 'Duties & Taxes',           color: 'bg-teal-600 hover:bg-teal-700' },
+                { type: 'suppliers'        as MasterType, label: 'Sundry Creditors',         color: 'bg-purple-600 hover:bg-purple-700' },
+              ] as const).map(({ type, label, color }) => (
+                <button
+                  key={type}
+                  onClick={() => handleDownloadMastersXml(type, label)}
+                  disabled={generatingXml || !company || invoices.length === 0}
+                  className={`flex items-center gap-2 px-4 py-2 ${color} text-white rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors`}
+                >
+                  <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  {generatingXml ? '…' : label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Vouchers button */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Vouchers (import after all masters succeed)</p>
             <button
               onClick={handleDownloadVouchersXml}
               disabled={generatingXml || !company || invoices.length === 0}
@@ -1452,32 +1470,32 @@ export default function XmlGeneratorPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              {generatingXml ? 'Generating…' : '2. Download Vouchers XML'}
+              {generatingXml ? 'Generating…' : 'Download Vouchers XML'}
             </button>
-            {xmlBlob && (
-              <span className="text-xs text-gray-500 ml-1">
-                <span className="font-mono">{xmlFilename}</span>
-                <span className="ml-1">downloaded</span>
-              </span>
-            )}
           </div>
+
+          {xmlBlob && (
+            <p className="mt-3 text-xs text-gray-500">
+              Last downloaded: <span className="font-mono">{xmlFilename}</span>
+            </p>
+          )}
         </div>
 
         {/* How-to */}
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800">
           <p className="font-semibold mb-2">How to import into Tally</p>
           <p className="text-xs text-blue-700 mb-2">
-            Import <strong>Masters first</strong>, then Vouchers. Masters XML auto-creates any missing ledgers / stock items — safe to re-import (existing masters are skipped).
+            Import each master type separately first, then import vouchers. Safe to re-import — Tally silently skips masters that already exist.
           </p>
           <ol className="list-decimal list-inside space-y-1.5 text-blue-700 text-xs">
             <li>Open Tally → select company <strong>{company?.tally_company_name ?? '—'}</strong></li>
             <li>
-              <strong>Import Masters:</strong> Gateway of Tally → Import Data → Masters → select <em>…_masters.xml</em>
+              <strong>Import each master:</strong> Gateway of Tally → Import Data → Masters → select the file
+              <span className="block ml-5 mt-0.5 text-blue-600">Order: Stock Items → Purchase Ledgers → Expense Ledgers → Duties &amp; Taxes → Sundry Creditors</span>
             </li>
             <li>
-              <strong>Import Vouchers:</strong> Gateway of Tally → Import Data → Vouchers → select <em>…_purchase.xml</em>
+              <strong>Import Vouchers</strong> only after all masters succeed: Import Data → Vouchers → select <em>…_vouchers.xml</em>
             </li>
-            <li>Tally will create purchase vouchers for all included invoices</li>
           </ol>
         </div>
       </main>

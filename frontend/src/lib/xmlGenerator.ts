@@ -962,41 +962,52 @@ function buildStockItemBlock(s: StockItemMaster, gstPercent: number): string {
     </TALLYMESSAGE>`;
 }
 
-export function generateMastersXml(input: XmlGeneratorInput): string {
+export type MasterType = 'all' | 'stock_items' | 'purchase_ledgers' | 'expense_ledgers' | 'duties_taxes' | 'suppliers';
+
+function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string[] {
   const messages: string[] = [];
 
-  // 1. Supplier ledgers — only those used in this export batch
-  const seenSuppliers = new Set<string>();
-  for (const inv of input.invoices) {
-    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-    if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
-      seenSuppliers.add(supplier.tally_ledger_name);
-      messages.push(buildSupplierMasterBlock(supplier));
+  const includeSuppliers  = type === 'all' || type === 'suppliers';
+  const includePurchase   = type === 'all' || type === 'purchase_ledgers';
+  const includeDuties     = type === 'all' || type === 'duties_taxes';
+  const includeExpense    = type === 'all' || type === 'expense_ledgers';
+  const includeStockItems = type === 'all' || type === 'stock_items';
+
+  if (includeSuppliers) {
+    const seenSuppliers = new Set<string>();
+    for (const inv of input.invoices) {
+      const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+      if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
+        seenSuppliers.add(supplier.tally_ledger_name);
+        messages.push(buildSupplierMasterBlock(supplier));
+      }
     }
   }
 
-  // 2. Purchase account ledgers — collected from accepted invoices
-  const seenPurchase = new Set<string>();
-  for (const inv of input.invoices) {
-    const pl = inv.tally_ledger_acceptance?.purchaseLedger;
-    if (pl && !seenPurchase.has(pl)) {
-      seenPurchase.add(pl);
-      messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
+  if (includePurchase) {
+    const seenPurchase = new Set<string>();
+    for (const inv of input.invoices) {
+      const pl = inv.tally_ledger_acceptance?.purchaseLedger;
+      if (pl && !seenPurchase.has(pl)) {
+        seenPurchase.add(pl);
+        messages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
+      }
     }
   }
 
-  // 3. GST duty/tax ledgers (all configured)
-  for (const dt of input.dutiesTaxes) {
-    messages.push(buildTaxLedgerBlock(dt));
+  if (includeDuties) {
+    for (const dt of input.dutiesTaxes) {
+      messages.push(buildTaxLedgerBlock(dt));
+    }
   }
 
-  // 4. Expense ledgers (all configured; parent defaults to Indirect Expenses)
-  for (const el of input.expenseLedgers) {
-    messages.push(buildExpenseLedgerBlock(el));
+  if (includeExpense) {
+    for (const el of input.expenseLedgers) {
+      messages.push(buildExpenseLedgerBlock(el));
+    }
   }
 
-  // 5. Units + Stock items — inventory mode only, only those mapped in this batch
-  if (input.voucherMode === 'inventory') {
+  if (includeStockItems && input.voucherMode === 'inventory') {
     const itemRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       for (const item of inv.line_items) {
@@ -1007,7 +1018,6 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
       }
     }
     const mappedItems = input.stockItems.filter((s) => itemRateMap.has(s.tally_item_name));
-    // Emit unit creation blocks first (Tally requires units to exist before stock items)
     const seenUnits = new Set<string>();
     for (const s of mappedItems) {
       const unit = s.unit || 'Nos';
@@ -1019,6 +1029,11 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
     }
   }
 
+  return messages;
+}
+
+export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 'all'): string {
+  const messages = buildMasterMessages(input, type);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ENVELOPE>
   <HEADER>
@@ -1040,53 +1055,7 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
  *  Tally processes both in order — creates ledgers/items, then imports vouchers.
  *  Safe to import into a Tally company that already has some of these masters. */
 export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResult {
-  // Build master blocks (same logic as generateMastersXml but return raw message strings)
-  const masterMessages: string[] = [];
-
-  const seenSuppliers = new Set<string>();
-  for (const inv of input.invoices) {
-    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
-    if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
-      seenSuppliers.add(supplier.tally_ledger_name);
-      masterMessages.push(buildSupplierMasterBlock(supplier));
-    }
-  }
-  // Purchase account ledgers — collected from accepted invoices
-  const seenPurchaseCombined = new Set<string>();
-  for (const inv of input.invoices) {
-    const pl = inv.tally_ledger_acceptance?.purchaseLedger;
-    if (pl && !seenPurchaseCombined.has(pl)) {
-      seenPurchaseCombined.add(pl);
-      masterMessages.push(buildPurchaseLedgerBlock({ gst_percent: null, tally_ledger_name: pl }));
-    }
-  }
-  for (const dt of input.dutiesTaxes) {
-    masterMessages.push(buildTaxLedgerBlock(dt));
-  }
-  for (const el of input.expenseLedgers) {
-    masterMessages.push(buildExpenseLedgerBlock(el));
-  }
-  if (input.voucherMode === 'inventory') {
-    const itemRateMap = new Map<string, number>();
-    for (const inv of input.invoices) {
-      for (const item of inv.line_items) {
-        const stockItem = findStockItem(input.stockItems, item.description ?? '');
-        if (stockItem && !itemRateMap.has(stockItem.tally_item_name)) {
-          itemRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
-        }
-      }
-    }
-    const mappedItems2 = input.stockItems.filter((s) => itemRateMap.has(s.tally_item_name));
-    const seenUnits2 = new Set<string>();
-    for (const s of mappedItems2) {
-      const unit = s.unit || 'Nos';
-      if (!seenUnits2.has(unit)) { seenUnits2.add(unit); masterMessages.push(buildUnitBlock(unit)); }
-    }
-    for (const stockItem of mappedItems2) {
-      const rate = itemRateMap.get(stockItem.tally_item_name) ?? 0;
-      masterMessages.push(buildStockItemBlock(stockItem, rate));
-    }
-  }
+  const masterMessages = buildMasterMessages(input, 'all');
 
   // Build voucher blocks
   const skipped: XmlGeneratorResult['skippedInvoices'] = [];
