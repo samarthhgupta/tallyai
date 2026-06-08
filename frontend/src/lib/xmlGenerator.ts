@@ -996,14 +996,22 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
   }
 
   if (includeDuties) {
+    const seenDuties = new Set<string>();
     for (const dt of input.dutiesTaxes) {
-      messages.push(buildTaxLedgerBlock(dt));
+      if (!seenDuties.has(dt.tally_ledger_name)) {
+        seenDuties.add(dt.tally_ledger_name);
+        messages.push(buildTaxLedgerBlock(dt));
+      }
     }
   }
 
   if (includeExpense) {
+    const seenExpense = new Set<string>();
     for (const el of input.expenseLedgers) {
-      messages.push(buildExpenseLedgerBlock(el));
+      if (!seenExpense.has(el.tally_ledger_name)) {
+        seenExpense.add(el.tally_ledger_name);
+        messages.push(buildExpenseLedgerBlock(el));
+      }
     }
   }
 
