@@ -788,10 +788,14 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 function masterLedgerBlock(name: string, fields: string): string {
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <LEDGER NAME="${name}" ACTION="Create" RESERVEDNAME="">
+      <LEDGER NAME="${name}" RESERVEDNAME="">
+        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
+        <OBJECTUPDATEACTION>Create</OBJECTUPDATEACTION>
         ${fields}
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>
         <LANGUAGENAME.LIST>
           <NAME.LIST TYPE="String">
             <NAME>${name}</NAME>
