@@ -1182,8 +1182,6 @@ export default function XmlGeneratorPage() {
       const masters = await loadMasters(company!.id);
       setCachedMasters(masters);
       const fresh = await getCompany(company!.id);
-      const mode = fresh.voucher_mode ?? 'accounting_only';
-      setVoucherMode(mode);
 
       // Auto-suggest purchase ledgers if none are configured yet
       let ledgersToUse = validLedgers;
@@ -1198,7 +1196,7 @@ export default function XmlGeneratorPage() {
         invoices, ...masters,
         purchaseLedgers: ledgersToUse,
         tallyCompanyName: company!.tally_company_name!,
-        voucherMode: mode,
+        voucherMode,
         discountLedgerName: fresh.discount_ledger_name,
       });
       setPreviewRows(rows);
