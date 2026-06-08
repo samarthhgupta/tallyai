@@ -9,7 +9,7 @@ import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
-import { generateTallyXml, generateMastersXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PreviewRow } from '@/lib/xmlGenerator';
+import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -20,7 +20,6 @@ import * as XLSX from 'xlsx';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const COMMON_GST_RATES = [0, 5, 12, 18, 28];
 
 const LEDGER_TYPE_COLORS: Record<PreviewRow['ledger_type'], string> = {
   Party:       'bg-purple-100 text-purple-700',
