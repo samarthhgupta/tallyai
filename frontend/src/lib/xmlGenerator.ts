@@ -788,10 +788,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 function masterLedgerBlock(name: string, fields: string): string {
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <LEDGER NAME="${name}" ACTION="Create">
+      <LEDGER NAME="${name}" ACTION="Create" RESERVEDNAME="">
         ${fields}
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>
         <LANGUAGENAME.LIST>
           <NAME.LIST TYPE="String">
             <NAME>${name}</NAME>
@@ -809,7 +811,7 @@ function buildSupplierMasterBlock(s: SupplierMaster): string {
   const ledgstReg = s.vendor_gstin
     ? `
         <LEDGSTREGDETAILS.LIST>
-          <APPLICABLEFROM>20170701</APPLICABLEFROM>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
           <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
           <STATE>${esc(vendorState)}</STATE>
           <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
@@ -818,7 +820,12 @@ function buildSupplierMasterBlock(s: SupplierMaster): string {
           <CONSIDERPURCHASEFOREXPORT>No</CONSIDERPURCHASEFOREXPORT>
           <ISTRANSPORTER>No</ISTRANSPORTER>
           <ISCOMMONPARTY>No</ISCOMMONPARTY>
-        </LEDGSTREGDETAILS.LIST>`
+        </LEDGSTREGDETAILS.LIST>
+        <LEDMAILINGDETAILS.LIST>
+          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <MAILINGNAME>${esc(s.tally_ledger_name)}</MAILINGNAME>${vendorState ? `\n          <STATE>${esc(vendorState)}</STATE>` : ''}
+          <COUNTRY>India</COUNTRY>
+        </LEDMAILINGDETAILS.LIST>`
     : `\n        <LEDGSTREGDETAILS.LIST> </LEDGSTREGDETAILS.LIST>`;
 
   return masterLedgerBlock(esc(s.tally_ledger_name), `
@@ -837,6 +844,8 @@ function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry): string {
         <TAXTYPE>Others</TAXTYPE>
         <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
         <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+        <ISBILLWISEON>No</ISBILLWISEON>
+        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
         <AFFECTSSTOCK>Yes</AFFECTSSTOCK>`);
 }
 
@@ -847,7 +856,10 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
         <PARENT>Duties &amp; Taxes</PARENT>
         <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
         <TAXTYPE>GST</TAXTYPE>
-        <GSTDUTYHEAD>${dutyHead}</GSTDUTYHEAD>`);
+        <GSTDUTYHEAD>${esc(dutyHead)}</GSTDUTYHEAD>
+        <ISBILLWISEON>No</ISBILLWISEON>
+        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
+        <AFFECTSSTOCK>No</AFFECTSSTOCK>`);
 }
 
 function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
@@ -856,7 +868,10 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
         <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
         <TAXTYPE>Others</TAXTYPE>
         <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
-        <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`);
+        <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>
+        <ISBILLWISEON>No</ISBILLWISEON>
+        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
+        <AFFECTSSTOCK>No</AFFECTSSTOCK>`);
 }
 
 const UNIT_FORMAL_NAMES: Record<string, string> = {
