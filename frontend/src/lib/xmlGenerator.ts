@@ -790,7 +790,7 @@ function masterLedgerBlock(name: string, fields: string): string {
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <LEDGER NAME="${name}" RESERVEDNAME="">
         <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
-        <OBJECTUPDATEACTION>Create</OBJECTUPDATEACTION>
+        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
         ${fields}
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
