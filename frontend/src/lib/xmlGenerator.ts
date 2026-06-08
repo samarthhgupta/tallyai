@@ -788,12 +788,10 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 function masterLedgerBlock(name: string, fields: string): string {
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <LEDGER NAME="${name}" RESERVEDNAME="">
+      <LEDGER NAME="${name}" ACTION="Create">
         ${fields}
         <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
         <ISDELETED>No</ISDELETED>
-        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
-        <ASORIGINAL>Yes</ASORIGINAL>
         <LANGUAGENAME.LIST>
           <NAME.LIST TYPE="String">
             <NAME>${name}</NAME>
@@ -831,10 +829,8 @@ function buildSupplierMasterBlock(s: SupplierMaster): string {
   return masterLedgerBlock(esc(s.tally_ledger_name), `
         <PARENT>Sundry Creditors</PARENT>
         <CURRENCYNAME>&#x20B9;</CURRENCYNAME>
-        <TAXTYPE>Others</TAXTYPE>
-        <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
         <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>${s.vendor_gstin ? `\n        <PARTYGSTIN>${esc(s.vendor_gstin)}</PARTYGSTIN>` : ''}
-        <ISBILLWISEON>Yes</ISBILLWISEON>` + ledgstReg);
+        <ISBILLWISEON>No</ISBILLWISEON>` + ledgstReg);
 }
 
 function buildPurchaseLedgerBlock(pl: PurchaseLedgerEntry): string {
@@ -1043,6 +1039,9 @@ export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${esc(input.tallyCompanyName)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>${messages.join('')}
       </REQUESTDATA>
