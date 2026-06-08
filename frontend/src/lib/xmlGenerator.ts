@@ -1405,8 +1405,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
 
 export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 'all'): string {
   const messages = buildMasterMessages(input, type);
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<ENVELOPE>
+  return `<ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
   </HEADER>
@@ -1447,8 +1446,7 @@ export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResul
     }
   }
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<ENVELOPE>
+  const xml = `<ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
   </HEADER>
@@ -1491,8 +1489,7 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
     }
   }
 
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<ENVELOPE>
+  const xml = `<ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
   </HEADER>

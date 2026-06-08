@@ -1126,7 +1126,15 @@ export default function XmlGeneratorPage() {
   };
 
   const triggerDownload = (xml: string, filename: string) => {
-    const blob = new Blob([xml], { type: 'application/xml' });
+    // Tally requires UTF-16 LE with BOM — UTF-8 files are rejected at import
+    const utf16 = new Uint16Array(xml.length);
+    for (let i = 0; i < xml.length; i++) utf16[i] = xml.charCodeAt(i);
+    const bom = new Uint8Array([0xff, 0xfe]);
+    const body = new Uint8Array(utf16.buffer);
+    const merged = new Uint8Array(bom.length + body.length);
+    merged.set(bom, 0);
+    merged.set(body, bom.length);
+    const blob = new Blob([merged], { type: 'application/octet-stream' });
     setXmlBlob(blob);
     setXmlFilename(filename);
     const url = URL.createObjectURL(blob);
