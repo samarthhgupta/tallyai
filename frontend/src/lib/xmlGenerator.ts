@@ -347,11 +347,12 @@ function wrapVoucher(
   if (mode === 'accounting_only') {
     return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <VOUCHER VCHTYPE="${esc(voucherTypeName)}" ACTION="Create" OBJVIEW="Invoice Voucher View">
+      <VOUCHER VCHTYPE="${esc(voucherTypeName)}" ACTION="Create" OBJVIEW="Accounting Voucher View">
         <DATE>${d}</DATE>
         <VOUCHERTYPENAME>${esc(voucherTypeName)}</VOUCHERTYPENAME>
         <PARTYLEDGERNAME>${esc(partyLedger)}</PARTYLEDGERNAME>
         <VOUCHERNUMBER>${esc(inv.invoice_number)}</VOUCHERNUMBER>
+        <ISINVOICE>Yes</ISINVOICE>
         <NARRATION>${narration}</NARRATION>${inventoryXml}${ledgerXml}
       </VOUCHER>
     </TALLYMESSAGE>`;
