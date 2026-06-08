@@ -859,6 +859,19 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
         <GSTTYPEOFSUPPLY>Services</GSTTYPEOFSUPPLY>`);
 }
 
+function buildUnitBlock(unitName: string): string {
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <UNIT NAME="${esc(unitName)}" ACTION="Create">
+        <NAME>${esc(unitName)}</NAME>
+        <ORIGINALNAME>${esc(unitName)}</ORIGINALNAME>
+        <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+      </UNIT>
+    </TALLYMESSAGE>`;
+}
+
 function buildStockItemBlock(s: StockItemMaster, gstPercent: number): string {
   const halfRate = gstPercent / 2;
   const unit = s.unit || 'Nos';
@@ -941,9 +954,8 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
     messages.push(buildExpenseLedgerBlock(el));
   }
 
-  // 5. Stock items — inventory mode only, only those mapped in this batch
+  // 5. Units + Stock items — inventory mode only, only those mapped in this batch
   if (input.voucherMode === 'inventory') {
-    // Build a map from tally_item_name → GST rate (from first matching invoice line)
     const itemRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       for (const item of inv.line_items) {
@@ -953,9 +965,14 @@ export function generateMastersXml(input: XmlGeneratorInput): string {
         }
       }
     }
-    for (const [, stockItem] of input.stockItems
-      .filter((s) => itemRateMap.has(s.tally_item_name))
-      .map((s) => [s.tally_item_name, s] as const)) {
+    const mappedItems = input.stockItems.filter((s) => itemRateMap.has(s.tally_item_name));
+    // Emit unit creation blocks first (Tally requires units to exist before stock items)
+    const seenUnits = new Set<string>();
+    for (const s of mappedItems) {
+      const unit = s.unit || 'Nos';
+      if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitBlock(unit)); }
+    }
+    for (const stockItem of mappedItems) {
       const rate = itemRateMap.get(stockItem.tally_item_name) ?? 0;
       messages.push(buildStockItemBlock(stockItem, rate));
     }
@@ -1018,9 +1035,13 @@ export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResul
         }
       }
     }
-    for (const [, stockItem] of input.stockItems
-      .filter((s) => itemRateMap.has(s.tally_item_name))
-      .map((s) => [s.tally_item_name, s] as const)) {
+    const mappedItems2 = input.stockItems.filter((s) => itemRateMap.has(s.tally_item_name));
+    const seenUnits2 = new Set<string>();
+    for (const s of mappedItems2) {
+      const unit = s.unit || 'Nos';
+      if (!seenUnits2.has(unit)) { seenUnits2.add(unit); masterMessages.push(buildUnitBlock(unit)); }
+    }
+    for (const stockItem of mappedItems2) {
       const rate = itemRateMap.get(stockItem.tally_item_name) ?? 0;
       masterMessages.push(buildStockItemBlock(stockItem, rate));
     }
