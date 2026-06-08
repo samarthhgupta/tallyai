@@ -555,7 +555,7 @@ function wrapVoucher(
         <ACCOUNTAUDITENTRIES.LIST> </ACCOUNTAUDITENTRIES.LIST>
         <AUDITENTRIES.LIST> </AUDITENTRIES.LIST>
         <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>
-        <GSTADVADJDETAILS.LIST> </GSTADVADJDETAILS.LIST>${inventoryXml}${ledgerXml}
+        <GSTADVADJDETAILS.LIST> </GSTADVADJDETAILS.LIST>${inventoryXml}
         <CONTRITRANS.LIST> </CONTRITRANS.LIST>
         <EWAYBILLERRORLIST.LIST> </EWAYBILLERRORLIST.LIST>
         <IRNERRORLIST.LIST> </IRNERRORLIST.LIST>
@@ -566,16 +566,7 @@ function wrapVoucher(
         <INVOICEINDENTLIST.LIST> </INVOICEINDENTLIST.LIST>
         <ATTENDANCEENTRIES.LIST> </ATTENDANCEENTRIES.LIST>
         <ORIGINVOICEDETAILS.LIST> </ORIGINVOICEDETAILS.LIST>
-        <INVOICEEXPORTLIST.LIST> </INVOICEEXPORTLIST.LIST>
-        <STKJRNLADDLCOSTDETAILS.LIST> </STKJRNLADDLCOSTDETAILS.LIST>
-        <PAYROLLMODEOFPAYMENT.LIST> </PAYROLLMODEOFPAYMENT.LIST>
-        <ATTDRECORDS.LIST> </ATTDRECORDS.LIST>
-        <GSTEWAYCONSIGNORADDRESS.LIST> </GSTEWAYCONSIGNORADDRESS.LIST>
-        <GSTEWAYCONSIGNEEADDRESS.LIST> </GSTEWAYCONSIGNEEADDRESS.LIST>
-        <TEMPGSTRATEDETAILS.LIST> </TEMPGSTRATEDETAILS.LIST>
-        <TEMPGSTADVADJUSTED.LIST> </TEMPGSTADVADJUSTED.LIST>
-        <GSTBUYERADDRESS.LIST> </GSTBUYERADDRESS.LIST>
-        <GSTCONSIGNEEADDRESS.LIST> </GSTCONSIGNEEADDRESS.LIST>
+        <INVOICEEXPORTLIST.LIST> </INVOICEEXPORTLIST.LIST>${ledgerXml}
       </VOUCHER>
     </TALLYMESSAGE>`;
 }
@@ -851,19 +842,21 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
-  if (!purchaseLedger) warnings.push(`No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`);
+  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`, warnings };
 
   let totalItemsAmount = 0;
+  let unmappedItemsAmount = 0;
   const invEntries: string[] = [];
 
   for (const item of inv.line_items) {
     const desc = item.description ?? '';
     const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
+    const itemNet = calcLineAmount(item);
     if (!stockItem) {
-      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped — line item excluded from inventory entries`);
+      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped — booking to purchase ledger`);
+      unmappedItemsAmount += itemNet;
       continue;
     }
-    const itemNet = calcLineAmount(item);
     totalItemsAmount += itemNet;
     invEntries.push(buildAllInventoryEntry(stockItem, item, purchaseLedger));
   }
@@ -896,10 +889,10 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   }
 
   // 3. Tax ledgers — NEGATIVE amounts (debit to ITC accounts)
+  const taxBase = totalItemsAmount + unmappedItemsAmount - (inv.bill_discount_amount ?? 0);
   if (inv.tax_type === 'cgst_sgst') {
     if (inv.cgst > 0) {
-      const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
-      const rate = taxable > 0 ? Math.round((inv.cgst / taxable) * 100) : 0;
+      const rate = taxBase > 0 ? Math.round((inv.cgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
       if (!ledger) return { xml: null, skip: 'No CGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -912,8 +905,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
       }));
     }
     if (inv.sgst > 0) {
-      const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
-      const rate = taxable > 0 ? Math.round((inv.sgst / taxable) * 100) : 0;
+      const rate = taxBase > 0 ? Math.round((inv.sgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
       if (!ledger) return { xml: null, skip: 'No SGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -926,8 +918,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
       }));
     }
   } else if (inv.igst > 0) {
-    const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
-    const rate = taxable > 0 ? Math.round((inv.igst / taxable) * 100) : 0;
+    const rate = taxBase > 0 ? Math.round((inv.igst / taxBase) * 100) : 0;
     const ledger = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
     if (!ledger) return { xml: null, skip: 'No IGST ledger configured in Duties & Taxes master', warnings };
     ledgerEntries.push(invLedgerEntry({
@@ -941,14 +932,18 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   }
 
   // 4. Charge / expense ledgers — NEGATIVE amounts
+  let mappedChargesTotal = 0;
+  let unmappedChargesTotal = 0;
   if (inv.charges?.length) {
     for (const charge of inv.charges) {
       if (!charge.amount || charge.amount === 0) continue;
       const ledger = findExpenseLedger(input.expenseLedgers, charge.description);
       if (!ledger) {
-        warnings.push(`No expense ledger mapped for charge "${charge.description}" — charge excluded from XML`);
+        warnings.push(`No expense ledger mapped for charge "${charge.description}" — booking to purchase ledger`);
+        unmappedChargesTotal += charge.amount;
         continue;
       }
+      mappedChargesTotal += charge.amount;
       ledgerEntries.push(invChargeLedgerEntry(ledger, -Math.abs(charge.amount)));
     }
   }
@@ -959,6 +954,20 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     if (ledger) {
       ledgerEntries.push(invChargeLedgerEntry(ledger, -Math.abs(inv.round_off)));
     }
+  }
+
+  // 6. Balance catch-up: unmapped items + unmapped charges create a debit gap vs party credit.
+  //    Book the gap to the purchase ledger so the voucher always balances in Tally.
+  const taxes = (inv.cgst ?? 0) + (inv.sgst ?? 0) + (inv.igst ?? 0);
+  const roundOff = inv.round_off ? Math.abs(inv.round_off) : 0;
+  const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOff;
+  const gap = parseFloat((inv.total - totalDebits).toFixed(2));
+  if (Math.abs(gap) > 0.01) {
+    warnings.push(`Balance gap ₹${fmt2(Math.abs(gap))} in "${inv.invoice_number}" (rounding/data diff) — adjusted in purchase ledger`);
+    ledgerEntries.push(invChargeLedgerEntry(purchaseLedger, -(unmappedItemsAmount + unmappedChargesTotal + gap)));
+  } else if (unmappedItemsAmount + unmappedChargesTotal > 0) {
+    // No gap but unmapped items/charges still need a purchase ledger debit entry
+    ledgerEntries.push(invChargeLedgerEntry(purchaseLedger, -(unmappedItemsAmount + unmappedChargesTotal)));
   }
 
   return {
