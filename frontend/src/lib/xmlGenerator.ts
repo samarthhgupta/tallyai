@@ -1240,16 +1240,16 @@ function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: st
     </TALLYMESSAGE>`;
 }
 
-export type MasterType = 'all' | 'stock_items' | 'purchase_ledgers' | 'expense_ledgers' | 'duties_taxes' | 'suppliers';
+export type MasterType = 'all' | 'stock_items' | 'purchase_ledgers' | 'expense_ledgers' | 'duties_taxes' | 'suppliers' | 'ledgers_only';
 
 function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string[] {
   const messages: string[] = [];
   const fyStart = fyStartFromString(input.financialYear);
 
-  const includeSuppliers  = type === 'all' || type === 'suppliers';
-  const includePurchase   = type === 'all' || type === 'purchase_ledgers';
-  const includeDuties     = type === 'all' || type === 'duties_taxes';
-  const includeExpense    = type === 'all' || type === 'expense_ledgers';
+  const includeSuppliers  = type === 'all' || type === 'suppliers'  || type === 'ledgers_only';
+  const includePurchase   = type === 'all' || type === 'purchase_ledgers' || type === 'ledgers_only';
+  const includeDuties     = type === 'all' || type === 'duties_taxes'     || type === 'ledgers_only';
+  const includeExpense    = type === 'all' || type === 'expense_ledgers'  || type === 'ledgers_only';
   const includeStockItems = type === 'all' || type === 'stock_items';
 
   if (includeSuppliers) {
