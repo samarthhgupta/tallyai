@@ -19,6 +19,7 @@ export interface StockItemMaster {
   alias_name: string | null;
   unit: string | null;
   hsn_code: string | null;
+  gst_percent: number | null;  // total GST rate (e.g. 5, 12, 18); null = unknown
   created_at: string;
   updated_at: string;
 }
@@ -28,6 +29,7 @@ export interface StockItemImportRow {
   alias_name?: string;
   unit?: string;
   hsn_code?: string;
+  gst_percent?: number | null;
 }
 
 export interface StockItemImportResult {
@@ -55,6 +57,7 @@ export async function addStockItem(
     alias_name?: string;
     unit?: string;
     hsn_code?: string;
+    gst_percent?: number | null;
   },
 ): Promise<StockItemMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;
@@ -65,6 +68,7 @@ export async function addStockItem(
     alias_name: params.alias_name ?? null,
     unit: params.unit ?? null,
     hsn_code: params.hsn_code ?? null,
+    gst_percent: params.gst_percent ?? null,
     updated_at: new Date().toISOString(),
   };
 
@@ -81,7 +85,7 @@ export async function addStockItem(
 
   if (existing?.id) {
     await db().from('stock_item_masters')
-      .update({ alias_name: row.alias_name, unit: row.unit, hsn_code: row.hsn_code, updated_at: row.updated_at })
+      .update({ alias_name: row.alias_name, unit: row.unit, hsn_code: row.hsn_code, gst_percent: row.gst_percent, updated_at: row.updated_at })
       .eq('id', existing.id);
   }
 
@@ -94,7 +98,7 @@ export async function addStockItem(
 
 export async function updateStockItem(
   id: string,
-  params: Partial<Pick<StockItemMaster, 'tally_item_name' | 'alias_name' | 'unit' | 'hsn_code'>>,
+  params: Partial<Pick<StockItemMaster, 'tally_item_name' | 'alias_name' | 'unit' | 'hsn_code' | 'gst_percent'>>,
 ): Promise<void> {
   const { error } = await db()
     .from('stock_item_masters')
@@ -148,6 +152,7 @@ export async function bulkUpsertStockItems(
       alias_name: row.alias_name || null,
       unit: row.unit || null,
       hsn_code: row.hsn_code || null,
+      gst_percent: row.gst_percent ?? null,
       updated_at: now,
     };
 

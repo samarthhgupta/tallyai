@@ -53,7 +53,7 @@ interface InvoiceAcceptPayload {
   invoiceNo: string;
   vendorName: string; vendorGstin: string; vendorLedger: string;
   purchaseLedger: string;
-  stockItems: Array<{ desc: string; hsn: string; tallyName: string }>;
+  stockItems: Array<{ desc: string; hsn: string; gst_percent?: number; tallyName: string }>;
   charges: Array<{ keyword: string; tallyName: string; gst_percent?: number; sac_code?: string }>;
   cgstLedger: string; sgstLedger: string; igstLedger: string;
   roLedger: string;
@@ -353,7 +353,7 @@ function FlatPreviewTable({
         if (r.itemDesc) {
           const tallyName = stockItemEdits[`${invNo}_${r.itemDesc}`] ?? r.stockItem;
           if (tallyName) {
-            stockItems.push({ desc: r.itemDesc, hsn: r.hsn, tallyName });
+            stockItems.push({ desc: r.itemDesc, hsn: r.hsn, gst_percent: r.taxRate ?? undefined, tallyName });
             lockedStock[r.itemDesc] = tallyName;
           }
         }
@@ -1373,7 +1373,14 @@ export default function XmlGeneratorPage() {
                     for (const si of p.stockItems) {
                       if (si.tallyName && !seenStock.has(si.desc)) {
                         seenStock.add(si.desc);
-                        try { await addStockItem(company.id, { tally_item_name: si.tallyName, alias_name: si.desc }); }
+                        try {
+                          await addStockItem(company.id, {
+                            tally_item_name: si.tallyName,
+                            alias_name: si.desc,
+                            hsn_code: si.hsn || undefined,
+                            gst_percent: si.gst_percent ?? null,
+                          });
+                        }
                         catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
                       }
                     }
