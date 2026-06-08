@@ -785,6 +785,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 // in Tally before importing the vouchers XML — Tally silently skips masters
 // that already exist, so it is safe to re-import.
 
+function currentFyStart(): string {
+  const now = new Date();
+  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${fyYear}0401`;
+}
+
 function masterLedgerBlock(name: string, fields: string): string {
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -810,10 +816,11 @@ function buildSupplierMasterBlock(s: SupplierMaster): string {
   const regType = s.is_unregistered ? 'Unregistered' : 'Regular';
   const vendorState = stateFromGstin(s.vendor_gstin);
 
+  const fyStart = currentFyStart();
   const ledgstReg = s.vendor_gstin
     ? `
         <LEDGSTREGDETAILS.LIST>
-          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
           <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
           <STATE>${esc(vendorState)}</STATE>
           <PLACEOFSUPPLY>${esc(vendorState)}</PLACEOFSUPPLY>
@@ -824,7 +831,7 @@ function buildSupplierMasterBlock(s: SupplierMaster): string {
           <ISCOMMONPARTY>No</ISCOMMONPARTY>
         </LEDGSTREGDETAILS.LIST>
         <LEDMAILINGDETAILS.LIST>
-          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
           <MAILINGNAME>${esc(s.tally_ledger_name)}</MAILINGNAME>${vendorState ? `\n          <STATE>${esc(vendorState)}</STATE>` : ''}
           <COUNTRY>India</COUNTRY>
         </LEDMAILINGDETAILS.LIST>`
@@ -865,11 +872,12 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
 function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
   const gst = el.gst_percent && el.gst_percent > 0 ? el.gst_percent : null;
   const half = gst ? gst / 2 : 0;
+  const fyStart = currentFyStart();
 
   const gstDetails = gst
     ? `
         <GSTDETAILS.LIST>
-          <APPLICABLEFROM>20180401</APPLICABLEFROM>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
           <TAXABILITY>Taxable</TAXABILITY>
           <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
           <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
@@ -912,7 +920,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
   const hsnDetails = el.sac_code
     ? `
         <HSNDETAILS.LIST>
-          <APPLICABLEFROM>20180401</APPLICABLEFROM>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
           <HSNCODE>${esc(el.sac_code)}</HSNCODE>
           <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
         </HSNDETAILS.LIST>`
@@ -920,7 +928,7 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster): string {
 
   const mailingDetails = `
         <LEDMAILINGDETAILS.LIST>
-          <APPLICABLEFROM>20240401</APPLICABLEFROM>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
           <MAILINGNAME>${esc(el.tally_ledger_name)}</MAILINGNAME>
         </LEDMAILINGDETAILS.LIST>`;
 
@@ -953,9 +961,7 @@ const UNIT_FORMAL_NAMES: Record<string, string> = {
 function buildUnitBlock(unitName: string): string {
   const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} Unit`;
   const gstRepUom = `${unitName.toUpperCase()}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
-  const now2 = new Date();
-  const fyYear2 = now2.getMonth() >= 3 ? now2.getFullYear() : now2.getFullYear() - 1;
-  const fyStart2 = `${fyYear2}0401`;
+  const fyStart2 = currentFyStart();
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
       <UNIT NAME="${esc(unitName)}" RESERVEDNAME="">
@@ -982,10 +988,7 @@ function buildUnitBlock(unitName: string): string {
 function buildStockItemBlock(s: StockItemMaster, gstPercent: number): string {
   const halfRate = gstPercent / 2;
   const unit = s.unit || 'Nos';
-  // Use current FY start (April 1 of the current or most recent April)
-  const now = new Date();
-  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  const fyStart = `${fyYear}0401`;
+  const fyStart = currentFyStart();
 
   const gstDetailsBlock = gstPercent > 0 ? `
         <GSTDETAILS.LIST>
