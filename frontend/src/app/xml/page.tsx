@@ -3,13 +3,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
+import { getPurchaseRegister, savePurchaseLedgerConfig, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger } from '@/lib/expenseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
-import { generateCombinedXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
+import { generateTallyXml, generateMastersXml, buildTallyPreview, suggestSupplier, suggestExpenseLedger, suggestStockItem, type PurchaseLedgerEntry, type PreviewRow } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
 import AppSidebar from '@/components/AppSidebar';
@@ -1234,39 +1234,61 @@ export default function XmlGeneratorPage() {
     document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
-  const handleDownloadCombinedXml = async () => {
+  const buildXmlInput = async () => {
+    const masters = await loadMasters(company!.id);
+    const fresh = await getCompany(company!.id);
+    return {
+      invoices, ...masters,
+      purchaseLedgers: validLedgers,
+      tallyCompanyName: company!.tally_company_name!,
+      voucherMode,
+      discountLedgerName: fresh.discount_ledger_name,
+      companyGstin: fresh.gstin ?? undefined,
+    };
+  };
+
+  const triggerDownload = (xml: string, filename: string) => {
+    const blob = new Blob([xml], { type: 'application/xml' });
+    setXmlBlob(blob);
+    setXmlFilename(filename);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadMastersXml = async () => {
+    const err = validateForXml();
+    if (err) { alert(err); return; }
+    setGeneratingXml(true);
+    try {
+      const input = await buildXmlInput();
+      const xml = generateMastersXml(input);
+      triggerDownload(xml, `${fileBase}_masters.xml`);
+    } catch (e: unknown) {
+      alert(`Error generating masters XML: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setGeneratingXml(false);
+    }
+  };
+
+  const handleDownloadVouchersXml = async () => {
     const err = validateForXml();
     if (err) { alert(err); return; }
     setGeneratingXml(true);
     setXmlBlob(null);
     try {
-      const masters = await loadMasters(company!.id);
-      const fresh = await getCompany(company!.id);
-      const output = generateCombinedXml({
-        invoices, ...masters,
-        purchaseLedgers: validLedgers,
-        tallyCompanyName: company!.tally_company_name!,
-        voucherMode: fresh.voucher_mode ?? 'accounting_only',
-        discountLedgerName: fresh.discount_ledger_name,
-        companyGstin: fresh.gstin ?? undefined,
-        companyState: fresh.gstin ? undefined : undefined,
-      });
-      const blob = new Blob([output.xml], { type: 'application/xml' });
-      setXmlBlob(blob);
-      setXmlFilename(`${fileBase}_tally_import.xml`);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${fileBase}_tally_import.xml`;
-      a.click();
-      URL.revokeObjectURL(url);
-
+      const input = await buildXmlInput();
+      const output = generateTallyXml(input);
+      triggerDownload(output.xml, `${fileBase}_vouchers.xml`);
       if (output.skippedInvoices.length > 0) {
         const msgs = output.skippedInvoices.map((s) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
         alert(`XML generated. ${output.includedCount} voucher(s) included.\n\n${output.skippedInvoices.length} skipped:\n${msgs}`);
       }
     } catch (e: unknown) {
-      alert(`Error generating XML: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Error generating vouchers XML: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setGeneratingXml(false);
     }
@@ -1353,11 +1375,11 @@ export default function XmlGeneratorPage() {
             <p className="text-xs font-semibold text-gray-600 mb-2">Voucher Mode</p>
             <div className="flex gap-3">
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" name="voucherMode" value="accounting_only" checked={voucherMode === 'accounting_only'} onChange={() => setVoucherMode('accounting_only')} className="accent-indigo-600" />
+                <input type="radio" name="voucherMode" value="accounting_only" checked={voucherMode === 'accounting_only'} onChange={() => { setVoucherMode('accounting_only'); if (company) updateCompany(company.id, { voucher_mode: 'accounting_only' }).catch(() => {}); }} className="accent-indigo-600" />
                 <span className="text-sm text-gray-700">Accounting only <span className="text-xs text-gray-400">(HSN-aggregated, no stock items)</span></span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" name="voucherMode" value="inventory" checked={voucherMode === 'inventory'} onChange={() => setVoucherMode('inventory')} className="accent-indigo-600" />
+                <input type="radio" name="voucherMode" value="inventory" checked={voucherMode === 'inventory'} onChange={() => { setVoucherMode('inventory'); if (company) updateCompany(company.id, { voucher_mode: 'inventory' }).catch(() => {}); }} className="accent-indigo-600" />
                 <span className="text-sm text-gray-700">Inventory <span className="text-xs text-gray-400">(item-level qty, rate, discount)</span></span>
               </label>
             </div>
@@ -1662,16 +1684,25 @@ export default function XmlGeneratorPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={handleDownloadCombinedXml}
+              onClick={handleDownloadMastersXml}
+              disabled={generatingXml || !company || invoices.length === 0 || hasSuggestedPending}
+              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              {generatingXml ? 'Generating…' : '1. Download Masters XML'}
+            </button>
+            <button
+              onClick={handleDownloadVouchersXml}
               disabled={generatingXml || !company || invoices.length === 0 || hasSuggestedPending}
               className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              {generatingXml ? 'Generating…' : 'Download Tally XML'}
+              {generatingXml ? 'Generating…' : '2. Download Vouchers XML'}
             </button>
-
             {xmlBlob && (
               <span className="text-xs text-gray-500 ml-1">
                 <span className="font-mono">{xmlFilename}</span>
