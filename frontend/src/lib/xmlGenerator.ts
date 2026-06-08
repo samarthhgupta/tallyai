@@ -1865,7 +1865,21 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
   const voucherBlocks: string[] = [];
   const isInventory = input.voucherMode === 'inventory';
 
-  for (const inv of input.invoices) {
+  // Deduplicate by invoice_number — if the same invoice was uploaded multiple
+  // times and accepted, only the first occurrence is exported to avoid Tally
+  // rejecting duplicate bill references (same New Ref = mismatch exception).
+  const seen = new Set<string>();
+  const invoices = input.invoices.filter((inv) => {
+    const key = inv.invoice_number.trim().toLowerCase();
+    if (seen.has(key)) {
+      skipped.push({ invoice_number: inv.invoice_number, reason: 'Duplicate invoice number — only first occurrence exported' });
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  for (const inv of invoices) {
     const result = isInventory ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
     if (!result.xml || result.skip) {
