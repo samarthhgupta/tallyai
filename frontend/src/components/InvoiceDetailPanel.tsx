@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { updateAcceptedInvoice, moveAcceptedToRejected, deleteInvoice, computeReadiness } from '@/lib/db';
 import type { StoredInvoice, LineItem, ExtraCharge } from '@/types/invoice';
-import { formatINR, calcLineAmount, buildHsnSummary } from '@/types/invoice';
+import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary } from '@/types/invoice';
 
 interface InvoiceDetailPanelProps {
   invoice: StoredInvoice;
@@ -205,6 +205,7 @@ export default function InvoiceDetailPanel({
   // Section open/closed state
   const [secHeader, setSecHeader] = useState(true);
   const [secLines, setSecLines] = useState(true);
+  const [secDiscount, setSecDiscount] = useState(true);
   const [secCharges, setSecCharges] = useState(true);
   const [secHsn, setSecHsn] = useState(true);
   const [secRecon, setSecRecon] = useState(true);
@@ -257,23 +258,35 @@ export default function InvoiceDetailPanel({
   // ── View computed values ──
   const lineItems: LineItem[] = invoice.line_items ?? [];
   const charges: ExtraCharge[] = invoice.charges ?? [];
-  const subtotal = lineItems.reduce((s, it) => s + calcLineAmount(it), 0);
-  const billDiscount = invoice.bill_discount_amount ?? 0;
-  const chargesTotal = charges.reduce((s, c) => s + c.amount, 0);
-  const chargesGST = charges.filter(c => c.gst_percent > 0).reduce((s, c) => s + c.amount * c.gst_percent / 100, 0);
-  const computedTotal = subtotal - billDiscount + chargesTotal + chargesGST + (invoice.cgst ?? 0) + (invoice.sgst ?? 0) + (invoice.igst ?? 0) + (invoice.round_off ?? 0);
+  const subtotal = lineItems.reduce((s, it) => s + calcLineAmount(it), 0);           // A
+  const billDiscount = invoice.bill_discount_amount ?? 0;                             // B
+  const taxableCharges = charges.filter(c => c.gst_percent > 0);
+  const nonGstCharges = charges.filter(c => c.gst_percent === 0);
+  const taxableChargesTotal = taxableCharges.reduce((s, c) => s + c.amount, 0);      // C
+  const nonGstChargesTotal = nonGstCharges.reduce((s, c) => s + c.amount, 0);        // D
+  const chargesTotal = taxableChargesTotal + nonGstChargesTotal; void chargesTotal;
+  const netTaxable = subtotal - billDiscount + taxableChargesTotal;                   // A - B + C
+  // Full tax summary includes HSN rows (line items) + SAC rows (charges)
+  const fullTaxRows = buildFullTaxSummary(lineItems, charges, invoice.tax_type, billDiscount);
+  const computedCGST = fullTaxRows.reduce((s, r) => s + r.cgst, 0);
+  const computedSGST = fullTaxRows.reduce((s, r) => s + r.sgst, 0);
+  const computedIGST = fullTaxRows.reduce((s, r) => s + r.igst, 0);
+  const computedTotal = netTaxable + nonGstChargesTotal + computedCGST + computedSGST + computedIGST + (invoice.round_off ?? 0);
   const reconDiff = (invoice.total ?? 0) - computedTotal;
-  const hsnRows = buildHsnSummary(lineItems, invoice.tax_type, billDiscount);
+  void buildHsnSummary; // still exported for InvoiceCard
 
   // ── Edit computed values (reactive) ──
   const editSubtotal = editLineItems.reduce((s, it) => s + calcLineAmount(it), 0);
+  const editFullTaxRows = buildFullTaxSummary(editLineItems, editCharges, editTaxType, editBillDiscount);
   const editHsnRows = buildHsnSummary(editLineItems, editTaxType, editBillDiscount);
-  const editCGST = editTaxType === 'cgst_sgst' ? editHsnRows.reduce((s, r) => s + r.cgst, 0) : 0;
-  const editSGST = editTaxType === 'cgst_sgst' ? editHsnRows.reduce((s, r) => s + r.sgst, 0) : 0;
-  const editIGST = editTaxType === 'igst' ? editHsnRows.reduce((s, r) => s + r.igst, 0) : 0;
-  const editChargesTotal = editCharges.reduce((s, c) => s + c.amount, 0);
-  const editChargesGST = editCharges.filter(c => c.gst_percent > 0).reduce((s, c) => s + c.amount * c.gst_percent / 100, 0);
-  const editComputedTotal = editSubtotal - editBillDiscount + editChargesTotal + editChargesGST + editCGST + editSGST + editIGST + editRoundOff;
+  const editCGST = editFullTaxRows.reduce((s, r) => s + r.cgst, 0);
+  const editSGST = editFullTaxRows.reduce((s, r) => s + r.sgst, 0);
+  const editIGST = editFullTaxRows.reduce((s, r) => s + r.igst, 0);
+  const editTaxableChargesTotal = editCharges.filter(c => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+  const editNonGstChargesTotal = editCharges.filter(c => c.gst_percent === 0).reduce((s, c) => s + c.amount, 0);
+  const editChargesTotal = editTaxableChargesTotal + editNonGstChargesTotal; void editChargesTotal;
+  const editNetTaxable = editSubtotal - editBillDiscount + editTaxableChargesTotal;
+  const editComputedTotal = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST + editRoundOff;
 
   // ── Handlers ──
 
@@ -299,7 +312,7 @@ export default function InvoiceDetailPanel({
         igst: editIGST,
         total: editComputedTotal,
         readiness: liveReadiness,
-        readiness_flags: liveFlags,
+        readiness_flags: liveFlags as string[],
       };
       await updateAcceptedInvoice(invoice.id, patch);
       onSaved({ ...invoice, ...patch } as StoredInvoice);
@@ -438,7 +451,7 @@ export default function InvoiceDetailPanel({
           {mode === 'view' && (
             <div className="p-4 space-y-3">
 
-              {/* Invoice Header card */}
+              {/* 1. Invoice Header */}
               <Section title="Invoice Header" open={secHeader} onToggle={() => setSecHeader(v => !v)}>
                 <div className="px-4 py-3 grid grid-cols-2 gap-x-8 gap-y-3">
                   <InfoField label="Invoice Date" value={invoice.invoice_date || '—'} />
@@ -457,8 +470,8 @@ export default function InvoiceDetailPanel({
                 </div>
               </Section>
 
-              {/* Goods / Services */}
-              <Section title="Goods / Services" badge={`${lineItems.length} items`} open={secLines} onToggle={() => setSecLines(v => !v)}>
+              {/* 2. Goods / Services (A) */}
+              <Section title="Goods / Services" badge={`${lineItems.length} item${lineItems.length !== 1 ? 's' : ''}`} open={secLines} onToggle={() => setSecLines(v => !v)}>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
@@ -491,7 +504,7 @@ export default function InvoiceDetailPanel({
                     </tbody>
                     <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                       <tr>
-                        <td colSpan={8} className="px-3 py-2.5 text-sm font-semibold text-gray-600 text-right">Subtotal</td>
+                        <td colSpan={8} className="px-3 py-2.5 text-sm font-semibold text-gray-500 text-right">Subtotal (A)</td>
                         <td className="px-3 py-2.5 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(subtotal)}</td>
                       </tr>
                     </tfoot>
@@ -499,59 +512,99 @@ export default function InvoiceDetailPanel({
                 </div>
               </Section>
 
-              {/* 3. Additional Charges (view) — always shown */}
+              {/* 3. Bill Discount (B) */}
+              <Section title="Bill Discount" badge={billDiscount > 0 ? `−₹${formatINR(billDiscount)}` : 'none'} open={secDiscount} onToggle={() => setSecDiscount(v => !v)}>
+                {billDiscount <= 0 ? (
+                  <div className="px-4 py-4 text-sm text-gray-400 italic">No bill discount on this invoice.</div>
+                ) : (
+                  <>
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="text-left px-4 py-2 text-xs font-bold text-gray-500">Description</th>
+                          <th className="text-right px-4 py-2 text-xs font-bold text-gray-500">Discount Amount (B)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="px-4 py-2.5 text-sm text-gray-700">Bill Discount</td>
+                          <td className="px-4 py-2.5 text-sm text-right tabular-nums font-semibold text-red-600">−₹{formatINR(billDiscount)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex justify-between text-sm">
+                      <span className="font-semibold text-gray-600">Net Goods Taxable (A − B)</span>
+                      <span className="tabular-nums font-bold text-gray-900">₹{formatINR(subtotal - billDiscount)}</span>
+                    </div>
+                  </>
+                )}
+              </Section>
+
+              {/* 4. Additional Charges (C + D) */}
               <Section
                 title="Additional Charges"
-                badge={charges.length > 0 ? `${charges.length} charge${charges.length !== 1 ? 's' : ''}` : undefined}
+                badge={charges.length > 0 ? `${charges.length} charge${charges.length !== 1 ? 's' : ''}` : 'none'}
                 open={secCharges}
                 onToggle={() => setSecCharges(v => !v)}
               >
                 {charges.length === 0 ? (
                   <div className="px-4 py-4 text-sm text-gray-400 italic">No additional charges on this invoice.</div>
                 ) : (
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Description</th>
-                        <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">SAC / HSN</th>
-                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">GST%</th>
-                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">Amount</th>
-                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">GST</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {charges.map((c, i) => (
-                        <tr key={i} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 text-sm text-gray-700">{c.description || '—'}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-gray-500">{c.sac ?? c.hsn ?? '—'}</td>
-                          <td className="px-3 py-2 text-sm text-right text-gray-600">{c.gst_percent > 0 ? `${c.gst_percent}%` : '—'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-medium text-gray-800">{formatINR(c.amount)}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums text-gray-600">
-                            {c.gst_percent > 0 ? formatINR(c.amount * c.gst_percent / 100) : '—'}
-                          </td>
+                  <>
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Description</th>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">SAC</th>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Tax Type</th>
+                          <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">GST%</th>
+                          <th className="text-right px-3 py-2 text-xs font-bold text-gray-500">Amount</th>
                         </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="border-t-2 border-gray-200 bg-gray-50">
-                      <tr>
-                        <td colSpan={3} className="px-3 py-2 text-sm font-semibold text-gray-600 text-right">Charges Total</td>
-                        <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(chargesTotal)}</td>
-                        <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{chargesGST > 0 ? formatINR(chargesGST) : '—'}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {charges.map((c, i) => (
+                          <tr key={i} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 text-sm text-gray-700">{c.description || '—'}</td>
+                            <td className="px-3 py-2 text-sm font-mono text-gray-500">{(c.sac ?? c.hsn ?? '') || <span className="text-gray-300">—</span>}</td>
+                            <td className="px-3 py-2 text-sm">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${c.gst_percent > 0 ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                                {c.gst_percent > 0 ? 'Taxable' : 'Non-GST'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-gray-600">{c.gst_percent > 0 ? `${c.gst_percent}%` : '0%'}</td>
+                            <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-gray-800">₹{formatINR(c.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {/* Subtotal rows for C and D */}
+                    <div className="border-t border-gray-200 divide-y divide-gray-100">
+                      {taxableChargesTotal > 0 && (
+                        <div className="px-4 py-2 bg-gray-50 flex justify-between text-xs font-semibold text-gray-500">
+                          <span>Taxable Additional Charges (C)</span>
+                          <span className="tabular-nums">₹{formatINR(taxableChargesTotal)}</span>
+                        </div>
+                      )}
+                      {nonGstChargesTotal > 0 && (
+                        <div className="px-4 py-2 bg-gray-50 flex justify-between text-xs font-semibold text-gray-500">
+                          <span>Non-GST Charges (D)</span>
+                          <span className="tabular-nums">₹{formatINR(nonGstChargesTotal)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </Section>
 
-              {/* HSN Tax Summary */}
-              {hsnRows.length > 0 && (
-                <Section title="Tax Summary (HSN)" open={secHsn} onToggle={() => setSecHsn(v => !v)}>
+              {/* 5. Tax Summary (HSN + SAC) */}
+              {fullTaxRows.length > 0 && (
+                <Section title="Tax Summary (HSN / SAC)" open={secHsn} onToggle={() => setSecHsn(v => !v)}>
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
                           <th className="text-left px-3 py-2.5 text-xs font-bold text-gray-500">#</th>
-                          <th className="text-left px-3 py-2.5 text-xs font-bold text-gray-500">HSN</th>
+                          <th className="text-left px-3 py-2.5 text-xs font-bold text-gray-500">HSN / SAC</th>
                           <th className="text-right px-3 py-2.5 text-xs font-bold text-gray-500">GST%</th>
                           <th className="text-right px-3 py-2.5 text-xs font-bold text-gray-500">Taxable</th>
                           <th className="text-right px-3 py-2.5 text-xs font-bold text-gray-500">CGST</th>
@@ -560,33 +613,46 @@ export default function InvoiceDetailPanel({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {hsnRows.map((r, i) => (
+                        {fullTaxRows.map((r, i) => (
                           <tr key={i} className="hover:bg-gray-50">
                             <td className="px-3 py-2.5 text-sm text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-800">{r.hsn}</td>
-                            <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent}%</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">{formatINR(r.taxable)}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.cgst > 0 ? formatINR(r.cgst) : '—'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.sgst > 0 ? formatINR(r.sgst) : '—'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.igst > 0 ? formatINR(r.igst) : '—'}</td>
+                            <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : <span className="text-gray-400">—</span>}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">₹{formatINR(r.taxable)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.igst > 0 ? `₹${formatINR(r.igst)}` : '₹0.00'}</td>
                           </tr>
                         ))}
                       </tbody>
+                      <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+                        <tr>
+                          <td colSpan={3} className="px-3 py-2 text-xs font-bold text-gray-500 uppercase">Total</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">₹{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedCGST > 0 ? `₹${formatINR(computedCGST)}` : '—'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedSGST > 0 ? `₹${formatINR(computedSGST)}` : '—'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedIGST > 0 ? `₹${formatINR(computedIGST)}` : '—'}</td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </Section>
               )}
 
-              {/* Invoice Reconciliation */}
+              {/* 6. Invoice Reconciliation — A/B/C/D convention */}
               <Section title="Invoice Reconciliation" open={secRecon} onToggle={() => setSecRecon(v => !v)}>
                 <div className="px-4 py-3 space-y-1.5">
-                  <ReconRow label="Subtotal (line items)" value={`₹${formatINR(subtotal)}`} />
-                  {billDiscount > 0 && <ReconRow label="Bill Discount (−)" value={`−₹${formatINR(billDiscount)}`} valueClass="text-red-600" />}
-                  {chargesTotal > 0 && <ReconRow label="Additional Charges (+)" value={`+₹${formatINR(chargesTotal)}`} />}
-                  {chargesGST > 0 && <ReconRow label="Charges GST (+)" value={`+₹${formatINR(chargesGST)}`} />}
-                  {(invoice.cgst ?? 0) > 0 && <ReconRow label="CGST (+)" value={`+₹${formatINR(invoice.cgst ?? 0)}`} />}
-                  {(invoice.sgst ?? 0) > 0 && <ReconRow label="SGST (+)" value={`+₹${formatINR(invoice.sgst ?? 0)}`} />}
-                  {(invoice.igst ?? 0) > 0 && <ReconRow label="IGST (+)" value={`+₹${formatINR(invoice.igst ?? 0)}`} />}
+                  <ReconRow label="Subtotal — Line Items (A)" value={`₹${formatINR(subtotal)}`} />
+                  {billDiscount > 0 && <ReconRow label="Bill Discount (−B)" value={`−₹${formatINR(billDiscount)}`} valueClass="text-red-600" />}
+                  {taxableChargesTotal > 0 && <ReconRow label="Taxable Additional Charges (+C)" value={`+₹${formatINR(taxableChargesTotal)}`} />}
+                  <div className="flex justify-between items-center text-sm border-t border-dashed border-gray-200 pt-2 font-semibold">
+                    <span className="text-gray-700">Net Taxable Value {billDiscount > 0 && taxableChargesTotal > 0 ? '(A − B + C)' : billDiscount > 0 ? '(A − B)' : taxableChargesTotal > 0 ? '(A + C)' : '(A)'}</span>
+                    <span className="tabular-nums text-gray-900">₹{formatINR(netTaxable)}</span>
+                  </div>
+                  {nonGstChargesTotal > 0 && <ReconRow label="Non-GST Charges (+D)" value={`+₹${formatINR(nonGstChargesTotal)}`} />}
+                  {computedCGST > 0 && <ReconRow label="CGST (+)" value={`+₹${formatINR(computedCGST)}`} />}
+                  {computedSGST > 0 && <ReconRow label="SGST (+)" value={`+₹${formatINR(computedSGST)}`} />}
+                  {computedIGST > 0 && <ReconRow label="IGST (+)" value={`+₹${formatINR(computedIGST)}`} />}
                   {(invoice.round_off ?? 0) !== 0 && (
                     <ReconRow
                       label="Round Off"
@@ -594,7 +660,7 @@ export default function InvoiceDetailPanel({
                     />
                   )}
                   <div className="border-t border-gray-200 pt-2 space-y-1.5">
-                    <ReconRow label="Computed Total" value={`₹${formatINR(computedTotal)}`} bold />
+                    <ReconRow label="Final Invoice Value (computed)" value={`₹${formatINR(computedTotal)}`} bold />
                     <ReconRow label="Invoice Total (stored)" value={`₹${formatINR(invoice.total ?? 0)}`} />
                   </div>
                   <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm font-semibold ${Math.abs(reconDiff) > 0.5 ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
@@ -743,39 +809,51 @@ export default function InvoiceDetailPanel({
                   <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Additional Charges</span>
                 </div>
                 {editCharges.length > 0 && (
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Description</th>
-                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500 w-20">GST%</th>
-                        <th className="text-right px-3 py-2 text-xs font-bold text-gray-500 w-32">Amount (₹)</th>
-                        <th className="px-3 py-2 w-8" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {editCharges.map((c, i) => (
-                        <tr key={i} className="hover:bg-gray-50">
-                          <td className="px-3 py-2">
-                            <input type="text" value={c.description} onChange={e => updCh(i, 'description', e.target.value)} placeholder="e.g. Freight" className={tblInputCls} />
-                          </td>
-                          <td className="px-3 py-2">
-                            <input type="number" value={c.gst_percent} onChange={e => updCh(i, 'gst_percent', parseFloat(e.target.value) || 0)} className={`${tblInputCls} text-right`} />
-                          </td>
-                          <td className="px-3 py-2">
-                            <input type="number" value={c.amount} onChange={e => updCh(i, 'amount', parseFloat(e.target.value) || 0)} className={`${tblInputCls} text-right`} />
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            <button onClick={() => setEditCharges(prev => prev.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-500">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                            </button>
-                          </td>
+                  <div className="overflow-x-auto">
+                    <table className="w-full" style={{ minWidth: '620px' }}>
+                      <thead className="bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500">Description</th>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500 w-28">SAC</th>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-gray-500 w-24">Tax Type</th>
+                          <th className="text-right px-3 py-2 text-xs font-bold text-gray-500 w-20">GST%</th>
+                          <th className="text-right px-3 py-2 text-xs font-bold text-gray-500 w-32">Amount (₹)</th>
+                          <th className="px-3 py-2 w-8" />
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {editCharges.map((c, i) => (
+                          <tr key={i} className="hover:bg-gray-50">
+                            <td className="px-3 py-2">
+                              <input type="text" value={c.description} onChange={e => updCh(i, 'description', e.target.value)} placeholder="e.g. Freight" className={tblInputCls} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input type="text" value={c.sac ?? ''} onChange={e => updCh(i, 'sac', e.target.value)} placeholder="9965" className={`${tblInputCls} font-mono`} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-semibold ${c.gst_percent > 0 ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                                {c.gst_percent > 0 ? 'Taxable' : 'Non-GST'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input type="number" value={c.gst_percent} onChange={e => updCh(i, 'gst_percent', parseFloat(e.target.value) || 0)} className={`${tblInputCls} text-right`} />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input type="number" value={c.amount} onChange={e => updCh(i, 'amount', parseFloat(e.target.value) || 0)} className={`${tblInputCls} text-right`} />
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <button onClick={() => setEditCharges(prev => prev.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-500">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
                 <div className="px-4 py-2.5 border-t border-gray-100">
-                  <button onClick={() => setEditCharges(prev => [...prev, { description: '', amount: 0, gst_percent: 0 }])}
+                  <button onClick={() => setEditCharges(prev => [...prev, { description: '', amount: 0, gst_percent: 0, sac: '' }])}
                     className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5">
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                     Add Charge
@@ -783,17 +861,17 @@ export default function InvoiceDetailPanel({
                 </div>
               </div>
 
-              {/* Live HSN Summary */}
-              {editHsnRows.length > 0 && (
+              {/* Live Tax Summary (HSN + SAC) */}
+              {editFullTaxRows.length > 0 && (
                 <div className="border border-indigo-200 rounded-xl bg-indigo-50 overflow-hidden">
                   <div className="px-4 py-2.5 bg-indigo-100 border-b border-indigo-200">
-                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">HSN Summary (Live)</span>
+                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Tax Summary — HSN / SAC (Live)</span>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead className="border-b border-indigo-200">
                         <tr>
-                          <th className="text-left px-3 py-2 text-xs font-bold text-indigo-500">HSN</th>
+                          <th className="text-left px-3 py-2 text-xs font-bold text-indigo-500">HSN / SAC</th>
                           <th className="text-right px-3 py-2 text-xs font-bold text-indigo-500">GST%</th>
                           <th className="text-right px-3 py-2 text-xs font-bold text-indigo-500">Taxable</th>
                           <th className="text-right px-3 py-2 text-xs font-bold text-indigo-500">CGST</th>
@@ -802,14 +880,14 @@ export default function InvoiceDetailPanel({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-indigo-100">
-                        {editHsnRows.map((r, i) => (
+                        {editFullTaxRows.map((r, i) => (
                           <tr key={i}>
                             <td className="px-3 py-2 text-sm font-mono font-medium text-indigo-800">{r.hsn}</td>
-                            <td className="px-3 py-2 text-sm text-right text-indigo-700">{r.gst_percent}%</td>
-                            <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-indigo-900">{formatINR(r.taxable)}</td>
-                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.cgst > 0 ? formatINR(r.cgst) : '—'}</td>
-                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.sgst > 0 ? formatINR(r.sgst) : '—'}</td>
-                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.igst > 0 ? formatINR(r.igst) : '—'}</td>
+                            <td className="px-3 py-2 text-sm text-right text-indigo-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '—'}</td>
+                            <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-indigo-900">₹{formatINR(r.taxable)}</td>
+                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.igst > 0 ? `₹${formatINR(r.igst)}` : '₹0.00'}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -822,15 +900,22 @@ export default function InvoiceDetailPanel({
               <div className="border border-gray-200 rounded-xl bg-white p-4">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Live Reconciliation</p>
                 <div className="space-y-1.5 mb-4">
-                  <ReconRow label="Line Item Subtotal" value={`₹${formatINR(editSubtotal)}`} />
-                  {editBillDiscount > 0 && <ReconRow label="Bill Discount (−)" value={`−₹${formatINR(editBillDiscount)}`} valueClass="text-red-600" />}
-                  {editChargesTotal > 0 && <ReconRow label="Additional Charges (+)" value={`+₹${formatINR(editChargesTotal)}`} />}
+                  <ReconRow label="Subtotal — Line Items (A)" value={`₹${formatINR(editSubtotal)}`} />
+                  {editBillDiscount > 0 && <ReconRow label="Bill Discount (−B)" value={`−₹${formatINR(editBillDiscount)}`} valueClass="text-red-600" />}
+                  {editTaxableChargesTotal > 0 && <ReconRow label="Taxable Additional Charges (+C)" value={`+₹${formatINR(editTaxableChargesTotal)}`} />}
+                  <div className="flex justify-between items-center text-sm border-t border-dashed border-gray-200 pt-2 font-semibold">
+                    <span className="text-gray-700">
+                      Net Taxable Value {editBillDiscount > 0 && editTaxableChargesTotal > 0 ? '(A − B + C)' : editBillDiscount > 0 ? '(A − B)' : editTaxableChargesTotal > 0 ? '(A + C)' : '(A)'}
+                    </span>
+                    <span className="tabular-nums text-gray-900">₹{formatINR(editNetTaxable)}</span>
+                  </div>
+                  {editNonGstChargesTotal > 0 && <ReconRow label="Non-GST Charges (+D)" value={`+₹${formatINR(editNonGstChargesTotal)}`} />}
                   {editCGST > 0 && <ReconRow label="CGST (+)" value={`+₹${formatINR(editCGST)}`} />}
                   {editSGST > 0 && <ReconRow label="SGST (+)" value={`+₹${formatINR(editSGST)}`} />}
                   {editIGST > 0 && <ReconRow label="IGST (+)" value={`+₹${formatINR(editIGST)}`} />}
                   {editRoundOff !== 0 && <ReconRow label="Round Off" value={`${editRoundOff >= 0 ? '+' : '−'}₹${formatINR(Math.abs(editRoundOff))}`} />}
                   <div className="border-t border-gray-200 pt-2 space-y-1.5">
-                    <ReconRow label="Computed Total" value={`₹${formatINR(editComputedTotal)}`} bold />
+                    <ReconRow label="Final Invoice Value (computed)" value={`₹${formatINR(editComputedTotal)}`} bold />
                     <ReconRow label="Original Total" value={`₹${formatINR(invoice.total ?? 0)}`} />
                   </div>
                   <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm font-semibold ${Math.abs(editComputedTotal - (invoice.total ?? 0)) > 0.5 ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
