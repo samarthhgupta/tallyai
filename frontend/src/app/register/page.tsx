@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice } from '@/lib/db';
+import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice, rejectInvoices } from '@/lib/db';
 import type { RejectedRecord } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
@@ -381,6 +381,12 @@ export default function PurchaseRegisterPage() {
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
   const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
 
+  // Multi-select
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [showBulkRejectModal, setShowBulkRejectModal] = useState(false);
+  const [bulkRejectReason, setBulkRejectReason] = useState('');
+
   // Detail panel
   const [detailInvoice, setDetailInvoice] = useState<StoredInvoice | null>(null);
 
@@ -520,6 +526,74 @@ export default function PurchaseRegisterPage() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === sortedInvoices.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(sortedInvoices.map((i) => i.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (!confirm(`Delete ${ids.length} selected invoice${ids.length !== 1 ? 's' : ''}?\n\nThis cannot be undone.`)) return;
+    setBulkActionLoading(true);
+    try {
+      await Promise.all(ids.map((id) => deleteInvoice(id)));
+      setInvoices((prev) => prev.filter((inv) => !selectedIds.has(inv.id)));
+      setSelectedIds(new Set());
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete invoices.');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkReject = async () => {
+    const ids = Array.from(selectedIds);
+    setBulkActionLoading(true);
+    try {
+      await rejectInvoices(ids, bulkRejectReason.trim() || undefined);
+      setInvoices((prev) => prev.filter((inv) => !selectedIds.has(inv.id)));
+      setSelectedIds(new Set());
+      setShowBulkRejectModal(false);
+      setBulkRejectReason('');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to void invoices.');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleBulkExport = () => {
+    const selected = sortedInvoices.filter((inv) => selectedIds.has(inv.id));
+    const rows = selected.map((inv, idx) => {
+      const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
+      const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+      const taxable = subtotal + gstCharges;
+      const itcLabel: Record<string, string> = { eligible: 'Eligible', reviewed_eligible: 'Reviewed', potentially_ineligible: 'At Risk', not_applicable: 'N/A' };
+      return {
+        '#': idx + 1, 'Invoice #': inv.invoice_number ?? '', Vendor: inv.vendor_name ?? '',
+        GSTIN: inv.vendor_gstin ?? '', Date: inv.invoice_date ?? '', Period: inv.period_month ?? '',
+        'Taxable (₹)': taxable, 'CGST (₹)': inv.cgst ?? 0, 'SGST (₹)': inv.sgst ?? 0,
+        'IGST (₹)': inv.igst ?? 0, 'Total (₹)': inv.total ?? 0, 'ITC Status': itcLabel[inv.itc_status ?? ''] ?? '',
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{ wch: 4 }, { wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Selection');
+    XLSX.writeFile(wb, `Selected_Invoices_${selected.length}.xlsx`);
+  };
+
   void getFYList;
 
   return (
@@ -655,6 +729,36 @@ export default function PurchaseRegisterPage() {
         </div>
       )}
 
+      {/* ── Bulk Reject Modal ── */}
+      {showBulkRejectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+            <h3 className="font-semibold text-gray-900 mb-1">Void {selectedIds.size} invoice{selectedIds.size !== 1 ? 's' : ''}?</h3>
+            <p className="text-sm text-gray-500 mb-4">They will be moved to Voided Invoices and removed from the register.</p>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
+            <input
+              type="text"
+              value={bulkRejectReason}
+              onChange={(e) => setBulkRejectReason(e.target.value)}
+              placeholder="e.g. Duplicate, wrong vendor, etc."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 mb-4"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleBulkReject}
+                disabled={bulkActionLoading}
+                className="flex-1 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg"
+              >
+                {bulkActionLoading ? 'Voiding…' : 'Void invoices'}
+              </button>
+              <button onClick={() => { setShowBulkRejectModal(false); setBulkRejectReason(''); }} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Main content ── */}
       <main className="ml-60 flex-1 px-6 py-8 min-w-0">
 
@@ -698,6 +802,46 @@ export default function PurchaseRegisterPage() {
             </button>
           </div>
         </div>
+
+        {/* Bulk action bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 mb-4 px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-xl">
+            <span className="text-sm font-medium text-indigo-800">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-2 ml-2">
+              <button
+                onClick={handleBulkExport}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Export Excel
+              </button>
+              <button
+                onClick={() => setShowBulkRejectModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-amber-300 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1.036 7.255A2 2 0 008.028 17h7.944a2 2 0 001.992-1.745L19 8" />
+                </svg>
+                Void
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkActionLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-300 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                {bulkActionLoading ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+              Clear selection
+            </button>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="bg-white border border-gray-200 rounded-xl px-5 py-3.5 mb-5 flex flex-wrap items-end gap-4">
@@ -815,6 +959,15 @@ export default function PurchaseRegisterPage() {
             <table className="w-full text-xs">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
+                  <th className="px-3 py-2.5 w-8">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.size === sortedInvoices.length && sortedInvoices.length > 0}
+                      ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < sortedInvoices.length; }}
+                      onChange={toggleSelectAll}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer"
+                    />
+                  </th>
                   <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-7">#</th>
                   {([
                     { key: 'invoice_number', label: 'Invoice #', align: 'left' },
@@ -854,7 +1007,16 @@ export default function PurchaseRegisterPage() {
                   const taxableValue = subtotal + gstCharges;
 
                   return (
-                    <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={inv.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(inv.id) ? 'bg-indigo-50/50' : ''}`}>
+                      <td className="px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(inv.id)}
+                          onChange={() => toggleSelect(inv.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-2.5 text-gray-400 tabular-nums">{idx + 1}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         <button
@@ -925,7 +1087,7 @@ export default function PurchaseRegisterPage() {
               {/* Totals footer */}
               <tfoot className="bg-gray-50 border-t-2 border-gray-200">
                 <tr>
-                  <td colSpan={6} className="px-3 py-2.5 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-gray-600 uppercase tracking-wide">
                     Total — {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">{formatINR(totalTaxable)}</td>
