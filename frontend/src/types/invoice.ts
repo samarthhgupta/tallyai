@@ -170,3 +170,28 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
 
   return Object.values(map);
 }
+
+// Full tax summary including both HSN (line items) and SAC (charges) rows.
+// Charges with gst_percent=0 but a SAC code are included with zero GST.
+export function buildFullTaxSummary(
+  items: LineItem[],
+  charges: ExtraCharge[],
+  taxType: 'cgst_sgst' | 'igst',
+  billDiscount = 0,
+): HsnRow[] {
+  const rows = buildHsnSummary(items, taxType, billDiscount);
+  for (const c of charges) {
+    const code = (c.sac ?? c.hsn ?? '').trim();
+    if (!code) continue;
+    const tax = c.amount * c.gst_percent / 100;
+    rows.push({
+      hsn: code,
+      gst_percent: c.gst_percent,
+      taxable: c.amount,
+      cgst: taxType === 'cgst_sgst' ? tax / 2 : 0,
+      sgst: taxType === 'cgst_sgst' ? tax / 2 : 0,
+      igst: taxType === 'igst' ? tax : 0,
+    });
+  }
+  return rows;
+}
