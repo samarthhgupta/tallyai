@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { updateAcceptedInvoice, moveAcceptedToRejected, deleteInvoice, computeReadiness } from '@/lib/db';
 import type { StoredInvoice, LineItem, ExtraCharge } from '@/types/invoice';
 import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary } from '@/types/invoice';
+import { resolveChargeSac } from '@/lib/expenseLedgers';
 
 interface InvoiceDetailPanelProps {
   invoice: StoredInvoice;
@@ -222,7 +223,9 @@ export default function InvoiceDetailPanel({
   const [editRoundOff, setEditRoundOff] = useState(invoice.round_off ?? 0);
   const [editBillDiscount, setEditBillDiscount] = useState(invoice.bill_discount_amount ?? 0);
   const [editLineItems, setEditLineItems] = useState<LineItem[]>((invoice.line_items ?? []).map((it) => ({ ...it })));
-  const [editCharges, setEditCharges] = useState<ExtraCharge[]>((invoice.charges ?? []).map((c) => ({ ...c })));
+  const [editCharges, setEditCharges] = useState<ExtraCharge[]>(
+    (invoice.charges ?? []).map((c) => ({ ...c, sac: resolveChargeSac(c.description, c.sac) })),
+  );
   const [liveReadiness, setLiveReadiness] = useState(invoice.readiness);
   const [liveFlags, setLiveFlags] = useState<string[]>(invoice.readiness_flags ?? []);
 
@@ -257,7 +260,11 @@ export default function InvoiceDetailPanel({
 
   // ── View computed values ──
   const lineItems: LineItem[] = invoice.line_items ?? [];
-  const charges: ExtraCharge[] = invoice.charges ?? [];
+  // Enrich stored charges with SAC from defaults when SAC is missing
+  const charges: ExtraCharge[] = (invoice.charges ?? []).map((c) => ({
+    ...c,
+    sac: resolveChargeSac(c.description, c.sac),
+  }));
   const subtotal = lineItems.reduce((s, it) => s + calcLineAmount(it), 0);           // A
   const billDiscount = invoice.bill_discount_amount ?? 0;                             // B
   const taxableCharges = charges.filter(c => c.gst_percent > 0);
@@ -361,7 +368,7 @@ export default function InvoiceDetailPanel({
     setEditRoundOff(invoice.round_off ?? 0);
     setEditBillDiscount(invoice.bill_discount_amount ?? 0);
     setEditLineItems((invoice.line_items ?? []).map((it) => ({ ...it })));
-    setEditCharges((invoice.charges ?? []).map((c) => ({ ...c })));
+    setEditCharges((invoice.charges ?? []).map((c) => ({ ...c, sac: resolveChargeSac(c.description, c.sac) })));
     setSaveError('');
     setMode('view');
   }, [invoice]);
