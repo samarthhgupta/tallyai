@@ -176,7 +176,7 @@ export default function ExpenseLedgersPage() {
       const gstCol = colIdx(['gst %', 'gst percent', 'gst rate', 'gst']);
 
       if (ledgerCol === -1) {
-        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, ledger: '—', reason: 'Could not find Tally Ledger Name column' }] });
+        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, ledger: '-', reason: 'Could not find Tally Ledger Name column' }] });
         return;
       }
 
@@ -196,7 +196,7 @@ export default function ExpenseLedgersPage() {
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
-      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, ledger: '—', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
+      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, ledger: '-', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -287,7 +287,7 @@ export default function ExpenseLedgersPage() {
           {/* ── Quick-add suggestions ── */}
           {company?.id && !loading && suggestedExpenses.length > 0 && tab === 'list' && !showForm && (
             <div className="mb-5 bg-white border border-gray-200 rounded-xl px-4 py-3">
-              <p className="text-xs font-medium text-gray-500 mb-2">Common expense ledgers not yet added — click to add:</p>
+              <p className="text-xs font-medium text-gray-500 mb-2">Common expense ledgers not yet added - click to add:</p>
               <div className="flex flex-wrap gap-2">
                 {suggestedExpenses.map((exp) => (
                   <button key={exp} onClick={() => openAdd(exp)}
@@ -312,11 +312,11 @@ export default function ExpenseLedgersPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns:</p>
-                <p>• <strong>Tally Ledger Name</strong> — exact expense ledger name as in Tally (required)</p>
-                <p>• <strong>Expense Keyword</strong> — the word/phrase on invoices that maps to this ledger (optional)</p>
-                <p>• <strong>SAC Code</strong> — optional SAC/HSN code for this expense type</p>
-                <p>• <strong>GST %</strong> — optional total GST rate (e.g. 18); used in Tally GST details</p>
-                <p className="mt-1 text-amber-700">Ledger names are stored exactly as in your file — no changes are made.</p>
+                <p>• <strong>Tally Ledger Name</strong> - exact expense ledger name as in Tally (required)</p>
+                <p>• <strong>Expense Keyword</strong> - the word/phrase on invoices that maps to this ledger (optional)</p>
+                <p>• <strong>SAC Code</strong> - optional SAC/HSN code for this expense type</p>
+                <p>• <strong>GST %</strong> - optional total GST rate (e.g. 18); used in Tally GST details</p>
+                <p className="mt-1 text-amber-700">Ledger names are stored exactly as in your file - no changes are made.</p>
               </div>
 
               <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
@@ -341,7 +341,7 @@ export default function ExpenseLedgersPage() {
                       <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.ledger}</span> — {e.reason}</p>
+                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.ledger}</span> - {e.reason}</p>
                         ))}
                       </div>
                     </div>
@@ -364,7 +364,7 @@ export default function ExpenseLedgersPage() {
                     onChange={(e) => setForm({ ...form, tally_ledger_name: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. Freight Charges" />
-                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered — must match Tally.</p>
+                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered - must match Tally.</p>
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -438,11 +438,11 @@ export default function ExpenseLedgersPage() {
                       <td className="px-4 py-3 text-xs text-gray-500">
                         {l.expense_keyword
                           ? <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">{l.expense_keyword}</span>
-                          : <span className="italic text-gray-300">—</span>
+                          : <span className="italic text-gray-300">-</span>
                         }
                       </td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.sac_code || '—'}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.gst_percent != null ? `${l.gst_percent}%` : '—'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.sac_code || '-'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{l.gst_percent != null ? `${l.gst_percent}%` : '-'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
                           <button onClick={() => openEdit(l)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>

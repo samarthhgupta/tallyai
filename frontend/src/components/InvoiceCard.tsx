@@ -499,7 +499,7 @@ export function InvoiceCard({
           {company && <CompanyMatchBadge match={matchResult} />}
           {matchResult === 'mismatch' && (
             <span className="text-xs text-red-600">
-              Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; — not {company?.name}
+              Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; - not {company?.name}
             </span>
           )}
           {needsReview && !editMode && (
@@ -626,7 +626,7 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 1 — Invoice Summary                                          */}
+      {/* Section 1 - Invoice Summary                                          */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div className="px-5 py-4 border-t border-gray-100">
         <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
@@ -639,7 +639,7 @@ export function InvoiceCard({
             <span className="text-gray-500 w-36 shrink-0">Invoice No</span>
             {editMode
               ? <HeaderInput value={draft.invoice_number} onChange={(v) => setHeader('invoice_number', v)} error={validationErrors['invoice_number']} placeholder="Invoice #" className="flex-1" />
-              : <span className="font-medium">{current.invoice_number || '—'}</span>}
+              : <span className="font-medium">{current.invoice_number || ''}</span>}
           </div>
 
           {/* Invoice Date */}
@@ -647,7 +647,7 @@ export function InvoiceCard({
             <span className="text-gray-500 w-36 shrink-0">Invoice Date</span>
             {editMode
               ? <HeaderInput value={draft.invoice_date} onChange={(v) => setHeader('invoice_date', v)} error={validationErrors['invoice_date']} placeholder="YYYY-MM-DD" className="flex-1" />
-              : <span className="font-medium">{current.invoice_date || '—'}</span>}
+              : <span className="font-medium">{current.invoice_date || ''}</span>}
           </div>
 
           {/* Supplier Name */}
@@ -655,7 +655,7 @@ export function InvoiceCard({
             <span className="text-gray-500 w-36 shrink-0">Supplier Name</span>
             {editMode
               ? <HeaderInput value={draft.vendor_name} onChange={(v) => setHeader('vendor_name', v)} error={validationErrors['vendor_name']} placeholder="Vendor Name" className="flex-1 font-semibold" />
-              : <span className="font-semibold text-gray-900">{current.vendor_name || '—'}</span>}
+              : <span className="font-semibold text-gray-900">{current.vendor_name || ''}</span>}
           </div>
 
           {/* Supplier GSTIN */}
@@ -663,19 +663,19 @@ export function InvoiceCard({
             <span className="text-gray-500 w-36 shrink-0">Supplier GSTIN</span>
             {editMode
               ? <HeaderInput value={draft.vendor_gstin ?? ''} onChange={(v) => setHeader('vendor_gstin', v.toUpperCase())} error={validationErrors['vendor_gstin']} placeholder="GSTIN" className="flex-1 font-mono text-xs" />
-              : <span className="font-mono text-xs">{current.vendor_gstin || '—'}{vendorState && vendorState !== 'Unknown' && <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded not-italic font-sans">{vendorState}</span>}</span>}
+              : <span className="font-mono text-xs">{current.vendor_gstin || ''}{vendorState && vendorState !== 'Unknown' && <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded not-italic font-sans">{vendorState}</span>}</span>}
           </div>
 
           {/* Customer Name */}
           <div className="flex items-baseline gap-2">
             <span className="text-gray-500 w-36 shrink-0">Customer Name</span>
-            <span className="font-medium">{current.buyer_name || '—'}</span>
+            <span className="font-medium">{current.buyer_name || ''}</span>
           </div>
 
           {/* Customer GSTIN */}
           <div className="flex items-baseline gap-2">
             <span className="text-gray-500 w-36 shrink-0">Customer GSTIN</span>
-            <span className="font-mono text-xs">{current.buyer_gstin || '—'}</span>
+            <span className="font-mono text-xs">{current.buyer_gstin || ''}</span>
           </div>
 
           {/* Invoice Total */}
@@ -692,7 +692,7 @@ export function InvoiceCard({
 
         </div>
 
-        {/* Confidence reasons — suppress stale mismatch warnings when totals currently reconcile */}
+        {/* Confidence reasons - suppress stale mismatch warnings when totals currently reconcile */}
         {inv.confidence_reasons && inv.confidence_reasons.length > 0 && (() => {
           const visibleReasons = inv.confidence_reasons.filter(r => {
             if (!isMismatched && (r.includes("doesn't match") || r.includes("Computed total") || r.includes("match invoice total"))) return false;
@@ -711,7 +711,7 @@ export function InvoiceCard({
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 2 — Goods / Services                                         */}
+      {/* Section 2 - Goods / Services                                         */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {current.line_items.length > 0 && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
@@ -736,10 +736,10 @@ export function InvoiceCard({
 
                     {/* Description */}
                     <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[160px]">
-                      {item.description || '—'}
+                      {item.description || ''}
                     </td>
 
-                    {/* HSN (editable in edit mode — includes GST% inline) */}
+                    {/* HSN (editable in edit mode - includes GST% inline) */}
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs min-w-[140px]">
                       {editMode ? (
                         <div className="flex items-center gap-1">
@@ -749,13 +749,13 @@ export function InvoiceCard({
                           <span className="text-gray-400 text-xs">%</span>
                         </div>
                       ) : (
-                        item.hsn.replace(/[\s.]/g, '') || '—'
+                        item.hsn.replace(/[\s.]/g, '') || ''
                       )}
                     </td>
 
-                    {/* Ledger Name — display only, auto-derived */}
+                    {/* Ledger Name - display only, auto-derived */}
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
-                      {item.hsn.replace(/[\s.]/g, '') || '—'} @ {item.gst_percent}%
+                      {item.hsn.replace(/[\s.]/g, '') || ''} @ {item.gst_percent}%
                     </td>
 
                     {/* Qty */}
@@ -765,7 +765,7 @@ export function InvoiceCard({
 
                     {/* UOM */}
                     <td className="px-2 py-1.5 border border-gray-200 text-xs">
-                      {editMode ? <CellInput value={item.uom || ''} onChange={(v) => setLineItem(i, 'uom', v)} className="w-14 text-left" /> : (item.uom || '—')}
+                      {editMode ? <CellInput value={item.uom || ''} onChange={(v) => setLineItem(i, 'uom', v)} className="w-14 text-left" /> : (item.uom || '')}
                     </td>
 
                     {/* Rate */}
@@ -796,7 +796,7 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 3 — Bill Level Adjustments                                   */}
+      {/* Section 3 - Bill Level Adjustments                                   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {(editMode || billDiscount > 0) && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
@@ -829,7 +829,7 @@ export function InvoiceCard({
                       </div>
                     ) : (
                       <span className="text-orange-600">
-                        {current.bill_discount_percent != null ? `${current.bill_discount_percent}%` : '—'}
+                        {current.bill_discount_percent != null ? `${current.bill_discount_percent}%` : ''}
                       </span>
                     )}
                   </td>
@@ -860,7 +860,7 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 4 — Additional Charges (Non-GST)                             */}
+      {/* Section 4 - Additional Charges (Non-GST)                             */}
       {/* Only charges with gst_percent === 0. GST-applicable charges appear   */}
       {/* in Tax Summary (Section 5) and contribute to Total Taxable Value.    */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
@@ -905,7 +905,7 @@ export function InvoiceCard({
                       </td>
 
                       {/* SAC */}
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">{sac || '—'}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">{sac || ''}</td>
 
                       {/* Ledger Name */}
                       <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
@@ -929,7 +929,7 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 5 — Tax Summary                                              */}
+      {/* Section 5 - Tax Summary                                              */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {allHsnRows.length > 0 && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
@@ -951,9 +951,9 @@ export function InvoiceCard({
                     <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{i + 1}</td>
                     <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
                     <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
                   </tr>
                 ))}
                 {chargeHsnRows.map((row: HsnRow, i: number) => (
@@ -963,17 +963,17 @@ export function InvoiceCard({
                       {row.hsn} <span className="text-blue-500 not-italic font-sans">(SAC)</span>
                     </td>
                     <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : '—'}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : '—'}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
                   </tr>
                 ))}
                 <tr className="bg-gray-50 font-semibold text-sm">
                   <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-gray-600">TOTAL</td>
                   <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(totalTaxable)}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalCGST > 0 ? formatINR(totalCGST) : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalSGST > 0 ? formatINR(totalSGST) : '—'}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalIGST > 0 ? formatINR(totalIGST) : '—'}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalCGST > 0 ? formatINR(totalCGST) : ''}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalSGST > 0 ? formatINR(totalSGST) : ''}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalIGST > 0 ? formatINR(totalIGST) : ''}</td>
                 </tr>
               </tbody>
             </table>
@@ -982,7 +982,7 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 6 — Invoice Reconciliation                                   */}
+      {/* Section 6 - Invoice Reconciliation                                   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div className="px-5 pb-5 pt-4 border-t border-gray-100">
         <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
@@ -1013,7 +1013,7 @@ export function InvoiceCard({
             </div>
           )}
 
-          {/* GST-applicable charges are part of the taxable base — shown here before Total Taxable */}
+          {/* GST-applicable charges are part of the taxable base - shown here before Total Taxable */}
           {gstChargesTotal > 0 && (
             <div className="flex justify-between text-blue-600">
               <span>(+) Taxable Charges</span>
@@ -1044,7 +1044,7 @@ export function InvoiceCard({
             </div>
           )}
 
-          {/* Non-GST charges are pass-through additions — shown after tax lines */}
+          {/* Non-GST charges are pass-through additions - shown after tax lines */}
           {nonGstChargesTotal > 0 && (
             <div className="flex justify-between text-gray-600">
               <span>(+) Additional Charges (Non-GST)</span>

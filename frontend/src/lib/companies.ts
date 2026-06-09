@@ -35,7 +35,7 @@ export function deleteCompany(id: string): void {
   localStorage.setItem(KEY, JSON.stringify(companies));
 }
 
-// Normalise for comparison — strip spaces, uppercase
+// Normalise for comparison - strip spaces, uppercase
 function norm(s: string | null | undefined) {
   return (s ?? '').replace(/\s+/g, '').toUpperCase();
 }

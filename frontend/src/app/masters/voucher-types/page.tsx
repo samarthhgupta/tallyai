@@ -120,9 +120,9 @@ export default function VoucherTypesPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800 mb-6">
           <p className="font-semibold mb-1">How the mapping works</p>
           <ul className="list-disc list-inside space-y-1 text-blue-700 text-xs">
-            <li><strong>GST Purchase</strong> — invoice has CGST, SGST, or IGST &gt; 0 → use this voucher type</li>
-            <li><strong>Non-GST / Exempt</strong> — invoice has no GST → use this voucher type</li>
-            <li><strong>Default / Fallback</strong> — used if no specific category matches</li>
+            <li><strong>GST Purchase</strong> - invoice has CGST, SGST, or IGST &gt; 0 → use this voucher type</li>
+            <li><strong>Non-GST / Exempt</strong> - invoice has no GST → use this voucher type</li>
+            <li><strong>Default / Fallback</strong> - used if no specific category matches</li>
           </ul>
           <p className="mt-2 text-xs text-blue-600">
             If a category has no mapping, the system falls back to <code className="bg-blue-100 px-1 rounded font-mono">Purchase</code> (Tally built-in).
@@ -150,7 +150,7 @@ export default function VoucherTypesPage() {
                           ✓ Mapped to &ldquo;<span className="font-mono">{existing.tally_voucher_type_name}</span>&rdquo;
                         </p>
                       ) : (
-                        <p className="text-xs text-gray-400 mt-0.5">Not configured — falls back to &ldquo;Purchase&rdquo;</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Not configured - falls back to &ldquo;Purchase&rdquo;</p>
                       )}
                     </div>
                     {isSaved && (
@@ -210,7 +210,7 @@ export default function VoucherTypesPage() {
           <ol className="list-decimal list-inside space-y-1">
             <li>Open Tally → Gateway of Tally → Accounts Info → Voucher Types → Display</li>
             <li>Note the exact names as shown (case-sensitive)</li>
-            <li>Enter them above — they will be used verbatim in the exported XML</li>
+            <li>Enter them above - they will be used verbatim in the exported XML</li>
           </ol>
         </div>
       </main>

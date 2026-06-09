@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getFYList, currentFY, type FYPeriod } from '@/lib/fyPeriod';
 
-// FY-only selector — month is no longer user-selectable.
+// FY-only selector - month is no longer user-selectable.
 // Period month is derived per invoice from invoice_date when saving.
 
 interface Props {

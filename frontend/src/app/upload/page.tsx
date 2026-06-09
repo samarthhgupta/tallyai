@@ -130,13 +130,13 @@ function ITCWarningPopup({ items, onProceed, onReview }: ITCPopupProps) {
             onClick={() => onProceed(items.map((i) => i.key))}
             className="w-full px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors"
           >
-            Proceed — Book with GST (ITC marked as Potentially Ineligible)
+            Proceed - Book with GST (ITC marked as Potentially Ineligible)
           </button>
           <button
             onClick={onReview}
             className="w-full px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
           >
-            Cancel — Review invoices first
+            Cancel - Review invoices first
           </button>
         </div>
       </div>
@@ -512,7 +512,7 @@ export default function UploadPage() {
         ? err.message
         : (err as { message?: string })?.message ?? 'Failed to save to Purchase Register. Please try again.';
       setActionError(msg);
-      // Do NOT remove from queue on failure — user can retry
+      // Do NOT remove from queue on failure - user can retry
     } finally {
       setActionLoading(false);
     }
@@ -569,7 +569,7 @@ export default function UploadPage() {
       removeFromQueue();
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : 'Failed to save rejection record.');
-      // Do NOT remove from queue on failure — user can retry
+      // Do NOT remove from queue on failure - user can retry
     } finally {
       setActionLoading(false);
     }
@@ -626,7 +626,7 @@ export default function UploadPage() {
                 <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
               </p>
               <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
-              <p className="text-xs font-medium text-amber-600 mt-1.5">⚠ Max 15 MB per file — split larger PDFs before uploading</p>
+              <p className="text-xs font-medium text-amber-600 mt-1.5">⚠ Max 15 MB per file - split larger PDFs before uploading</p>
             </div>
 
             {/* File list */}
@@ -754,7 +754,7 @@ export default function UploadPage() {
                                 ),
                               }))
                             : (() => {
-                                // Queue restored from localStorage — group by filename
+                                // Queue restored from localStorage - group by filename
                                 const byFile = new Map<string, ExtractedInvoice[]>();
                                 queue.forEach((q) => {
                                   const inv = invoiceOverrides.get(q.key) ?? q.inv;
@@ -796,7 +796,7 @@ export default function UploadPage() {
                           checked={isSelected}
                           disabled={isCritical || isFYMismatch}
                           onChange={() => !isCritical && !isFYMismatch && toggleSelect(item.key)}
-                          title={isFYMismatch ? 'Financial Year mismatch — change FY or correct invoice date' : isCritical ? 'Resolve critical issues before accepting' : undefined}
+                          title={isFYMismatch ? 'Financial Year mismatch - change FY or correct invoice date' : isCritical ? 'Resolve critical issues before accepting' : undefined}
                           className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
                         />
                       </div>
@@ -812,7 +812,7 @@ export default function UploadPage() {
                                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                                 </svg>
-                                Financial Year Mismatch — Invoice belongs to {invFY}, current selection is {financialYear}. Change FY or correct the invoice date.
+                                Financial Year Mismatch - Invoice belongs to {invFY}, current selection is {financialYear}. Change FY or correct the invoice date.
                               </span>
                             );
                           })()}

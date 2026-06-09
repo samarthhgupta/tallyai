@@ -15,7 +15,7 @@ import {
   type TaxComponent,
 } from '@/lib/dutiesTaxes';
 
-// Common rate options — user can also type a custom value
+// Common rate options - user can also type a custom value
 const COMMON_RATES = [0, 0.1, 0.25, 1, 1.5, 2, 2.5, 5, 6, 7.5, 9, 12, 14, 18, 28];
 
 const EMPTY_FORM = {
@@ -116,7 +116,7 @@ export default function DutiesTaxesPage() {
   };
 
   const handleLedgerChange = (val: string) => {
-    setLedgerAutoFilled(false); // user typed their own name — stop auto-filling
+    setLedgerAutoFilled(false); // user typed their own name - stop auto-filling
     setForm({ ...form, tally_ledger_name: val });
   };
 
@@ -268,7 +268,7 @@ export default function DutiesTaxesPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder={suggestLedgerName(form.tax_component, form.tax_rate_str)}
                   />
-                  <p className="text-xs text-gray-400 mt-1">Must match Tally exactly — case and spaces matter.</p>
+                  <p className="text-xs text-gray-400 mt-1">Must match Tally exactly - case and spaces matter.</p>
                 </div>
               </div>
               {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}

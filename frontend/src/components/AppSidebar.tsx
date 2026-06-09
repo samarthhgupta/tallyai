@@ -69,7 +69,7 @@ export default function AppSidebar() {
           onClick={() => router.push('/select-company')}
           className="mx-4 my-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-medium hover:bg-amber-100 transition-colors text-left"
         >
-          No company selected — click to select →
+          No company selected - click to select →
         </button>
       )}
 

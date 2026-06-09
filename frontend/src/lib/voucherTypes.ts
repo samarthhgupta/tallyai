@@ -1,4 +1,4 @@
-// Voucher Types Master — company-scoped, stored in Supabase.
+// Voucher Types Master - company-scoped, stored in Supabase.
 //
 // PURPOSE: answers "which Tally Voucher Type should this invoice use?"
 // Tally requires VOUCHERTYPENAME to be an exact, pre-existing voucher type name.
@@ -10,7 +10,7 @@
 //   If no matching row is configured, falls back to 'Purchase' (Tally built-in).
 //
 // KEY RULES:
-//   1. tally_voucher_type_name stored and output EXACTLY as entered — no trim, no change.
+//   1. tally_voucher_type_name stored and output EXACTLY as entered - no trim, no change.
 //   2. Each purchase_category has at most one row per company (UNIQUE constraint).
 
 import { getSupabase } from './supabase';
@@ -31,7 +31,7 @@ export interface VoucherTypeMaster {
   id: string;
   company_id: string;
   purchase_category: PurchaseCategory;
-  tally_voucher_type_name: string; // sacred — stored and output exactly as entered
+  tally_voucher_type_name: string; // sacred - stored and output exactly as entered
   created_at: string;
   updated_at: string;
 }
@@ -52,7 +52,7 @@ export async function upsertVoucherType(
   companyId: string,
   params: {
     purchase_category: PurchaseCategory;
-    tally_voucher_type_name: string; // stored EXACTLY as provided — no trim
+    tally_voucher_type_name: string; // stored EXACTLY as provided - no trim
   },
 ): Promise<VoucherTypeMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;

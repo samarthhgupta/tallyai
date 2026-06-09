@@ -1,7 +1,7 @@
-// Tally XML Generator — Purchase Voucher Import
+// Tally XML Generator - Purchase Voucher Import
 //
 // CRITICAL RULES:
-//   1. ALL ledger/item names used in output are taken VERBATIM from master tables — no trim, no change.
+//   1. ALL ledger/item names used in output are taken VERBATIM from master tables - no trim, no change.
 //   2. Dates output as YYYYMMDD (Tally format).
 //   3. Amounts output with 2 decimal places, negative for credit entries.
 //   4. If a required ledger cannot be resolved, that invoice is skipped and an error is returned.
@@ -50,10 +50,10 @@ export interface XmlGeneratorInput {
   dutiesTaxes: DutiesTaxesMaster[];
   stockItems: StockItemMaster[];
   expenseLedgers: ExpenseLedgerMaster[];
-  purchaseLedgers?: PurchaseLedgerEntry[];  // deprecated — purchase ledger now read per-invoice from tally_ledger_acceptance
+  purchaseLedgers?: PurchaseLedgerEntry[];  // deprecated - purchase ledger now read per-invoice from tally_ledger_acceptance
   voucherTypes: VoucherTypeMaster[];        // maps purchase category → voucher type name
-  tallyCompanyName: string;                 // sacred — used verbatim in XML header
-  financialYear?: string;                   // e.g. 'FY 2024-25' — drives APPLICABLEFROM dates
+  tallyCompanyName: string;                 // sacred - used verbatim in XML header
+  financialYear?: string;                   // e.g. 'FY 2024-25' - drives APPLICABLEFROM dates
   voucherMode?: 'accounting_only' | 'inventory'; // default: accounting_only
   discountLedgerName?: string | null;       // Tally ledger for bill-level discounts (P&L)
   companyGstin?: string;                    // company's own GSTIN (optional)
@@ -103,7 +103,7 @@ function norm(s: string): string {
   return (s ?? '').toLowerCase().trim();
 }
 
-// Fuzzy word-overlap match — handles "SAVIK AGENCIES - (2022 Onwards)" vs "Savik Agencies"
+// Fuzzy word-overlap match - handles "SAVIK AGENCIES - (2022 Onwards)" vs "Savik Agencies"
 function fuzzyNameMatch(a: string, b: string): boolean {
   const na = norm(a);
   const nb = norm(b);
@@ -149,13 +149,13 @@ function findSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorN
     const g = norm(gstin);
     const byGstin = suppliers.find((s) => norm(s.vendor_gstin ?? '') === g);
     if (byGstin) return byGstin;
-    // Invoice has a GSTIN but it didn't match any supplier — do NOT fuzzy-name-match.
+    // Invoice has a GSTIN but it didn't match any supplier - do NOT fuzzy-name-match.
     // GSTIN is the definitive identifier; a name-based guess with an unmatched GSTIN would
     // map the invoice to the wrong Tally ledger (e.g. "SHRI VINAYAK TRADERS" wrongly matched
     // to "Shri Ganesh Traders" because both names share the words "Shri" and "Traders").
     return null;
   }
-  // No GSTIN on invoice — exact name match then fuzzy
+  // No GSTIN on invoice - exact name match then fuzzy
   const vn = norm(vendorName);
   const exact = suppliers.find((s) => norm(s.vendor_name) === vn || norm(s.tally_ledger_name) === vn);
   if (exact) return exact;
@@ -207,7 +207,7 @@ function findStockItem(
   if (partialAlias) return partialAlias;
   const fuzzy = suggestStockItem(stockItems, description);
   if (fuzzy) return fuzzy;
-  // HSN + GST rate match — stock items named "{HSN} @ {RATE}%" are looked up by code+rate
+  // HSN + GST rate match - stock items named "{HSN} @ {RATE}%" are looked up by code+rate
   if (hsn && gstRate != null) {
     const cleanHsn = hsn.replace(/[\s.]/g, '');
     const byHsn = stockItems.find(
@@ -247,7 +247,7 @@ function buildHsnRows(
 ): HsnRow[] {
   const map: Record<string, HsnRow> = {};
   for (const item of items) {
-    const hsn = (item.hsn || '').replace(/[\s.]/g, '') || '—';
+    const hsn = (item.hsn || '').replace(/[\s.]/g, '') || '-';
     const key = `${hsn}__${item.gst_percent}`;
     if (!map[key]) map[key] = { hsn, gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
     map[key].taxable += calcLineAmount(item);
@@ -340,7 +340,7 @@ function buildChargeEntries(
     if (!charge.amount || charge.amount === 0) continue;
     const ledger = findExpenseLedger(expenseLedgers, charge.description);
     if (!ledger) {
-      warnings.push(`No expense ledger mapped for charge "${charge.description}" — charge excluded from XML`);
+      warnings.push(`No expense ledger mapped for charge "${charge.description}" - charge excluded from XML`);
       continue;
     }
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(charge.amount)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
@@ -381,8 +381,8 @@ function wrapVoucher(
     </TALLYMESSAGE>`;
   }
 
-  // Inventory mode — full schema matching Tally export format (reverse-engineered June 2025)
-  // U+0004 is Tally's "Not Applicable" sentinel — actual character, not &#4; entity
+  // Inventory mode - full schema matching Tally export format (reverse-engineered June 2025)
+  // U+0004 is Tally's "Not Applicable" sentinel - actual character, not &#4; entity
   const NA = ' Not Applicable';
   const guid = generateGuid();
   const vendorGstin = inv.vendor_gstin ?? '';
@@ -390,7 +390,7 @@ function wrapVoucher(
   const regType = vendorGstin ? 'Regular' : 'Unregistered';
   const cmpGstin = input?.companyGstin ?? '';
   const cmpState = input?.companyState ?? stateFromGstin(cmpGstin);
-  // "Uttar Pradesh Registration" — Tally's name for the company's GST registration unit
+  // "Uttar Pradesh Registration" - Tally's name for the company's GST registration unit
   const cmpTaxUnit = cmpState ? `${cmpState} Registration` : '';
 
   return `
@@ -581,7 +581,7 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const warnings: string[] = [];
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
-  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master — using vendor name as ledger`);
+  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
   const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
@@ -591,7 +591,7 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-inv.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
-  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`, warnings };
+  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
 
   for (const row of hsnRows) {
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
@@ -613,7 +613,7 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
 
 // ─── Inventory-mode entry builders (LEDGERENTRIES.LIST / ALLINVENTORYENTRIES.LIST) ─
 
-/** Full LEDGERENTRIES.LIST block for inventory mode — correct signs and sub-elements */
+/** Full LEDGERENTRIES.LIST block for inventory mode - correct signs and sub-elements */
 function invLedgerEntry(opts: {
   ledgerName: string;
   isdeemedpositive: 'Yes' | 'No';
@@ -839,12 +839,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const warnings: string[] = [];
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
-  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master — using vendor name as ledger`);
+  if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
-  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first`, warnings };
+  if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
 
   let totalItemsAmount = 0;
   let unmappedItemsAmount = 0;
@@ -855,7 +855,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
     const itemNet = calcLineAmount(item);
     if (!stockItem) {
-      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped — booking to purchase ledger`);
+      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped - booking to purchase ledger`);
       unmappedItemsAmount += itemNet;
       continue;
     }
@@ -864,15 +864,15 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   }
 
   if (invEntries.length === 0) {
-    // No line items mapped to stock items — fall back to accounting-only mode so the invoice is not lost
-    warnings.push(`No line items could be mapped to stock items — falling back to accounting-only mode`);
+    // No line items mapped to stock items - fall back to accounting-only mode so the invoice is not lost
+    warnings.push(`No line items could be mapped to stock items - falling back to accounting-only mode`);
     return buildAccountingOnlyVoucher(inv, input);
   }
 
-  // Ledger entries — LEDGERENTRIES.LIST (inventory mode)
+  // Ledger entries - LEDGERENTRIES.LIST (inventory mode)
   const ledgerEntries: string[] = [];
 
-  // 1. Party (creditor) — positive total, ISDEEMEDPOSITIVE=No
+  // 1. Party (creditor) - positive total, ISDEEMEDPOSITIVE=No
   ledgerEntries.push(invLedgerEntry({
     ledgerName: partyLedger,
     isdeemedpositive: 'No',
@@ -887,10 +887,10 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   if (hasDiscountLedger) {
     ledgerEntries.push(invChargeLedgerEntry(input.discountLedgerName!, -(inv.bill_discount_amount ?? 0)));
   } else if ((inv.bill_discount_amount ?? 0) > 0) {
-    warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked — no discount ledger configured`);
+    warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked - no discount ledger configured`);
   }
 
-  // 3. Tax ledgers — NEGATIVE amounts (debit to ITC accounts)
+  // 3. Tax ledgers - NEGATIVE amounts (debit to ITC accounts)
   const taxBase = totalItemsAmount + unmappedItemsAmount - (inv.bill_discount_amount ?? 0);
   // Round to nearest 0.5 so 2.456% → 2.5% (not 3% via Math.round)
   const roundHalf = (r: number) => Math.round(r * 2) / 2;
@@ -935,7 +935,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     }));
   }
 
-  // 4. Charge / expense ledgers — NEGATIVE amounts
+  // 4. Charge / expense ledgers - NEGATIVE amounts
   let mappedChargesTotal = 0;
   let unmappedChargesTotal = 0;
   if (inv.charges?.length) {
@@ -943,7 +943,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
       if (!charge.amount || charge.amount === 0) continue;
       const ledger = findExpenseLedger(input.expenseLedgers, charge.description);
       if (!ledger) {
-        warnings.push(`No expense ledger mapped for charge "${charge.description}" — booking to purchase ledger`);
+        warnings.push(`No expense ledger mapped for charge "${charge.description}" - booking to purchase ledger`);
         unmappedChargesTotal += charge.amount;
         continue;
       }
@@ -969,12 +969,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const netPurchaseLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netPurchaseLedgerAdj) > 0.01) {
     if (netPurchaseLedgerAdj > 0) {
-      // More debit needed — normal unmapped items/charges case
+      // More debit needed - normal unmapped items/charges case
       ledgerEntries.push(invChargeLedgerEntry(purchaseLedger, -netPurchaseLedgerAdj));
     } else {
-      // Net credit needed — bill discount absorbed into inv.total makes debits exceed credit.
+      // Net credit needed - bill discount absorbed into inv.total makes debits exceed credit.
       // Credit the purchase ledger to balance (reduces net purchase cost).
-      warnings.push(`Bill discount/gap ₹${fmt2(Math.abs(netPurchaseLedgerAdj))} in "${inv.invoice_number}" — credited to purchase ledger`);
+      warnings.push(`Bill discount/gap ₹${fmt2(Math.abs(netPurchaseLedgerAdj))} in "${inv.invoice_number}" - credited to purchase ledger`);
       ledgerEntries.push(invLedgerEntry({
         ledgerName: purchaseLedger,
         isdeemedpositive: 'No',
@@ -994,31 +994,31 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 // ─── Master creation XML ──────────────────────────────────────────────────────
 // Generates a separate XML file (REPORTNAME=All Masters) that creates all
 // ledgers and stock items referenced in the export batch. Import this FIRST
-// in Tally before importing the vouchers XML — Tally silently skips masters
+// in Tally before importing the vouchers XML - Tally silently skips masters
 // that already exist, so it is safe to re-import.
 //
 // ══════════════════════════════════════════════════════════════════════════════
-// TALLY XML IMPORT — VERIFIED WORKING SCHEMA (tested June 2025)
+// TALLY XML IMPORT - VERIFIED WORKING SCHEMA (tested June 2025)
 // ══════════════════════════════════════════════════════════════════════════════
 //
-// OUTPUT FORMAT REQUIREMENTS (critical — any deviation causes silent rejection):
+// OUTPUT FORMAT REQUIREMENTS (critical - any deviation causes silent rejection):
 //
 //   1. ENCODING     UTF-16 LE with BOM (bytes FF FE at start of file).
 //                   Tally rejects UTF-8 files silently.
 //                   See triggerDownload() in xml/page.tsx.
 //
-//   2. NO XML DECL  Do NOT include <?xml version="1.0"?> — Tally's export
+//   2. NO XML DECL  Do NOT include <?xml version="1.0"?> - Tally's export
 //                   omits it and the import parser expects no declaration.
 //
 //   3. SENTINEL     Tally stores "Not Applicable" fields as the literal Unicode
 //                   control character U+0004 (EOT) followed by " Not Applicable".
 //                   Write this as the actual character , NOT the XML entity
-//                   &#4; — the UTF-16 encoder writes strings verbatim, so any
+//                   &#4; - the UTF-16 encoder writes strings verbatim, so any
 //                   XML entity text ends up as literal characters in the file.
 //                   Same rule applies to  Applicable,  Any, etc.
 //
 //   4. CURRENCY     Use the actual ₹ character (U+20B9), NOT &#x20B9;.
-//                   Same reason as above — the encoder writes it verbatim.
+//                   Same reason as above - the encoder writes it verbatim.
 //
 // ══════════════════════════════════════════════════════════════════════════════
 // VERIFIED FIELD ORDER PER MASTER TYPE (reverse-engineered from Tally export)
@@ -1102,7 +1102,7 @@ function fyStartFromString(financialYear?: string): string {
   return `${fyYear}0401`;
 }
 
-// Tally-native boolean flags — full set Tally itself exports for every ledger
+// Tally-native boolean flags - full set Tally itself exports for every ledger
 const LEDGER_BOOLEANS = `
       <ISBILLWISEON>No</ISBILLWISEON>
       <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
@@ -1218,7 +1218,7 @@ const LEDGER_EMPTY_LISTS = `
       <VATDETAILS.LIST>      </VATDETAILS.LIST>
       <SALESTAXCESSDETAILS.LIST>      </SALESTAXCESSDETAILS.LIST>`;
 
-// Lists after LANGUAGENAME — up to (not including) LEDGSTREGDETAILS
+// Lists after LANGUAGENAME - up to (not including) LEDGSTREGDETAILS
 const LEDGER_TAIL_LISTS_1 = `
       <XBRLDETAIL.LIST>      </XBRLDETAIL.LIST>
       <AUDITDETAILS.LIST>      </AUDITDETAILS.LIST>
@@ -1826,7 +1826,7 @@ export function generateMastersXml(input: XmlGeneratorInput, type: MasterType = 
 }
 
 /** Single XML file: masters section first, vouchers section second.
- *  Tally processes both in order — creates ledgers/items, then imports vouchers.
+ *  Tally processes both in order - creates ledgers/items, then imports vouchers.
  *  Safe to import into a Tally company that already has some of these masters. */
 export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResult {
   const masterMessages = buildMasterMessages(input, 'all');
@@ -1880,14 +1880,14 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
   const voucherBlocks: string[] = [];
   const isInventory = input.voucherMode === 'inventory';
 
-  // Deduplicate by invoice_number — if the same invoice was uploaded multiple
+  // Deduplicate by invoice_number - if the same invoice was uploaded multiple
   // times and accepted, only the first occurrence is exported to avoid Tally
   // rejecting duplicate bill references (same New Ref = mismatch exception).
   const seen = new Set<string>();
   const invoices = input.invoices.filter((inv) => {
     const key = inv.invoice_number.trim().toLowerCase();
     if (seen.has(key)) {
-      skipped.push({ invoice_number: inv.invoice_number, reason: 'Duplicate invoice number — only first occurrence exported' });
+      skipped.push({ invoice_number: inv.invoice_number, reason: 'Duplicate invoice number - only first occurrence exported' });
       return false;
     }
     seen.add(key);
@@ -1944,7 +1944,7 @@ export interface PreviewRow {
   uom?: string;
   disc_percent?: number;
   item_description?: string;
-  // Expense/charge fields — from extracted invoice charge data
+  // Expense/charge fields - from extracted invoice charge data
   charge_gst_percent?: number;
   charge_sac_code?: string;
 }
@@ -1981,7 +1981,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : '(deducted from purchase — configure Discount Ledger to book separately)', amount: -(inv.bill_discount_amount ?? 0), status: 'OK', warning: hasDiscountLedger ? undefined : 'No discount ledger configured — discount deducted from purchase amount' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : '(deducted from purchase - configure Discount Ledger to book separately)', amount: -(inv.bill_discount_amount ?? 0), status: 'OK', warning: hasDiscountLedger ? undefined : 'No discount ledger configured - discount deducted from purchase amount' });
     }
 
     if (inv.tax_type === 'cgst_sgst') {
@@ -2058,7 +2058,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
         amount: itemNet,
         status: stockItem ? 'OK' : 'Suggested',
         is_suggested: !stockItem,
-        warning: (stockItem && !acceptedPurchaseLedger) ? `No purchase ledger set for invoice "${inv.invoice_number}" — accept the invoice first` : undefined,
+        warning: (stockItem && !acceptedPurchaseLedger) ? `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first` : undefined,
         stock_item_name: stockItem?.tally_item_name,
         qty: item.qty, rate: item.rate, uom,
         disc_percent: item.disc_percent > 0 ? item.disc_percent : undefined,
@@ -2070,7 +2070,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
       const hasDiscountLedger = !!(input.discountLedgerName);
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : '— NO DISCOUNT LEDGER CONFIGURED —', amount: -(inv.bill_discount_amount ?? 0), status: 'OK', warning: hasDiscountLedger ? undefined : 'No discount ledger configured — discount not booked' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : '- NO DISCOUNT LEDGER CONFIGURED -', amount: -(inv.bill_discount_amount ?? 0), status: 'OK', warning: hasDiscountLedger ? undefined : 'No discount ledger configured - discount not booked' });
     }
 
     const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);

@@ -143,7 +143,7 @@ export default function CompaniesPage() {
                   )}
                 </div>
 
-                {/* State — auto-derived, read only */}
+                {/* State - auto-derived, read only */}
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">State <span className="font-normal text-gray-400">(auto-derived)</span></label>
                   <div className="w-full border border-gray-200 bg-gray-50 rounded-md px-3 py-2 text-sm min-h-[38px] flex items-center">
@@ -161,7 +161,7 @@ export default function CompaniesPage() {
                     onChange={(e) => setForm({ ...form, tally_company_name: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="Exact company name as in Tally" />
-                  <p className="text-xs text-gray-400 mt-1">Must match exactly as configured in Tally — used in XML generation header.</p>
+                  <p className="text-xs text-gray-400 mt-1">Must match exactly as configured in Tally - used in XML generation header.</p>
                 </div>
 
                 {/* Tally URL */}
@@ -228,10 +228,10 @@ export default function CompaniesPage() {
                         )}
                       </div>
                       {!c.gstin && (
-                        <p className="text-xs text-amber-600 mt-1">⚠ GSTIN not set — required for XML generation and state derivation</p>
+                        <p className="text-xs text-amber-600 mt-1">⚠ GSTIN not set - required for XML generation and state derivation</p>
                       )}
                       {!c.tally_company_name && (
-                        <p className="text-xs text-amber-600 mt-1">⚠ Tally Company Name not set — required for XML generation</p>
+                        <p className="text-xs text-amber-600 mt-1">⚠ Tally Company Name not set - required for XML generation</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-4">

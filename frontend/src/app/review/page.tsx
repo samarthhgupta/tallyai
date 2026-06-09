@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
-// Review page is not yet active — extraction results are shown inline on the dashboard.
+// Review page is not yet active - extraction results are shown inline on the dashboard.
 export default function ReviewPage() {
   const router = useRouter();
   useEffect(() => { router.replace('/dashboard'); }, [router]);

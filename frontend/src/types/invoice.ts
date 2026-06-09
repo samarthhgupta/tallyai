@@ -55,7 +55,7 @@ export interface ExtractedInvoice {
   cgst: number;
   sgst: number;
   igst: number;
-  charges?: ExtraCharge[];   // freight, postage, delivery — excluded from HSN summary
+  charges?: ExtraCharge[];   // freight, postage, delivery - excluded from HSN summary
   round_off: number;
   total: number;
   tax_type: 'cgst_sgst' | 'igst';
@@ -139,7 +139,7 @@ export function calcLineAmount(item: LineItem): number {
 }
 
 function cleanHsn(hsn: string): string {
-  return (hsn || '').replace(/[\s.]/g, '') || '—';
+  return (hsn || '').replace(/[\s.]/g, '') || '-';
 }
 
 export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst', billDiscount = 0): HsnRow[] {

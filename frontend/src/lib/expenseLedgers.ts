@@ -1,11 +1,11 @@
-// Expense Ledger Master — company-scoped, stored in Supabase.
+// Expense Ledger Master - company-scoped, stored in Supabase.
 // Maps expense descriptions on invoices to exact Tally expense ledger names.
 //
 // KEY RULES (do not violate):
-//   1. tally_ledger_name stored and output EXACTLY as entered — no trim, no normalisation.
-//   2. expense_keyword is the invoice-side term used for matching — also stored as-is.
-//   3. SAC code is optional — XML generation never depends on it.
-//   4. No GST rate logic stored here — only maps description to ledger.
+//   1. tally_ledger_name stored and output EXACTLY as entered - no trim, no normalisation.
+//   2. expense_keyword is the invoice-side term used for matching - also stored as-is.
+//   3. SAC code is optional - XML generation never depends on it.
+//   4. No GST rate logic stored here - only maps description to ledger.
 
 import { getSupabase } from './supabase';
 
@@ -15,7 +15,7 @@ const db = () => getSupabase() as any;
 export interface ExpenseLedgerMaster {
   id: string;
   company_id: string;
-  tally_ledger_name: string;  // sacred — stored and output exactly as entered
+  tally_ledger_name: string;  // sacred - stored and output exactly as entered
   expense_keyword: string | null;
   sac_code: string | null;
   gst_percent: number | null;  // total GST rate (e.g. 18); null = omit GSTDETAILS.LIST
@@ -36,7 +36,7 @@ export interface ExpenseLedgerImportResult {
   errors: Array<{ row: number; ledger: string; reason: string }>;
 }
 
-// Built-in defaults for common expense types — used to auto-fill SAC + GST %
+// Built-in defaults for common expense types - used to auto-fill SAC + GST %
 // when no extracted data is available (fallback lookup).
 export const EXPENSE_DEFAULTS: Record<string, { sac_code: string; gst_percent: number }> = {
   'freight':           { sac_code: '996511', gst_percent: 5  },
@@ -113,7 +113,7 @@ export async function loadExpenseLedgers(companyId: string): Promise<ExpenseLedg
 export async function addExpenseLedger(
   companyId: string,
   params: {
-    tally_ledger_name: string; // stored EXACTLY as provided — no trim
+    tally_ledger_name: string; // stored EXACTLY as provided - no trim
     expense_keyword?: string;
     sac_code?: string;
     gst_percent?: number | null;
@@ -171,7 +171,7 @@ export async function deleteExpenseLedger(id: string): Promise<void> {
 }
 
 // Bulk upsert from Excel import.
-// tally_ledger_name stored EXACTLY as in Excel — no trim.
+// tally_ledger_name stored EXACTLY as in Excel - no trim.
 export async function bulkUpsertExpenseLedgers(
   companyId: string,
   rows: ExpenseLedgerImportRow[],
@@ -193,7 +193,7 @@ export async function bulkUpsertExpenseLedgers(
     const ledger = row.tally_ledger_name; // intentionally NOT trimmed
 
     if (!ledger || !ledger.trim()) {
-      result.errors.push({ row: rowNum, ledger: '—', reason: 'Tally Ledger Name is required' });
+      result.errors.push({ row: rowNum, ledger: '-', reason: 'Tally Ledger Name is required' });
       return;
     }
 
@@ -205,7 +205,7 @@ export async function bulkUpsertExpenseLedgers(
     seenInFile.add(dedupeKey);
 
     const payload = {
-      tally_ledger_name: ledger, // NO trim — sacred
+      tally_ledger_name: ledger, // NO trim - sacred
       expense_keyword: row.expense_keyword || null,
       sac_code: row.sac_code || null,
       gst_percent: row.gst_percent ?? null,
@@ -236,7 +236,7 @@ export async function bulkUpsertExpenseLedgers(
 
 // Lookup: returns the expense ledger for a given invoice description.
 // Tries keyword match first, then tally_ledger_name match.
-// Returns the sacred stored value — never modified.
+// Returns the sacred stored value - never modified.
 export async function lookupExpenseLedger(
   companyId: string,
   invoiceDescription: string,
