@@ -260,11 +260,15 @@ export default function InvoiceDetailPanel({
 
   // ── View computed values ──
   const lineItems: LineItem[] = invoice.line_items ?? [];
+<<<<<<< HEAD
   // Enrich stored charges with SAC from defaults when SAC is missing
   const charges: ExtraCharge[] = (invoice.charges ?? []).map((c) => ({
     ...c,
     sac: resolveChargeSac(c.description, c.sac),
   }));
+=======
+  const charges: ExtraCharge[] = invoice.charges ?? [];
+>>>>>>> origin/main
   const subtotal = lineItems.reduce((s, it) => s + calcLineAmount(it), 0);           // A
   const billDiscount = invoice.bill_discount_amount ?? 0;                             // B
   const taxableCharges = charges.filter(c => c.gst_percent > 0);
