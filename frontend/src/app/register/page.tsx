@@ -306,6 +306,30 @@ export default function PurchaseRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  type SortKey = 'date' | 'total' | 'vendor' | 'taxable' | 'itc' | 'invoice_number' | 'cgst' | 'sgst' | 'igst';
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortAsc, setSortAsc] = useState(false);
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) setSortAsc((a) => !a);
+    else { setSortKey(key); setSortAsc(key === 'vendor' || key === 'invoice_number'); }
+  }
+
+  const itcOrder: Record<string, number> = { eligible: 0, reviewed_eligible: 1, potentially_ineligible: 2, not_applicable: 3 };
+  const sortedInvoices = [...invoices].sort((a, b) => {
+    let cmp = 0;
+    if (sortKey === 'date') cmp = (a.invoice_date ?? '').localeCompare(b.invoice_date ?? '');
+    else if (sortKey === 'vendor') cmp = (a.vendor_name ?? '').localeCompare(b.vendor_name ?? '');
+    else if (sortKey === 'invoice_number') cmp = (a.invoice_number ?? '').localeCompare(b.invoice_number ?? '');
+    else if (sortKey === 'total') cmp = (a.total ?? 0) - (b.total ?? 0);
+    else if (sortKey === 'taxable') cmp = ((a.subtotal ?? 0) - (a.bill_discount_amount ?? 0)) - ((b.subtotal ?? 0) - (b.bill_discount_amount ?? 0));
+    else if (sortKey === 'cgst') cmp = (a.cgst ?? 0) - (b.cgst ?? 0);
+    else if (sortKey === 'sgst') cmp = (a.sgst ?? 0) - (b.sgst ?? 0);
+    else if (sortKey === 'igst') cmp = (a.igst ?? 0) - (b.igst ?? 0);
+    else if (sortKey === 'itc') cmp = (itcOrder[a.itc_status ?? ''] ?? 9) - (itcOrder[b.itc_status ?? ''] ?? 9);
+    return sortAsc ? cmp : -cmp;
+  });
+
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
@@ -735,22 +759,39 @@ export default function PurchaseRegisterPage() {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-7">#</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice #</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Vendor</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">GSTIN</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Period</th>
-                  <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxable</th>
-                  <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">CGST</th>
-                  <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">SGST</th>
-                  <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">IGST</th>
-                  <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Total</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">ITC</th>
+                  {([
+                    { key: 'invoice_number', label: 'Invoice #', align: 'left' },
+                    { key: 'vendor', label: 'Vendor', align: 'left' },
+                    { key: null, label: 'GSTIN', align: 'left' },
+                    { key: 'date', label: 'Date', align: 'left' },
+                    { key: null, label: 'Period', align: 'left' },
+                    { key: 'taxable', label: 'Taxable', align: 'right' },
+                    { key: 'cgst', label: 'CGST', align: 'right' },
+                    { key: 'sgst', label: 'SGST', align: 'right' },
+                    { key: 'igst', label: 'IGST', align: 'right' },
+                    { key: 'total', label: 'Total', align: 'right' },
+                    { key: 'itc', label: 'ITC', align: 'left' },
+                  ] as { key: SortKey | null; label: string; align: string }[]).map(({ key, label, align }) => (
+                    <th
+                      key={label}
+                      onClick={key ? () => handleSort(key) : undefined}
+                      className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide ${align === 'right' ? 'text-right' : 'text-left'} ${key ? 'cursor-pointer select-none hover:text-gray-800' : ''}`}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        {label}
+                        {key && (
+                          <span className="text-gray-300">
+                            {sortKey === key ? (sortAsc ? '↑' : '↓') : '↕'}
+                          </span>
+                        )}
+                      </span>
+                    </th>
+                  ))}
                   <th className="px-2 py-2.5 w-8" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {invoices.map((inv, idx) => {
+                {sortedInvoices.map((inv, idx) => {
                   const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
                   const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
                   const taxableValue = subtotal + gstCharges;
