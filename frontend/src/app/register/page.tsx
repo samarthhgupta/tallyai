@@ -23,7 +23,7 @@ function computeInvoiceFinancials(inv: StoredInvoice) {
   const lineItems = inv.line_items ?? [];
   const charges = (inv.charges ?? []).map((c) => ({
     ...c,
-    sac: resolveChargeSac(c.description, c.sac),
+    sac: resolveChargeSac(c.description ?? '', c.sac),
   }));
   const billDiscount = inv.bill_discount_amount ?? 0;
   const taxableChargesTotal = charges.filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
