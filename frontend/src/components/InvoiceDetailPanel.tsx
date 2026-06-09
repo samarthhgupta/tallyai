@@ -17,7 +17,7 @@ interface InvoiceDetailPanelProps {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(dt: string | null | undefined): string {
-  if (!dt) return '—';
+  if (!dt) return 'N/A';
   try {
     return new Date(dt).toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
@@ -396,9 +396,9 @@ export default function InvoiceDetailPanel({
             {/* Left: Invoice no + supplier */}
             <div className="min-w-0 shrink">
               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Invoice No.</p>
-              <p className="text-lg font-bold text-gray-900 leading-tight truncate">{invoice.invoice_number || '—'}</p>
-              <p className="text-sm font-semibold text-gray-700 mt-0.5 truncate">{invoice.vendor_name || '—'}</p>
-              <p className="text-xs font-mono font-medium text-gray-500">{invoice.vendor_gstin || '—'}</p>
+              <p className="text-lg font-bold text-gray-900 leading-tight truncate">{invoice.invoice_number || ''}</p>
+              <p className="text-sm font-semibold text-gray-700 mt-0.5 truncate">{invoice.vendor_name || ''}</p>
+              <p className="text-xs font-mono font-medium text-gray-500">{invoice.vendor_gstin || ''}</p>
             </div>
 
             {/* Center: Confidence + ITC */}
@@ -461,17 +461,17 @@ export default function InvoiceDetailPanel({
               {/* 1. Invoice Header */}
               <Section title="Invoice Header" open={secHeader} onToggle={() => setSecHeader(v => !v)}>
                 <div className="px-4 py-3 grid grid-cols-2 gap-x-8 gap-y-3">
-                  <InfoField label="Invoice Date" value={invoice.invoice_date || '—'} />
-                  <InfoField label="Period" value={invoice.period_label || '—'} />
+                  <InfoField label="Invoice Date" value={invoice.invoice_date || ''} />
+                  <InfoField label="Period" value={invoice.period_label || ''} />
                   <div>
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Supplier</p>
-                    <p className="text-sm font-semibold text-gray-900">{invoice.vendor_name || '—'}</p>
-                    <p className="text-sm font-medium font-mono text-gray-600">{invoice.vendor_gstin || '—'}</p>
+                    <p className="text-sm font-semibold text-gray-900">{invoice.vendor_name || ''}</p>
+                    <p className="text-sm font-medium font-mono text-gray-600">{invoice.vendor_gstin || ''}</p>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Buyer</p>
-                    <p className="text-sm font-semibold text-gray-900">{invoice.buyer_name || '—'}</p>
-                    <p className="text-sm font-medium font-mono text-gray-600">{invoice.buyer_gstin || '—'}</p>
+                    <p className="text-sm font-semibold text-gray-900">{invoice.buyer_name || ''}</p>
+                    <p className="text-sm font-medium font-mono text-gray-600">{invoice.buyer_gstin || ''}</p>
                   </div>
                   <InfoField label="Tax Type" value={invoice.tax_type === 'cgst_sgst' ? 'CGST + SGST' : 'IGST'} />
                 </div>
@@ -498,13 +498,13 @@ export default function InvoiceDetailPanel({
                       {lineItems.map((it, i) => (
                         <tr key={i} className="hover:bg-gray-50">
                           <td className="px-3 py-2.5 text-sm text-gray-400">{i + 1}</td>
-                          <td className="px-3 py-2.5 text-sm font-medium text-gray-800">{it.description || '—'}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-700">{it.hsn || '—'}</td>
+                          <td className="px-3 py-2.5 text-sm font-medium text-gray-800">{it.description || ''}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-700">{it.hsn || ''}</td>
                           <td className="px-3 py-2.5 text-sm text-right text-gray-700">{it.gst_percent}%</td>
                           <td className="px-3 py-2.5 text-sm text-right tabular-nums font-medium text-gray-800">{it.qty}</td>
                           <td className="px-3 py-2.5 text-sm text-gray-600">{it.uom}</td>
                           <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-800">{formatINR(it.rate)}</td>
-                          <td className="px-3 py-2.5 text-sm text-right text-gray-600">{it.disc_percent > 0 ? `${it.disc_percent}%` : '—'}</td>
+                          <td className="px-3 py-2.5 text-sm text-right text-gray-600">{it.disc_percent > 0 ? `${it.disc_percent}%` : '0%'}</td>
                           <td className="px-3 py-2.5 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(calcLineAmount(it))}</td>
                         </tr>
                       ))}
@@ -571,8 +571,8 @@ export default function InvoiceDetailPanel({
                       <tbody className="divide-y divide-gray-100">
                         {charges.map((c, i) => (
                           <tr key={i} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 text-sm text-gray-700">{c.description || '—'}</td>
-                            <td className="px-3 py-2 text-sm font-mono text-gray-500">{(c.sac ?? c.hsn ?? '') || <span className="text-gray-300">—</span>}</td>
+                            <td className="px-3 py-2 text-sm text-gray-700">{c.description || ''}</td>
+                            <td className="px-3 py-2 text-sm font-mono text-gray-500">{(c.sac ?? c.hsn ?? '') || <span className="text-gray-400 text-xs">N/A</span>}</td>
                             <td className="px-3 py-2 text-sm">
                               <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${c.gst_percent > 0 ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
                                 {c.gst_percent > 0 ? 'Taxable' : 'Non-GST'}
@@ -624,7 +624,7 @@ export default function InvoiceDetailPanel({
                           <tr key={i} className="hover:bg-gray-50">
                             <td className="px-3 py-2.5 text-sm text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-800">{r.hsn}</td>
-                            <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : <span className="text-gray-400">—</span>}</td>
+                            <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '0%'}</td>
                             <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">₹{formatINR(r.taxable)}</td>
                             <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
                             <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
@@ -636,9 +636,9 @@ export default function InvoiceDetailPanel({
                         <tr>
                           <td colSpan={3} className="px-3 py-2 text-xs font-bold text-gray-500 uppercase">Total</td>
                           <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">₹{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedCGST > 0 ? `₹${formatINR(computedCGST)}` : '—'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedSGST > 0 ? `₹${formatINR(computedSGST)}` : '—'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedIGST > 0 ? `₹${formatINR(computedIGST)}` : '—'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedCGST > 0 ? `₹${formatINR(computedCGST)}` : '0%'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedSGST > 0 ? `₹${formatINR(computedSGST)}` : '0%'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedIGST > 0 ? `₹${formatINR(computedIGST)}` : '0%'}</td>
                         </tr>
                       </tfoot>
                     </table>
@@ -646,10 +646,10 @@ export default function InvoiceDetailPanel({
                 </Section>
               )}
 
-              {/* 6. Invoice Reconciliation — A/B/C/D convention */}
+              {/* 6. Invoice Reconciliation - A/B/C/D convention */}
               <Section title="Invoice Reconciliation" open={secRecon} onToggle={() => setSecRecon(v => !v)}>
                 <div className="px-4 py-3 space-y-1.5">
-                  <ReconRow label="Subtotal — Line Items (A)" value={`₹${formatINR(subtotal)}`} />
+                  <ReconRow label="Subtotal - Line Items (A)" value={`₹${formatINR(subtotal)}`} />
                   {billDiscount > 0 && <ReconRow label="Bill Discount (−B)" value={`−₹${formatINR(billDiscount)}`} valueClass="text-red-600" />}
                   {taxableChargesTotal > 0 && <ReconRow label="Taxable Additional Charges (+C)" value={`+₹${formatINR(taxableChargesTotal)}`} />}
                   <div className="flex justify-between items-center text-sm border-t border-dashed border-gray-200 pt-2 font-semibold">
@@ -681,9 +681,9 @@ export default function InvoiceDetailPanel({
               <Section title="Audit Trail" open={secAudit} onToggle={() => setSecAudit(v => !v)}>
                 <div className="px-4 py-3 grid grid-cols-2 gap-3">
                   <InfoField label="Accepted At" value={fmt(invoice.accepted_at)} />
-                  <InfoField label="Upload Date" value={invoice.upload_date ?? '—'} />
-                  <InfoField label="File" value={invoice.original_filename ?? invoice.filename ?? '—'} />
-                  <InfoField label="Period" value={`${invoice.financial_year ?? ''} ${invoice.period_label ?? ''}`.trim() || '—'} />
+                  <InfoField label="Upload Date" value={invoice.upload_date ?? ''} />
+                  <InfoField label="File" value={invoice.original_filename ?? invoice.filename ?? ''} />
+                  <InfoField label="Period" value={`${invoice.financial_year ?? ''} ${invoice.period_label ?? ''}`.trim() || ''} />
                 </div>
               </Section>
 
@@ -739,7 +739,7 @@ export default function InvoiceDetailPanel({
                 </div>
               </div>
 
-              {/* Line Items — proper table with fixed widths */}
+              {/* Line Items - proper table with fixed widths */}
               <div className="border border-gray-200 rounded-xl bg-white overflow-hidden">
                 <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                   <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Line Items</span>
@@ -872,7 +872,7 @@ export default function InvoiceDetailPanel({
               {editFullTaxRows.length > 0 && (
                 <div className="border border-indigo-200 rounded-xl bg-indigo-50 overflow-hidden">
                   <div className="px-4 py-2.5 bg-indigo-100 border-b border-indigo-200">
-                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Tax Summary — HSN / SAC (Live)</span>
+                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Tax Summary - HSN / SAC (Live)</span>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -890,7 +890,7 @@ export default function InvoiceDetailPanel({
                         {editFullTaxRows.map((r, i) => (
                           <tr key={i}>
                             <td className="px-3 py-2 text-sm font-mono font-medium text-indigo-800">{r.hsn}</td>
-                            <td className="px-3 py-2 text-sm text-right text-indigo-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '—'}</td>
+                            <td className="px-3 py-2 text-sm text-right text-indigo-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '0%'}</td>
                             <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-indigo-900">₹{formatINR(r.taxable)}</td>
                             <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
                             <td className="px-3 py-2 text-sm text-right tabular-nums text-indigo-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
@@ -907,7 +907,7 @@ export default function InvoiceDetailPanel({
               <div className="border border-gray-200 rounded-xl bg-white p-4">
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Live Reconciliation</p>
                 <div className="space-y-1.5 mb-4">
-                  <ReconRow label="Subtotal — Line Items (A)" value={`₹${formatINR(editSubtotal)}`} />
+                  <ReconRow label="Subtotal - Line Items (A)" value={`₹${formatINR(editSubtotal)}`} />
                   {editBillDiscount > 0 && <ReconRow label="Bill Discount (−B)" value={`−₹${formatINR(editBillDiscount)}`} valueClass="text-red-600" />}
                   {editTaxableChargesTotal > 0 && <ReconRow label="Taxable Additional Charges (+C)" value={`+₹${formatINR(editTaxableChargesTotal)}`} />}
                   <div className="flex justify-between items-center text-sm border-t border-dashed border-gray-200 pt-2 font-semibold">
@@ -950,7 +950,7 @@ export default function InvoiceDetailPanel({
           {showDeleteConfirm && (
             <div className="mb-3 bg-red-50 border border-red-200 rounded-xl p-3">
               <p className="text-sm font-semibold text-red-800 mb-0.5">Delete invoice {invoice.invoice_number}?</p>
-              <p className="text-xs text-red-600 mb-2">Permanent — cannot be undone.</p>
+              <p className="text-xs text-red-600 mb-2">Permanent - cannot be undone.</p>
               <div className="flex gap-2">
                 <button onClick={handleDelete} disabled={deleting} className="px-4 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg">
                   {deleting ? 'Deleting…' : 'Confirm Delete'}
@@ -997,7 +997,7 @@ export default function InvoiceDetailPanel({
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50" onClick={e => e.stopPropagation()}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
             <h3 className="font-semibold text-gray-900 mb-1">Move to Rejected Archive</h3>
-            <p className="text-sm text-gray-500 mb-4">{invoice.invoice_number || '—'} · {invoice.vendor_name}</p>
+            <p className="text-sm text-gray-500 mb-4">{invoice.invoice_number || ''} · {invoice.vendor_name}</p>
             <label className="block text-xs font-medium text-gray-600 mb-1">Reason (Optional)</label>
             <textarea
               value={rejectReason}

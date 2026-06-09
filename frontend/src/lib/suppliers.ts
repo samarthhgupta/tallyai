@@ -1,12 +1,12 @@
-// Supplier Master — company-scoped, stored in Supabase.
+// Supplier Master - company-scoped, stored in Supabase.
 // Unique constraints: company_id + vendor_gstin (registered) | company_id + tally_ledger_name (unregistered)
 //
 // KEY RULES (do not violate):
-//   1. tally_ledger_name is stored and output EXACTLY as imported — no trim, no normalisation.
+//   1. tally_ledger_name is stored and output EXACTLY as imported - no trim, no normalisation.
 //   2. Matching/dedup uses normalised comparison internally but never mutates the stored value.
-//   3. State is ALWAYS auto-derived — never entered by user.
-//   4. Invalid GSTIN format is allowed — import proceeds, gstin_valid = false.
-//   5. learnVendorName() updates vendor_name only — never touches tally_ledger_name.
+//   3. State is ALWAYS auto-derived - never entered by user.
+//   4. Invalid GSTIN format is allowed - import proceeds, gstin_valid = false.
+//   5. learnVendorName() updates vendor_name only - never touches tally_ledger_name.
 
 import { getSupabase } from './supabase';
 
@@ -33,9 +33,9 @@ export function deriveStateFromGstin(gstin: string): string | null {
   return STATE_CODES[code] ?? null;
 }
 
-// Tally exports these values for unregistered parties — normalise all to ''
+// Tally exports these values for unregistered parties - normalise all to ''
 const UNREGISTERED_MARKERS = new Set([
-  'UNREGISTERED', 'URD', 'N/A', 'NA', 'NIL', 'NOT APPLICABLE', 'NOT REGISTERED', '-', '—', '',
+  'UNREGISTERED', 'URD', 'N/A', 'NA', 'NIL', 'NOT APPLICABLE', 'NOT REGISTERED', '-', '-', '',
 ]);
 
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
@@ -54,10 +54,10 @@ export function normaliseGstin(raw: string): string {
 export interface SupplierMaster {
   id: string;
   company_id: string;
-  tally_ledger_name: string; // sacred — stored and output exactly as imported
+  tally_ledger_name: string; // sacred - stored and output exactly as imported
   vendor_gstin: string;      // '' for unregistered
   vendor_name: string;       // auto = tally_ledger_name initially; updated by invoice learning
-  state_name: string;        // auto-derived — never user-entered
+  state_name: string;        // auto-derived - never user-entered
   is_unregistered: boolean;
   gstin_valid: boolean;
   created_at: string;
@@ -65,8 +65,8 @@ export interface SupplierMaster {
 }
 
 export interface ImportRow {
-  tally_ledger_name: string; // raw from Excel — stored as-is
-  vendor_gstin: string;      // raw from Excel — normalised for lookup only
+  tally_ledger_name: string; // raw from Excel - stored as-is
+  vendor_gstin: string;      // raw from Excel - normalised for lookup only
 }
 
 export interface ImportResult {
@@ -110,7 +110,7 @@ export async function addSupplier(
 
   const payload = {
     company_id: companyId,
-    tally_ledger_name: params.tally_ledger_name, // NO trim — stored exactly as-is
+    tally_ledger_name: params.tally_ledger_name, // NO trim - stored exactly as-is
     vendor_gstin: gstin,
     vendor_name: params.vendor_name ?? params.tally_ledger_name,
     state_name: stateName,
@@ -131,7 +131,7 @@ export async function addSupplier(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((insertErr as any).code !== '23505') throw insertErr;
 
-  // Duplicate — find existing row and update
+  // Duplicate - find existing row and update
   const matchCol = unregistered ? 'tally_ledger_name' : 'vendor_gstin';
   const matchVal = unregistered ? params.tally_ledger_name : gstin;
   const { data: existing } = await db()
@@ -193,7 +193,7 @@ export async function deleteSupplier(id: string): Promise<void> {
   if (error) throw error;
 }
 
-// Word-overlap similarity check — returns true if the two names share enough significant words.
+// Word-overlap similarity check - returns true if the two names share enough significant words.
 // Prevents learnVendorName from overwriting vendor_name with a completely unrelated business name
 // when the supplier master has an incorrect GSTIN assigned to it.
 function namesAreSimilar(a: string, b: string): boolean {
@@ -211,7 +211,7 @@ function namesAreSimilar(a: string, b: string): boolean {
 
 // Auto-learn: called when invoice is accepted.
 // Updates vendor_name from invoice if GSTIN matches AND the invoice name is similar
-// enough to tally_ledger_name. Skips silently if names share no significant words —
+// enough to tally_ledger_name. Skips silently if names share no significant words -
 // this prevents a wrong GSTIN in the master from mapping an unrelated vendor name.
 // NEVER touches tally_ledger_name.
 export async function learnVendorName(
@@ -235,10 +235,10 @@ export async function learnVendorName(
 
   // Guard: only learn if invoice name shares at least one significant word with the Tally ledger name.
   // If there is zero word overlap (e.g. "SHRI VINAYAK TRADERS" vs "Shri Ganesh Traders"),
-  // the GSTIN in the master is likely wrong — skip silently rather than corrupt vendor_name.
+  // the GSTIN in the master is likely wrong - skip silently rather than corrupt vendor_name.
   if (!namesAreSimilar(invoiceVendorName, existing.tally_ledger_name)) {
     console.warn(
-      `learnVendorName: skipped — invoice name "${invoiceVendorName}" shares no words with ledger "${existing.tally_ledger_name}" (GSTIN ${normGstin}). Check supplier master for wrong GSTIN.`,
+      `learnVendorName: skipped - invoice name "${invoiceVendorName}" shares no words with ledger "${existing.tally_ledger_name}" (GSTIN ${normGstin}). Check supplier master for wrong GSTIN.`,
     );
     return;
   }
@@ -252,8 +252,8 @@ export async function learnVendorName(
 }
 
 // Bulk upsert from Excel import.
-// tally_ledger_name stored EXACTLY as in Excel — no trim.
-// State derived automatically — no state column in import.
+// tally_ledger_name stored EXACTLY as in Excel - no trim.
+// State derived automatically - no state column in import.
 export async function bulkUpsertSuppliers(
   companyId: string,
   rows: ImportRow[],
@@ -281,7 +281,7 @@ export async function bulkUpsertSuppliers(
     const unregistered = !gstin;
 
     if (!ledger || !ledger.trim()) {
-      result.errors.push({ row: rowNum, identifier: '—', reason: 'Tally Ledger Name is required' });
+      result.errors.push({ row: rowNum, identifier: '-', reason: 'Tally Ledger Name is required' });
       return;
     }
 
@@ -299,7 +299,7 @@ export async function bulkUpsertSuppliers(
 
     const payload = {
       company_id: companyId,
-      tally_ledger_name: ledger, // NO trim — sacred
+      tally_ledger_name: ledger, // NO trim - sacred
       vendor_gstin: gstin,
       vendor_name: ledger,       // default = tally_ledger_name; overwritten by learning later
       state_name: stateName,

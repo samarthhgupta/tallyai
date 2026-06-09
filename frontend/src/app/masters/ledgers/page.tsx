@@ -178,7 +178,7 @@ export default function LedgerMastersPage() {
       if (purchaseCol === -1) {
         setImportResult({
           inserted: 0, updated: 0,
-          errors: [{ row: 0, hsn: '—', reason: 'Could not find a Purchase Ledger column in the file' }],
+          errors: [{ row: 0, hsn: '-', reason: 'Could not find a Purchase Ledger column in the file' }],
         });
         return;
       }
@@ -203,7 +203,7 @@ export default function LedgerMastersPage() {
     } catch {
       setImportResult({
         inserted: 0, updated: 0,
-        errors: [{ row: 0, hsn: '—', reason: 'Failed to read file. Ensure it is a valid .xlsx or .xls file.' }],
+        errors: [{ row: 0, hsn: '-', reason: 'Failed to read file. Ensure it is a valid .xlsx or .xls file.' }],
       });
     } finally {
       setImporting(false);
@@ -338,11 +338,11 @@ export default function LedgerMastersPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns:</p>
-                <p>• <strong>HSN/SAC Code</strong> — HSN or SAC code (can be blank for rate-only mappings)</p>
-                <p>• <strong>GST %</strong> — GST rate (0, 5, 12, 18, 28)</p>
-                <p>• <strong>Description</strong> — category label (optional)</p>
-                <p>• <strong>Purchase Ledger</strong> — exact purchase ledger name in Tally (required)</p>
-                <p>• <strong>CGST Ledger, SGST Ledger, IGST Ledger</strong> — exact tax ledger names in Tally</p>
+                <p>• <strong>HSN/SAC Code</strong> - HSN or SAC code (can be blank for rate-only mappings)</p>
+                <p>• <strong>GST %</strong> - GST rate (0, 5, 12, 18, 28)</p>
+                <p>• <strong>Description</strong> - category label (optional)</p>
+                <p>• <strong>Purchase Ledger</strong> - exact purchase ledger name in Tally (required)</p>
+                <p>• <strong>CGST Ledger, SGST Ledger, IGST Ledger</strong> - exact tax ledger names in Tally</p>
               </div>
 
               <div
@@ -382,7 +382,7 @@ export default function LedgerMastersPage() {
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
                           <p key={i} className="text-xs text-red-600">
-                            Row {e.row}: <span className="font-mono">{e.hsn}</span> — {e.reason}
+                            Row {e.row}: <span className="font-mono">{e.hsn}</span> - {e.reason}
                           </p>
                         ))}
                       </div>
@@ -475,7 +475,7 @@ export default function LedgerMastersPage() {
                     />
                   </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-2">Names must match exactly as they appear in Tally — case and spaces matter.</p>
+                <p className="text-xs text-gray-400 mt-2">Names must match exactly as they appear in Tally - case and spaces matter.</p>
               </div>
 
               {formError && <p className="text-sm text-red-600">{formError}</p>}
@@ -519,9 +519,9 @@ export default function LedgerMastersPage() {
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((l) => (
                     <tr key={l.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-mono text-gray-700">{l.hsn_sac || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-gray-700">{l.hsn_sac || '-'}</td>
                       <td className="px-4 py-3 text-gray-600">{l.gst_percent}%</td>
-                      <td className="px-4 py-3 text-gray-700">{l.description || '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">{l.description || '-'}</td>
                       <td className="px-4 py-3 text-gray-900 font-medium">{l.purchase_ledger}</td>
                       <td className="px-4 py-3 text-gray-500 text-xs leading-5">
                         {l.cgst_ledger && <div>{l.cgst_ledger}</div>}

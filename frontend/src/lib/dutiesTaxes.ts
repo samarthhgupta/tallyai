@@ -1,4 +1,4 @@
-// Duties & Taxes Master — company-scoped, stored in Supabase.
+// Duties & Taxes Master - company-scoped, stored in Supabase.
 //
 // PURPOSE: answers "which Tally ledger receives this tax amount?"
 // It does NOT calculate tax. It does NOT depend on HSN/SAC.
@@ -6,7 +6,7 @@
 // This master only maps those extracted amounts to the correct Tally ledger.
 //
 // KEY RULES (do not violate):
-//   1. tally_ledger_name stored and output EXACTLY as entered — no trim, no change.
+//   1. tally_ledger_name stored and output EXACTLY as entered - no trim, no change.
 //   2. Lookup is rate-specific first; falls back to consolidated (null rate) if no match.
 //   3. Multiple rows per component are allowed (CGST@9%, CGST@2.5%, CGST consolidated).
 
@@ -26,7 +26,7 @@ export interface DutiesTaxesMaster {
   company_id: string;
   tax_component: TaxComponent;
   tax_rate: number | null;     // null = consolidated (no rate distinction)
-  tally_ledger_name: string;   // sacred — stored and output exactly as entered
+  tally_ledger_name: string;   // sacred - stored and output exactly as entered
   created_at: string;
   updated_at: string;
 }
@@ -49,7 +49,7 @@ export async function addDutiesTaxes(
   params: {
     tax_component: TaxComponent;
     tax_rate: number | null;
-    tally_ledger_name: string; // stored EXACTLY as provided — no trim
+    tally_ledger_name: string; // stored EXACTLY as provided - no trim
   },
 ): Promise<DutiesTaxesMaster> {
   const user = (await getSupabase().auth.getUser()).data.user;
@@ -91,7 +91,7 @@ export async function deleteDutiesTaxes(id: string): Promise<void> {
 // ─── Lookup ───────────────────────────────────────────────────────────────────
 // Returns the exact Tally ledger name for a given tax component and rate.
 // Priority: rate-specific match → consolidated (null rate) fallback → null.
-// The returned value is used verbatim in XML — never modified.
+// The returned value is used verbatim in XML - never modified.
 
 export async function lookupTaxLedger(
   companyId: string,

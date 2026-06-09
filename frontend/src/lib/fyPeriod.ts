@@ -1,5 +1,5 @@
 // Financial Year + Period utilities for TallyAI.
-// Indian FY runs April–March. We store three values per selected period:
+// Indian FY runs April-March. We store three values per selected period:
 //   financial_year: 'FY 2024-25'
 //   period_month:   '2024-10'   (YYYY-MM, ISO-sortable)
 //   period_label:   'October-24' (human label for display)
@@ -49,7 +49,7 @@ export interface MonthOption {
   period_label: string;   // 'October-24'
 }
 
-// Returns months Apr–Mar for the given FY string (e.g. 'FY 2024-25').
+// Returns months Apr-Mar for the given FY string (e.g. 'FY 2024-25').
 // Months in the future (beyond today) are excluded.
 export function getMonthsForFY(fy: string): MonthOption[] {
   // Parse start year from 'FY 2024-25'
@@ -143,13 +143,13 @@ export function invoiceFY(dateStr: string): string {
   } catch {
     return '';
   }
-  // Indian FY: Apr(3)–Mar(2). If month < April, FY started previous year.
+  // Indian FY: Apr(3)-Mar(2). If month < April, FY started previous year.
   const fyStart = month >= 3 ? year : year - 1;
   return `FY ${fyStart}-${String(fyStart + 1).slice(2)}`;
 }
 
 // ─── Derive FYPeriod from invoice date ────────────────────────────────────────
-// Used when saving invoices — month comes from invoice date, not user selection.
+// Used when saving invoices - month comes from invoice date, not user selection.
 
 export function periodFromInvoiceDate(invoiceDate: string, financialYear: string): FYPeriod {
   let year: number;

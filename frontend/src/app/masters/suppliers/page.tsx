@@ -179,14 +179,14 @@ export default function SupplierMastersPage() {
       const gstinCol = colIdx(['gstin/uin', 'gstin', 'gst', 'tin']);
 
       if (ledgerCol === -1) {
-        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '—', reason: 'Could not find Tally Ledger Name column' }] });
+        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '-', reason: 'Could not find Tally Ledger Name column' }] });
         return;
       }
 
       const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
 
       const rows = dataRows.map((r) => ({
-        tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed — preserve exactly
+        tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed - preserve exactly
         vendor_gstin: gstinCol !== -1 ? String(r[gstinCol] ?? '') : '',
       }));
 
@@ -194,7 +194,7 @@ export default function SupplierMastersPage() {
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
-      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '—', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
+      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, identifier: '-', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -309,10 +309,10 @@ export default function SupplierMastersPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns (from Tally Sundry Creditors export):</p>
-                <p>• <strong>Tally Ledger Name</strong> — exact ledger name as in Tally</p>
-                <p>• <strong>GSTIN</strong> — 15-character GSTIN (blank or "UNREGISTERED" for unregistered parties)</p>
+                <p>• <strong>Tally Ledger Name</strong> - exact ledger name as in Tally</p>
+                <p>• <strong>GSTIN</strong> - 15-character GSTIN (blank or "UNREGISTERED" for unregistered parties)</p>
                 <p className="mt-1 text-amber-700">State is derived automatically from GSTIN. No state column needed.</p>
-                <p className="text-amber-700">Ledger names are stored exactly as in your file — no changes are made.</p>
+                <p className="text-amber-700">Ledger names are stored exactly as in your file - no changes are made.</p>
               </div>
 
               <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
@@ -337,7 +337,7 @@ export default function SupplierMastersPage() {
                       <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.identifier}</span> — {e.reason}</p>
+                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.identifier}</span> - {e.reason}</p>
                         ))}
                       </div>
                     </div>
@@ -360,7 +360,7 @@ export default function SupplierMastersPage() {
                     onChange={(e) => setForm({ ...form, tally_ledger_name: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. ABC Traders" />
-                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered — case, spaces and all.</p>
+                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered - case, spaces and all.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -373,23 +373,23 @@ export default function SupplierMastersPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="27AABCU9603R1ZX" />
                 </div>
-                {/* Auto-derived state — read only */}
+                {/* Auto-derived state - read only */}
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">State <span className="font-normal text-gray-400">(auto-derived)</span></label>
                   <div className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 min-h-[38px] flex items-center">
                     {previewUnregistered
-                      ? <span className="text-amber-600">{companyState || 'Set company GSTIN to derive'} <span className="text-xs text-gray-400">(company state — unregistered)</span></span>
+                      ? <span className="text-amber-600">{companyState || 'Set company GSTIN to derive'} <span className="text-xs text-gray-400">(company state - unregistered)</span></span>
                       : previewState
                         ? <span className="text-green-700">{previewState}</span>
                         : previewInvalid
-                          ? <span className="text-amber-600">Could not derive — invalid GSTIN</span>
+                          ? <span className="text-amber-600">Could not derive - invalid GSTIN</span>
                           : <span className="text-gray-400">Enter GSTIN to derive</span>
                     }
                   </div>
                 </div>
               </div>
               {previewInvalid && (
-                <p className="text-xs text-amber-600 mt-2">⚠ Invalid GSTIN format — supplier will be saved but flagged</p>
+                <p className="text-xs text-amber-600 mt-2">⚠ Invalid GSTIN format - supplier will be saved but flagged</p>
               )}
               {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
@@ -445,7 +445,7 @@ export default function SupplierMastersPage() {
                           <span className="font-mono text-gray-600">{s.vendor_gstin}</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{s.state_name || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{s.state_name || '-'}</td>
                       <td className="px-4 py-3 text-xs text-gray-700">
                         {s.vendor_name}
                         {s.vendor_name !== s.tally_ledger_name && (

@@ -177,7 +177,7 @@ export default function StockItemsPage() {
       const gstCol = colIdx(['gst %', 'gst percent', 'gst rate', 'gst']);
 
       if (nameCol === -1) {
-        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '—', reason: 'Could not find Tally Stock Item Name column' }] });
+        setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '-', reason: 'Could not find Tally Stock Item Name column' }] });
         return;
       }
 
@@ -198,7 +198,7 @@ export default function StockItemsPage() {
       setImportResult(result);
       await refresh();
     } catch (err: unknown) {
-      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '—', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
+      setImportResult({ inserted: 0, updated: 0, errors: [{ row: 0, item: '-', reason: err instanceof Error ? err.message : 'Failed to read file' }] });
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -297,11 +297,11 @@ export default function StockItemsPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns (from Tally stock item list export):</p>
-                <p>• <strong>Tally Stock Item Name</strong> — exact item name as in Tally (required)</p>
-                <p>• <strong>Alias Name</strong> — how this item appears on invoices (optional)</p>
-                <p>• <strong>Unit</strong> — e.g. NOS, KG, BOX (optional)</p>
-                <p>• <strong>HSN Code</strong> — optional, not required for XML generation</p>
-                <p className="mt-1 text-amber-700">Item names are stored exactly as in your file — no changes are made.</p>
+                <p>• <strong>Tally Stock Item Name</strong> - exact item name as in Tally (required)</p>
+                <p>• <strong>Alias Name</strong> - how this item appears on invoices (optional)</p>
+                <p>• <strong>Unit</strong> - e.g. NOS, KG, BOX (optional)</p>
+                <p>• <strong>HSN Code</strong> - optional, not required for XML generation</p>
+                <p className="mt-1 text-amber-700">Item names are stored exactly as in your file - no changes are made.</p>
               </div>
 
               <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
@@ -326,7 +326,7 @@ export default function StockItemsPage() {
                       <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.item}</span> — {e.reason}</p>
+                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.item}</span> - {e.reason}</p>
                         ))}
                       </div>
                     </div>
@@ -349,7 +349,7 @@ export default function StockItemsPage() {
                     onChange={(e) => setForm({ ...form, tally_item_name: e.target.value })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. A4 Copier Paper Ream" />
-                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered — must match Tally.</p>
+                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered - must match Tally.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -429,10 +429,10 @@ export default function StockItemsPage() {
                   {filtered.map((s) => (
                     <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_item_name}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '—'}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.hsn_code || '—'}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.gst_percent != null ? `${s.gst_percent}%` : '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">-</span>}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '-'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.hsn_code || '-'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.gst_percent != null ? `${s.gst_percent}%` : '-'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
                           <button onClick={() => openEdit(s)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>

@@ -7,13 +7,37 @@ import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice, rejectInvoices } from '@/lib/db';
 import type { RejectedRecord } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
-import { formatINR } from '@/types/invoice';
+import { formatINR, buildFullTaxSummary, calcLineAmount } from '@/types/invoice';
+import { resolveChargeSac } from '@/lib/expenseLedgers';
 import AppSidebar from '@/components/AppSidebar';
 import { getFYList, currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import InvoiceDetailPanel from '@/components/InvoiceDetailPanel';
 import { getSupabase } from '@/lib/supabase';
+
+// ─── Per-invoice computed financials (single source of truth) ────────────────
+// Always derives from the full tax summary (line items + SAC charges) so values
+// match exactly what InvoiceDetailPanel shows.
+function computeInvoiceFinancials(inv: StoredInvoice) {
+  const lineItems = inv.line_items ?? [];
+  const charges = (inv.charges ?? []).map((c) => ({
+    ...c,
+    sac: resolveChargeSac(c.description, c.sac),
+  }));
+  const billDiscount = inv.bill_discount_amount ?? 0;
+  const taxableChargesTotal = charges.filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+  const nonGstChargesTotal = charges.filter((c) => c.gst_percent === 0).reduce((s, c) => s + c.amount, 0);
+  const subtotal = lineItems.reduce((s, it) => s + calcLineAmount(it), 0);
+  const netTaxable = Math.round((subtotal - billDiscount + taxableChargesTotal) * 100) / 100;
+  const fullTaxRows = buildFullTaxSummary(lineItems, charges, inv.tax_type, billDiscount);
+  const cgst = Math.round(fullTaxRows.reduce((s, r) => s + r.cgst, 0) * 100) / 100;
+  const sgst = Math.round(fullTaxRows.reduce((s, r) => s + r.sgst, 0) * 100) / 100;
+  const igst = Math.round(fullTaxRows.reduce((s, r) => s + r.igst, 0) * 100) / 100;
+  const roundOff = inv.round_off ?? 0;
+  const total = Math.round((netTaxable + nonGstChargesTotal + cgst + sgst + igst + roundOff) * 100) / 100;
+  return { netTaxable, cgst, sgst, igst, roundOff, total };
+}
 
 // ─── ITC review audit data stored in itc_remark as JSON ───────────────────────
 
@@ -29,7 +53,7 @@ function parseReviewAudit(remark: string | null): ITCReviewAudit | null {
   try {
     const p = JSON.parse(remark);
     if (p?.reviewed_at) return p as ITCReviewAudit;
-  } catch { /* plain text remark — not a review audit */ }
+  } catch { /* plain text remark - not a review audit */ }
   return null;
 }
 
@@ -307,7 +331,7 @@ export default function PurchaseRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  type SortKey = 'date' | 'total' | 'vendor' | 'taxable' | 'itc' | 'invoice_number' | 'cgst' | 'sgst' | 'igst';
+  type SortKey = 'date' | 'total' | 'vendor' | 'taxable' | 'itc' | 'invoice_number' | 'cgst' | 'sgst' | 'igst' | 'round_off';
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -317,13 +341,9 @@ export default function PurchaseRegisterPage() {
   }
 
   function exportToExcel() {
+    const itcLabel: Record<string, string> = { eligible: 'Eligible', reviewed_eligible: 'Reviewed', potentially_ineligible: 'At Risk', not_applicable: 'N/A' };
     const rows = sortedInvoices.map((inv, idx) => {
-      const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
-      const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
-      const taxable = subtotal + gstCharges;
-      const itcLabel: Record<string, string> = {
-        eligible: 'Eligible', reviewed_eligible: 'Reviewed', potentially_ineligible: 'At Risk', not_applicable: 'N/A',
-      };
+      const f = financialsById.get(inv.id)!;
       return {
         '#': idx + 1,
         'Invoice #': inv.invoice_number ?? '',
@@ -331,11 +351,12 @@ export default function PurchaseRegisterPage() {
         'GSTIN': inv.vendor_gstin ?? '',
         'Date': inv.invoice_date ?? '',
         'Period': inv.period_month ?? '',
-        'Taxable (₹)': taxable,
-        'CGST (₹)': inv.cgst ?? 0,
-        'SGST (₹)': inv.sgst ?? 0,
-        'IGST (₹)': inv.igst ?? 0,
-        'Total (₹)': inv.total ?? 0,
+        'Taxable (Rs)': f.netTaxable,
+        'CGST (Rs)': f.cgst,
+        'SGST (Rs)': f.sgst,
+        'IGST (Rs)': f.igst,
+        'Round Off (Rs)': f.roundOff,
+        'Total (Rs)': f.total,
         'ITC Status': itcLabel[inv.itc_status ?? ''] ?? '',
       };
     });
@@ -363,15 +384,18 @@ export default function PurchaseRegisterPage() {
 
   const itcOrder: Record<string, number> = { eligible: 0, reviewed_eligible: 1, potentially_ineligible: 2, not_applicable: 3 };
   const sortedInvoices = [...invoices].sort((a, b) => {
+    const fa = financialsById.get(a.id)!;
+    const fb = financialsById.get(b.id)!;
     let cmp = 0;
     if (sortKey === 'date') cmp = (a.invoice_date ?? '').localeCompare(b.invoice_date ?? '');
     else if (sortKey === 'vendor') cmp = (a.vendor_name ?? '').localeCompare(b.vendor_name ?? '');
     else if (sortKey === 'invoice_number') cmp = (a.invoice_number ?? '').localeCompare(b.invoice_number ?? '');
-    else if (sortKey === 'total') cmp = (a.total ?? 0) - (b.total ?? 0);
-    else if (sortKey === 'taxable') cmp = ((a.subtotal ?? 0) - (a.bill_discount_amount ?? 0)) - ((b.subtotal ?? 0) - (b.bill_discount_amount ?? 0));
-    else if (sortKey === 'cgst') cmp = (a.cgst ?? 0) - (b.cgst ?? 0);
-    else if (sortKey === 'sgst') cmp = (a.sgst ?? 0) - (b.sgst ?? 0);
-    else if (sortKey === 'igst') cmp = (a.igst ?? 0) - (b.igst ?? 0);
+    else if (sortKey === 'total') cmp = fa.total - fb.total;
+    else if (sortKey === 'taxable') cmp = fa.netTaxable - fb.netTaxable;
+    else if (sortKey === 'cgst') cmp = fa.cgst - fb.cgst;
+    else if (sortKey === 'sgst') cmp = fa.sgst - fb.sgst;
+    else if (sortKey === 'igst') cmp = fa.igst - fb.igst;
+    else if (sortKey === 'round_off') cmp = fa.roundOff - fb.roundOff;
     else if (sortKey === 'itc') cmp = (itcOrder[a.itc_status ?? ''] ?? 9) - (itcOrder[b.itc_status ?? ''] ?? 9);
     return sortAsc ? cmp : -cmp;
   });
@@ -478,17 +502,16 @@ export default function PurchaseRegisterPage() {
     }
   };
 
-  // ── Totals ──
-  const totalTaxable = invoices.reduce((s, inv) => {
-    const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
-    const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((cs, c) => cs + c.amount, 0);
-    return s + subtotal + gstCharges;
-  }, 0);
-  const totalCGST = invoices.reduce((s, inv) => s + (inv.cgst ?? 0), 0);
-  const totalSGST = invoices.reduce((s, inv) => s + (inv.sgst ?? 0), 0);
-  const totalIGST = invoices.reduce((s, inv) => s + (inv.igst ?? 0), 0);
+  // ── Totals — always derived from computeInvoiceFinancials (same as detail panel) ──
+  const invoiceFinancials = invoices.map((inv) => ({ id: inv.id, ...computeInvoiceFinancials(inv) }));
+  const financialsById = new Map(invoiceFinancials.map((f) => [f.id, f]));
+  const totalTaxable = invoiceFinancials.reduce((s, f) => s + f.netTaxable, 0);
+  const totalCGST = invoiceFinancials.reduce((s, f) => s + f.cgst, 0);
+  const totalSGST = invoiceFinancials.reduce((s, f) => s + f.sgst, 0);
+  const totalIGST = invoiceFinancials.reduce((s, f) => s + f.igst, 0);
   const totalGST = totalCGST + totalSGST + totalIGST;
-  const grandTotal = invoices.reduce((s, inv) => s + (inv.total ?? 0), 0);
+  const totalRoundOff = invoiceFinancials.reduce((s, f) => s + f.roundOff, 0);
+  const grandTotal = invoiceFinancials.reduce((s, f) => s + f.total, 0);
   const itcEligibleCount = invoices.filter(inv => inv.itc_status === 'eligible').length;
   const itcAtRiskCount = invoices.filter(inv => inv.itc_status === 'potentially_ineligible').length;
   const itcReviewedCount = invoices.filter(inv => inv.itc_status === 'reviewed_eligible').length;
@@ -576,19 +599,18 @@ export default function PurchaseRegisterPage() {
   const handleBulkExport = () => {
     const selected = sortedInvoices.filter((inv) => selectedIds.has(inv.id));
     const rows = selected.map((inv, idx) => {
-      const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
-      const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
-      const taxable = subtotal + gstCharges;
+      const f = computeInvoiceFinancials(inv);
       const itcLabel: Record<string, string> = { eligible: 'Eligible', reviewed_eligible: 'Reviewed', potentially_ineligible: 'At Risk', not_applicable: 'N/A' };
       return {
         '#': idx + 1, 'Invoice #': inv.invoice_number ?? '', Vendor: inv.vendor_name ?? '',
         GSTIN: inv.vendor_gstin ?? '', Date: inv.invoice_date ?? '', Period: inv.period_month ?? '',
-        'Taxable (₹)': taxable, 'CGST (₹)': inv.cgst ?? 0, 'SGST (₹)': inv.sgst ?? 0,
-        'IGST (₹)': inv.igst ?? 0, 'Total (₹)': inv.total ?? 0, 'ITC Status': itcLabel[inv.itc_status ?? ''] ?? '',
+        'Taxable (Rs)': f.netTaxable, 'CGST (Rs)': f.cgst, 'SGST (Rs)': f.sgst,
+        'IGST (Rs)': f.igst, 'Round Off (Rs)': f.roundOff, 'Total (Rs)': f.total,
+        'ITC Status': itcLabel[inv.itc_status ?? ''] ?? '',
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 4 }, { wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }];
+    ws['!cols'] = [{ wch: 4 }, { wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Selection');
     XLSX.writeFile(wb, `Selected_Invoices_${selected.length}.xlsx`);
@@ -892,7 +914,7 @@ export default function PurchaseRegisterPage() {
             <SummaryCard
               label="Total GST"
               value={`₹${formatINR(totalGST)}`}
-              sub={totalIGST > 0 ? `IGST ₹${formatINR(totalIGST)}` : `CGST ₹${formatINR(totalCGST)} · SGST ₹${formatINR(totalSGST)}`}
+              sub={totalIGST > 0 ? `IGST Rs.${formatINR(totalIGST)}` : `CGST Rs.${formatINR(totalCGST)} / SGST Rs.${formatINR(totalSGST)}`}
             />
             <SummaryCard label="Grand Total" value={`₹${formatINR(grandTotal)}`} />
             <SummaryCard
@@ -979,6 +1001,7 @@ export default function PurchaseRegisterPage() {
                     { key: 'cgst', label: 'CGST', align: 'right' },
                     { key: 'sgst', label: 'SGST', align: 'right' },
                     { key: 'igst', label: 'IGST', align: 'right' },
+                    { key: 'round_off', label: 'Rnd Off', align: 'right' },
                     { key: 'total', label: 'Total', align: 'right' },
                     { key: 'itc', label: 'ITC', align: 'left' },
                   ] as { key: SortKey | null; label: string; align: string }[]).map(({ key, label, align }) => (
@@ -1002,9 +1025,7 @@ export default function PurchaseRegisterPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sortedInvoices.map((inv, idx) => {
-                  const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
-                  const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
-                  const taxableValue = subtotal + gstCharges;
+                  const f = financialsById.get(inv.id)!;
 
                   return (
                     <tr key={inv.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(inv.id) ? 'bg-indigo-50/50' : ''}`}>
@@ -1023,35 +1044,38 @@ export default function PurchaseRegisterPage() {
                           onClick={() => setDetailInvoice(inv)}
                           className="font-semibold text-indigo-600 hover:text-indigo-800 hover:underline text-left text-xs"
                         >
-                          {inv.invoice_number || <span className="text-gray-400">—</span>}
+                          {inv.invoice_number || <span className="text-gray-400 italic">No #</span>}
                         </button>
                       </td>
                       <td className="px-3 py-2.5 text-gray-700 max-w-[150px] truncate" title={inv.vendor_name}>
                         {inv.vendor_name}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-gray-500 whitespace-nowrap">
-                        {inv.vendor_gstin || <span className="text-gray-300">—</span>}
+                        {inv.vendor_gstin || <span className="text-gray-300 text-xs">N/A</span>}
                       </td>
                       <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
                         {fmtDate(inv.invoice_date)}
                       </td>
                       <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">
-                        {inv.period_label || '—'}
+                        {inv.period_label || ''}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-800 whitespace-nowrap">
-                        {formatINR(taxableValue)}
+                        {formatINR(f.netTaxable)}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {(inv.cgst ?? 0) > 0 ? formatINR(inv.cgst!) : <span className="text-gray-300">—</span>}
+                        {f.cgst > 0 ? formatINR(f.cgst) : <span className="text-gray-300">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {(inv.sgst ?? 0) > 0 ? formatINR(inv.sgst!) : <span className="text-gray-300">—</span>}
+                        {f.sgst > 0 ? formatINR(f.sgst) : <span className="text-gray-300">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {(inv.igst ?? 0) > 0 ? formatINR(inv.igst!) : <span className="text-gray-300">—</span>}
+                        {f.igst > 0 ? formatINR(f.igst) : <span className="text-gray-300">0.00</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 whitespace-nowrap text-xs">
+                        {f.roundOff !== 0 ? (f.roundOff > 0 ? '+' : '') + formatINR(f.roundOff) : <span className="text-gray-200">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap">
-                        ₹{formatINR(inv.total ?? 0)}
+                        ₹{formatINR(f.total)}
                       </td>
                       <td className="px-3 py-2.5">
                         <ITCBadge
@@ -1088,17 +1112,20 @@ export default function PurchaseRegisterPage() {
               <tfoot className="bg-gray-50 border-t-2 border-gray-200">
                 <tr>
                   <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                    Total — {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}
+                    Total - {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">{formatINR(totalTaxable)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
-                    {totalCGST > 0 ? formatINR(totalCGST) : <span className="text-gray-300">—</span>}
+                    {totalCGST > 0 ? formatINR(totalCGST) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
-                    {totalSGST > 0 ? formatINR(totalSGST) : <span className="text-gray-300">—</span>}
+                    {totalSGST > 0 ? formatINR(totalSGST) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
-                    {totalIGST > 0 ? formatINR(totalIGST) : <span className="text-gray-300">—</span>}
+                    {totalIGST > 0 ? formatINR(totalIGST) : '0.00'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap text-xs">
+                    {totalRoundOff !== 0 ? (totalRoundOff > 0 ? '+' : '') + formatINR(totalRoundOff) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">₹{formatINR(grandTotal)}</td>
                   <td className="px-3 py-2.5" />

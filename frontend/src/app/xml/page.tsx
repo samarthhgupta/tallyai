@@ -48,7 +48,7 @@ type SuggestionItem =
   | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
   | { kind: 'expense'; keyword: string;    tallyName: string };
 
-// Per-invoice accept payload — everything that should be saved when the user accepts an invoice
+// Per-invoice accept payload - everything that should be saved when the user accepts an invoice
 interface InvoiceAcceptPayload {
   invoiceNo: string;
   vendorName: string; vendorGstin: string; vendorLedger: string;
@@ -107,7 +107,7 @@ interface FlatDisplayRow {
   cgstAmt: number;
   sgstAmt: number;
   igstAmt: number;
-  // invoice-level — only on first row
+  // invoice-level - only on first row
   isFirst: boolean;
   charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number; gst_percent?: number; sac_code?: string }>;
   roLedger: string; roSuggested: boolean; roAmt: number;
@@ -144,7 +144,7 @@ function FlatPreviewTable({
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
   const [bulkSaving, setBulkSaving] = React.useState(false);
 
-  // Accepted invoices — once accepted, fields are locked in the UI (initialised from DB on mount)
+  // Accepted invoices - once accepted, fields are locked in the UI (initialised from DB on mount)
   const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>(initialLockedInvoices);
 
   // Stock item "apply to all" popup state
@@ -177,10 +177,10 @@ function FlatPreviewTable({
     const invoice  = invoices.find((i) => i.invoice_number === invNo);
     const supplier = suppliers.find((s) => s.tally_ledger_name === partyRow?.party_ledger);
 
-    const vendorLedger    = partyRow?.tally_ledger_name ?? '—';
+    const vendorLedger    = partyRow?.tally_ledger_name ?? '-';
     const vendorSuggested = partyRow?.status === 'Suggested';
 
-    // ONE purchase ledger per invoice — read from accepted invoice, else empty (user must set it)
+    // ONE purchase ledger per invoice - read from accepted invoice, else empty (user must set it)
     const invPlLedger = invoice?.tally_ledger_acceptance?.purchaseLedger ?? '';
     const invPlSuggested = !invPlLedger;
 
@@ -213,11 +213,11 @@ function FlatPreviewTable({
       gstin: invoice?.vendor_gstin ?? '',
       gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
       taxType: invTaxType,
-      cgstLedger: cgst?.tally_ledger_name?.startsWith('—') ? '' : (cgst?.tally_ledger_name ?? ''),
+      cgstLedger: cgst?.tally_ledger_name?.startsWith('-') ? '' : (cgst?.tally_ledger_name ?? ''),
       cgstSuggested: cgst?.is_suggested === true,
-      sgstLedger: sgst?.tally_ledger_name?.startsWith('—') ? '' : (sgst?.tally_ledger_name ?? ''),
+      sgstLedger: sgst?.tally_ledger_name?.startsWith('-') ? '' : (sgst?.tally_ledger_name ?? ''),
       sgstSuggested: sgst?.is_suggested === true,
-      igstLedger: igst?.tally_ledger_name?.startsWith('—') ? '' : (igst?.tally_ledger_name ?? ''),
+      igstLedger: igst?.tally_ledger_name?.startsWith('-') ? '' : (igst?.tally_ledger_name ?? ''),
       igstSuggested: igst?.is_suggested === true,
     };
 
@@ -306,7 +306,7 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
-  // One checkbox per INVOICE — only for invoices that have at least one suggested field.
+  // One checkbox per INVOICE - only for invoices that have at least one suggested field.
   // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
   const suggestableInvoices: string[] = [];
   {
@@ -381,7 +381,7 @@ function FlatPreviewTable({
 
     try {
       await onAcceptInvoices(payloads);
-      // Lock fields locally — no full preview refresh
+      // Lock fields locally - no full preview refresh
       setLockedInvoices((prev) => {
         const next = { ...prev };
         for (const p of payloads) {
@@ -436,7 +436,7 @@ function FlatPreviewTable({
 
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
-      {/* Bulk-accept action bar — shown when there are any suggestable rows */}
+      {/* Bulk-accept action bar - shown when there are any suggestable rows */}
       {suggestableInvoices.length > 0 && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
           <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
@@ -455,7 +455,7 @@ function FlatPreviewTable({
           >
             {bulkSaving ? 'Saving…' : `Accept ${selectedInvoices.size} out of ${suggestableInvoices.length} invoices`}
           </button>
-          <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
+          <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions - edit if needed, then accept to save to masters</span>
         </div>
       )}
       {/* Top scrollbar mirror */}
@@ -513,7 +513,7 @@ function FlatPreviewTable({
               const isChecked = selectedInvoices.has(row.invoiceNo);
 
               // For vendor ledger: if the fresh supplier master lookup is definitive (GSTIN matched,
-              // not suggested), always use the fresh value — even for locked invoices. This ensures
+              // not suggested), always use the fresh value - even for locked invoices. This ensures
               // that if the supplier master was corrected after acceptance, the preview and XML reflect
               // the current master, not a stale acceptance snapshot.
               // For all other fields: frozen accepted values take precedence when invoice is locked.
@@ -533,7 +533,7 @@ function FlatPreviewTable({
                 onSave: (v: string) => void; placeholder?: string;
               }) => {
                 const [draft, setDraft] = React.useState(value);
-                if (!suggested) return <span className={`font-mono font-medium ${color}`}>{value || '—'}</span>;
+                if (!suggested) return <span className={`font-mono font-medium ${color}`}>{value || '-'}</span>;
                 return (
                   <div className="flex items-center gap-1 min-w-[140px]">
                     <input
@@ -544,7 +544,7 @@ function FlatPreviewTable({
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
                       onBlur={() => { const v = draft.trim(); if (v) onSave(v); }}
                       className={`border border-amber-300 rounded px-2 py-0.5 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 flex-1 font-mono min-w-0`}
-                      title="AI suggestion ✦ — edit and press Enter or click away to save"
+                      title="AI suggestion ✦ - edit and press Enter or click away to save"
                     />
                     <button
                       type="button"
@@ -567,10 +567,10 @@ function FlatPreviewTable({
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
-                  {/* Checkbox / accepted badge — one per invoice, on the first row only */}
+                  {/* Checkbox / accepted badge - one per invoice, on the first row only */}
                   <td className="px-2 py-2 w-8 text-center">
                     {row.isFirst && isLocked && (
-                      <span title="Accepted — fields locked" className="text-green-600 text-sm font-bold">✓</span>
+                      <span title="Accepted - fields locked" className="text-green-600 text-sm font-bold">✓</span>
                     )}
                     {row.isFirst && !isLocked && isInvSuggestable && (
                       <input
@@ -594,7 +594,7 @@ function FlatPreviewTable({
                   {/* Vendor Ledger */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
-                      <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '—'}</span>
+                      <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '-'}</span>
                     ) : row.vendorSuggested ? (
                       suppliers.length > 0 ? (
                         <select value={editedVendor ?? ''} onChange={(e) => {
@@ -614,7 +614,7 @@ function FlatPreviewTable({
                     )}
                   </td>
                   {/* GSTIN */}
-                  <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '-'}</td>
                   {/* Reg Type */}
                   <td className="px-3 py-2 whitespace-nowrap">
                     {row.gstRegType && (
@@ -626,7 +626,7 @@ function FlatPreviewTable({
                   {/* Purchase Ledger */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
-                      <span className="font-mono font-medium text-blue-800">{effectivePurchaseLedger || '—'}</span>
+                      <span className="font-mono font-medium text-blue-800">{effectivePurchaseLedger || '-'}</span>
                     ) : (
                       <EditableField value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
                         onSave={(v) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
@@ -634,13 +634,13 @@ function FlatPreviewTable({
                   </td>
                   {/* Item Name + HSN */}
                   <td className="px-3 py-2 max-w-[220px]">
-                    <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '—'}</div>
+                    <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '-'}</div>
                     {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
                   {/* Stock Item */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
-                      <span className="font-mono text-indigo-700">{effectiveStockItem || '—'}</span>
+                      <span className="font-mono text-indigo-700">{effectiveStockItem || '-'}</span>
                     ) : row.stockItemSuggested ? (
                       isInventoryMode && stockItems.length > 0 ? (
                         <select defaultValue="" onChange={(e) => {
@@ -666,24 +666,24 @@ function FlatPreviewTable({
                           }} />
                       )
                     ) : (
-                      <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '—' : '')}</span>
+                      <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '-' : '')}</span>
                     )}
                   </td>
                   {/* Tax Rate */}
-                  <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '—'}</td>
+                  <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '-'}</td>
                   {/* Qty */}
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '—'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '-'}</td>
                   {/* UOM */}
-                  <td className="px-3 py-2 text-gray-500">{row.uom || '—'}</td>
+                  <td className="px-3 py-2 text-gray-500">{row.uom || '-'}</td>
                   {/* Rate */}
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '—'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '-'}</td>
                   {/* Disc */}
-                  <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '—'}</td>
+                  <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '-'}</td>
                   {/* Amount */}
                   <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
                     {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
-                  {/* Charges — only on first row of invoice */}
+                  {/* Charges - only on first row of invoice */}
                   {Array.from({ length: maxCharges }, (_, ci) => {
                     const ch = row.isFirst ? row.charges[ci] : undefined;
                     return (
@@ -720,7 +720,7 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (
                       isLocked
-                        ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '—'}</span>
+                        ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />
                     )}
@@ -732,7 +732,7 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (
                       isLocked
-                        ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '—'}</span>
+                        ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '-'}</span>
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />
                     )}
@@ -744,7 +744,7 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'igst' && (
                       isLocked
-                        ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '—'}</span>
+                        ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />
                     )}
@@ -752,11 +752,11 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
                   </td>
-                  {/* Round Off — first row only */}
+                  {/* Round Off - first row only */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.isFirst && row.roAmt !== 0 && (
                       isLocked
-                        ? <span className="font-mono font-medium text-gray-600">{effectiveRo || '—'}</span>
+                        ? <span className="font-mono font-medium text-gray-600">{effectiveRo || '-'}</span>
                         : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600"
                             onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
                     )}
@@ -815,7 +815,7 @@ function FlatPreviewTable({
 }
 
 
-// ─── Suggestions panel (unused — kept for reference) ─────────────────────────
+// ─── Suggestions panel (unused - kept for reference) ─────────────────────────
 
 function SuggestionsPanel({
   previewRows, invoices, onAccept,
@@ -936,7 +936,7 @@ function SuggestionsPanel({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-sm font-semibold text-amber-800">
-            ✦ {suggestions.length} AI suggestion{suggestions.length !== 1 ? 's' : ''} — review and accept to save to masters
+            ✦ {suggestions.length} AI suggestion{suggestions.length !== 1 ? 's' : ''} - review and accept to save to masters
           </span>
           {savedCount > 0 && (
             <span className="text-xs text-green-700 bg-green-100 border border-green-200 rounded px-2 py-0.5">{savedCount} saved ✓</span>
@@ -1020,7 +1020,7 @@ export default function XmlGeneratorPage() {
     }).catch(() => {});
   }, [company?.id]);
 
-  // Load invoices on company/FY change — also clear preview
+  // Load invoices on company/FY change - also clear preview
   useEffect(() => {
     setPreviewRows(null);
     setXmlBlob(null);
@@ -1049,7 +1049,7 @@ export default function XmlGeneratorPage() {
 
   function validateForPreview(): string | null {
     if (!company) return 'No company selected.';
-    if (!company.tally_company_name) return 'Tally Company Name is missing — update it in Companies first.';
+    if (!company.tally_company_name) return 'Tally Company Name is missing - update it in Companies first.';
     if (invoices.length === 0) return 'No accepted invoices found for the selected period.';
     return null;
   }
@@ -1126,7 +1126,7 @@ export default function XmlGeneratorPage() {
   };
 
   const triggerDownload = (xml: string, filename: string) => {
-    // Tally requires UTF-16 LE with BOM — UTF-8 files are rejected at import
+    // Tally requires UTF-16 LE with BOM - UTF-8 files are rejected at import
     const utf16 = new Uint16Array(xml.length);
     for (let i = 0; i < xml.length; i++) utf16[i] = xml.charCodeAt(i);
     const bom = new Uint8Array([0xff, 0xfe]);
@@ -1297,7 +1297,7 @@ export default function XmlGeneratorPage() {
                 {previewSuggestedCount > 0 && (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
                     <span className="text-sm font-semibold text-amber-800">
-                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''} — verify ✦
+                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''} - verify ✦
                     </span>
                   </div>
                 )}
@@ -1328,7 +1328,7 @@ export default function XmlGeneratorPage() {
 
               {/* Auto-suggest notice */}
 
-              {/* Flat preview table — one row per line item, with inline bulk-accept checkboxes */}
+              {/* Flat preview table - one row per line item, with inline bulk-accept checkboxes */}
               <FlatPreviewTable
                 rows={previewRows}
                 invoices={invoices}
@@ -1364,7 +1364,7 @@ export default function XmlGeneratorPage() {
                   catch (e: unknown) { alert(getErrMsg(e)); }
                 }}
                 onMapTaxLedger={(_type, _name) => {
-                  // Tax ledger edits are local to the preview — persist in Duties & Taxes master
+                  // Tax ledger edits are local to the preview - persist in Duties & Taxes master
                 }}
                 onAcceptInvoices={async (payloads) => {
                   if (!company?.id) return;
@@ -1465,7 +1465,7 @@ export default function XmlGeneratorPage() {
                     catch (e) { errs.push(`Save acceptance for ${p.invoiceNo}: ${getErrMsg(e)}`); }
                   }
                   if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
-                  // Do NOT refresh preview — fields are locked locally per invoice
+                  // Do NOT refresh preview - fields are locked locally per invoice
                 }}
               />
             </div>
@@ -1482,7 +1482,7 @@ export default function XmlGeneratorPage() {
             Import masters first (each type separately), then import vouchers. Each button downloads one XML file.
           </p>
 
-          {/* Master XML buttons — one per master type */}
+          {/* Master XML buttons - one per master type */}
           <div className="mb-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Masters (import in order)</p>
             <div className="flex flex-wrap gap-2">
@@ -1535,10 +1535,10 @@ export default function XmlGeneratorPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800">
           <p className="font-semibold mb-2">How to import into Tally</p>
           <p className="text-xs text-blue-700 mb-2">
-            Import each master type separately first, then import vouchers. Safe to re-import — Tally silently skips masters that already exist.
+            Import each master type separately first, then import vouchers. Safe to re-import - Tally silently skips masters that already exist.
           </p>
           <ol className="list-decimal list-inside space-y-1.5 text-blue-700 text-xs">
-            <li>Open Tally → select company <strong>{company?.tally_company_name ?? '—'}</strong></li>
+            <li>Open Tally → select company <strong>{company?.tally_company_name ?? '-'}</strong></li>
             <li>
               <strong>Import each master:</strong> Gateway of Tally → Import Data → Masters → select the file
               <span className="block ml-5 mt-0.5 text-blue-600">Order: Stock Items → Purchase Ledgers → Expense Ledgers → Duties &amp; Taxes → Sundry Creditors</span>

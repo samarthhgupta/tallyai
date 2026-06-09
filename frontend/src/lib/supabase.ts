@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Lazy singleton — safe for static export (not called at module level)
+// Lazy singleton - safe for static export (not called at module level)
 let _client: ReturnType<typeof createClient> | null = null;
 
 export function getSupabase() {

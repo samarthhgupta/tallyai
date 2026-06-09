@@ -27,7 +27,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) setCompanyState(JSON.parse(raw) as Company);
-    } catch { /* corrupt storage — ignore */ }
+    } catch { /* corrupt storage - ignore */ }
     setLoading(false);
   }, []);
 

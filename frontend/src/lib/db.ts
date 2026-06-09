@@ -12,7 +12,7 @@ export interface Company {
   id: string;
   name: string;
   gstin: string | null;
-  tally_company_name: string | null; // exact name in Tally — used in XML header
+  tally_company_name: string | null; // exact name in Tally - used in XML header
   state_name: string | null;         // auto-derived from GSTIN
   tally_url: string | null;
   tally_port: number;
@@ -75,8 +75,8 @@ export async function saveCompanyVoucherSettings(
 
 export async function createCompany(params: {
   name: string;
-  gstin: string;              // mandatory — needed to derive state
-  tally_company_name: string; // mandatory — needed for XML header
+  gstin: string;              // mandatory - needed to derive state
+  tally_company_name: string; // mandatory - needed for XML header
   tally_url?: string;
   tally_port?: number;
 }): Promise<Company> {
@@ -206,7 +206,7 @@ export function computeReadiness(
   let itcStatus: ITCStatus | null = null;
   let itcRemark: string | null = null;
 
-  // ── Critical failures — must be resolved before accepting ──
+  // ── Critical failures - must be resolved before accepting ──
   if (!inv.invoice_number?.trim()) {
     flags.push('Invoice number missing');
     readiness = 'critical';
@@ -224,7 +224,7 @@ export function computeReadiness(
     readiness = 'critical';
   }
 
-  // Buyer name mismatch is critical regardless of GST — wrong company invoice must never be accepted
+  // Buyer name mismatch is critical regardless of GST - wrong company invoice must never be accepted
   if (companyName && inv.buyer_name?.trim()) {
     const buyerLower = inv.buyer_name.toLowerCase();
     const companyLower = companyName.toLowerCase();
@@ -237,7 +237,7 @@ export function computeReadiness(
     }
   }
 
-  // ── Warnings — informational, never block acceptance ──
+  // ── Warnings - informational, never block acceptance ──
   if (readiness !== 'critical') {
     if (inv.confidence < 0.70) {
       flags.push(`Low confidence (${Math.round(inv.confidence * 100)}%)`);
@@ -274,7 +274,7 @@ export function computeReadiness(
         itcStatus = 'eligible';
       }
     } else {
-      // No GST — no ITC concern
+      // No GST - no ITC concern
       itcStatus = 'not_applicable';
     }
 
@@ -344,7 +344,7 @@ export async function insertAcceptedInvoices(
     const r = computeReadiness(inv, companyGstin, companyName);
     const finalItcStatus = itcStatusOverride ?? r.itcStatus;
     const finalItcRemark = itcRemarkOverride ?? r.itcRemark;
-    // Derive period from invoice date — not from user-selected month
+    // Derive period from invoice date - not from user-selected month
     const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
     return {
       batch_id: batchId,
@@ -680,7 +680,7 @@ export async function deleteInvoice(invoiceId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-// Delete ALL invoices for a company (all statuses — for test data cleanup)
+// Delete ALL invoices for a company (all statuses - for test data cleanup)
 export async function deleteAllCompanyInvoices(companyId: string): Promise<number> {
   const { data, error } = await db()
     .from('invoices')
@@ -775,7 +775,7 @@ export async function updateAcceptedInvoice(
     .from('invoices')
     .update(patch)
     .eq('id', id);
-  if (error) throw new Error(`${error.message}${error.details ? ` — ${error.details}` : ''}`);
+  if (error) throw new Error(`${error.message}${error.details ? ` - ${error.details}` : ''}`);
 }
 
 // ─── Move accepted invoice to rejected ───────────────────────────────────────
@@ -803,7 +803,7 @@ export async function moveAcceptedToRejected(
       rejection_reason: reason ?? null,
     })
     .eq('id', invoiceId);
-  if (updateErr) throw new Error(`Update failed: ${updateErr.message}${updateErr.details ? ` — ${updateErr.details}` : ''}`);
+  if (updateErr) throw new Error(`Update failed: ${updateErr.message}${updateErr.details ? ` - ${updateErr.details}` : ''}`);
 
   const { error: archErr } = await db()
     .from('rejection_archive')
@@ -826,7 +826,7 @@ export async function moveAcceptedToRejected(
       readiness: inv.readiness,
       readiness_flags: inv.readiness_flags,
     });
-  if (archErr) throw new Error(`Archive insert failed: ${archErr.message}${archErr.details ? ` — ${archErr.details}` : ''}`);
+  if (archErr) throw new Error(`Archive insert failed: ${archErr.message}${archErr.details ? ` - ${archErr.details}` : ''}`);
 
 }
 

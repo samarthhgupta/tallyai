@@ -1,4 +1,4 @@
-// Company-wise Ledger Master — maps HSN/SAC code + GST rate to Tally purchase ledger names.
+// Company-wise Ledger Master - maps HSN/SAC code + GST rate to Tally purchase ledger names.
 // Stored in localStorage. Keyed by companyId.
 
 const KEY = 'tallyai_ledgers';
@@ -6,7 +6,7 @@ const KEY = 'tallyai_ledgers';
 export interface LedgerMaster {
   id: string;
   company_id: string;
-  hsn_sac: string;            // HSN or SAC code (optional — blank means "all codes at this rate")
+  hsn_sac: string;            // HSN or SAC code (optional - blank means "all codes at this rate")
   gst_percent: number;        // e.g. 18
   description: string;        // human label (e.g. "Electrical Goods")
   purchase_ledger: string;    // Tally purchase ledger (e.g. "Purchase @18%")

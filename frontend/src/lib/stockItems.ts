@@ -1,10 +1,10 @@
-// Stock Item Master — company-scoped, stored in Supabase.
+// Stock Item Master - company-scoped, stored in Supabase.
 // Maps invoice line item descriptions to exact Tally stock item names.
 //
 // KEY RULES (do not violate):
-//   1. tally_item_name stored and output EXACTLY as entered — no trim, no normalisation.
-//   2. alias_name is the invoice-side description used for matching — also stored as-is.
-//   3. HSN code is optional — XML generation never depends on it.
+//   1. tally_item_name stored and output EXACTLY as entered - no trim, no normalisation.
+//   2. alias_name is the invoice-side description used for matching - also stored as-is.
+//   3. HSN code is optional - XML generation never depends on it.
 //   4. Matching uses normalised comparison internally but never mutates stored values.
 
 import { getSupabase } from './supabase';
@@ -15,7 +15,7 @@ const db = () => getSupabase() as any;
 export interface StockItemMaster {
   id: string;
   company_id: string;
-  tally_item_name: string; // sacred — stored and output exactly as entered
+  tally_item_name: string; // sacred - stored and output exactly as entered
   alias_name: string | null;
   unit: string | null;
   hsn_code: string | null;
@@ -113,7 +113,7 @@ export async function deleteStockItem(id: string): Promise<void> {
 }
 
 // Bulk upsert from Excel import.
-// tally_item_name stored EXACTLY as in Excel — no trim.
+// tally_item_name stored EXACTLY as in Excel - no trim.
 export async function bulkUpsertStockItems(
   companyId: string,
   rows: StockItemImportRow[],
@@ -122,7 +122,7 @@ export async function bulkUpsertStockItems(
   const seenInFile = new Set<string>();
 
   const existing = await loadStockItems(companyId);
-  // Normalised name → record (for dedup check only — stored value never changes)
+  // Normalised name → record (for dedup check only - stored value never changes)
   const norm = (s: string) => s.toLowerCase().trim();
   const existingByName = new Map(existing.map((s) => [norm(s.tally_item_name), s]));
 
@@ -136,7 +136,7 @@ export async function bulkUpsertStockItems(
     const itemName = row.tally_item_name; // intentionally NOT trimmed
 
     if (!itemName || !itemName.trim()) {
-      result.errors.push({ row: rowNum, item: '—', reason: 'Tally Stock Item Name is required' });
+      result.errors.push({ row: rowNum, item: '-', reason: 'Tally Stock Item Name is required' });
       return;
     }
 
@@ -148,7 +148,7 @@ export async function bulkUpsertStockItems(
     seenInFile.add(dedupeKey);
 
     const payload = {
-      tally_item_name: itemName, // NO trim — sacred
+      tally_item_name: itemName, // NO trim - sacred
       alias_name: row.alias_name || null,
       unit: row.unit || null,
       hsn_code: row.hsn_code || null,
@@ -180,7 +180,7 @@ export async function bulkUpsertStockItems(
 
 // Lookup: returns tally_item_name for a given invoice description.
 // Tries exact match on alias_name first, then tally_item_name.
-// Returns the sacred stored value — never modified.
+// Returns the sacred stored value - never modified.
 export async function lookupStockItem(
   companyId: string,
   invoiceDescription: string,
