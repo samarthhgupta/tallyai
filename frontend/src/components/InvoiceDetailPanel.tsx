@@ -625,20 +625,20 @@ export default function InvoiceDetailPanel({
                             <td className="px-3 py-2.5 text-sm text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-800">{r.hsn}</td>
                             <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '0%'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">₹{formatINR(r.taxable)}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.igst > 0 ? `₹${formatINR(r.igst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">{formatINR(r.taxable)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.cgst)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.sgst)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.igst)}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="border-t-2 border-gray-200 bg-gray-50">
                         <tr>
                           <td colSpan={3} className="px-3 py-2 text-xs font-bold text-gray-500 uppercase">Total</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">₹{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedCGST > 0 ? `₹${formatINR(computedCGST)}` : '0%'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedSGST > 0 ? `₹${formatINR(computedSGST)}` : '0%'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedIGST > 0 ? `₹${formatINR(computedIGST)}` : '0%'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedCGST)}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedSGST)}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedIGST)}</td>
                         </tr>
                       </tfoot>
                     </table>
