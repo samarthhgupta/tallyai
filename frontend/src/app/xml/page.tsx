@@ -109,7 +109,7 @@ interface FlatDisplayRow {
   igstAmt: number;
   // invoice-level - only on first row
   isFirst: boolean;
-  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number; gst_percent?: number; sac_code?: string }>;
+  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number; gst_percent?: number; sac_code?: string; isDiscount?: boolean }>;
   roLedger: string; roSuggested: boolean; roAmt: number;
 }
 
@@ -169,6 +169,7 @@ function FlatPreviewTable({
     const invRows2   = invRows.filter((r) => r.ledger_type === 'Inventory');
     const purchRows  = invRows.filter((r) => r.ledger_type === 'Purchase');
     const chargeRows = invRows.filter((r) => r.ledger_type === 'Expense');
+    const discountPreviewRow = invRows.find((r) => r.ledger_type === 'Discount');
     const cgst = invRows.find((r) => r.ledger_type === 'CGST');
     const sgst = invRows.find((r) => r.ledger_type === 'SGST');
     const igst = invRows.find((r) => r.ledger_type === 'IGST');
@@ -184,7 +185,7 @@ function FlatPreviewTable({
     const invPlLedger = invoice?.tally_ledger_acceptance?.purchaseLedger ?? '';
     const invPlSuggested = !invPlLedger;
 
-    const charges = chargeRows.map((c) => ({
+    const charges: FlatDisplayRow['charges'] = chargeRows.map((c) => ({
       desc: c.item_description ?? c.tally_ledger_name,
       ledger: c.tally_ledger_name,
       suggested: c.is_suggested === true,
@@ -192,6 +193,16 @@ function FlatPreviewTable({
       gst_percent: c.charge_gst_percent,
       sac_code: c.charge_sac_code,
     }));
+    if (discountPreviewRow && (invoice?.bill_discount_amount ?? 0) > 0) {
+      const discountSuggested = !!discountPreviewRow.warning;
+      charges.push({
+        desc: 'Discount',
+        ledger: discountSuggested ? 'Discount' : discountPreviewRow.tally_ledger_name,
+        suggested: discountSuggested,
+        amount: discountPreviewRow.amount,
+        isDiscount: true,
+      });
+    }
 
     // Tax ledger info lives in base (repeats every row); amounts computed per item
     const invTaxType = (invoice?.tax_type ?? 'none') as 'cgst_sgst' | 'igst' | 'none';
@@ -702,11 +713,11 @@ function FlatPreviewTable({
                                   {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
                                 </select>
                               ) : (
-                                <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested color="text-orange-700"
+                                <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested color={ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}
                                   onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); onMapExpense(ch.desc, v); }} />
                               )
                             ) : (
-                              <span className="font-mono text-orange-700">{ch.ledger}</span>
+                              <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>{ch.ledger}</span>
                             )
                           )}
                         </td>
@@ -1338,6 +1349,13 @@ export default function XmlGeneratorPage() {
                 initialLockedInvoices={initialLockedInvoices}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
+                  if (description === 'Discount') {
+                    try {
+                      await updateCompany(company.id, { discount_ledger_name: ledgerName });
+                      handlePreview();
+                    } catch (e: unknown) { alert(getErrMsg(e)); }
+                    return;
+                  }
                   try {
                     const defaults = getExpenseDefaults(description);
                     await addExpenseLedger(company.id, {
@@ -1400,10 +1418,15 @@ export default function XmlGeneratorPage() {
                         catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
                       }
                     }
-                    // 3. Expense/charge ledgers → expense_ledger_masters
+                    // 3. Expense/charge ledgers → expense_ledger_masters (Discount → company setting)
                     for (const ch of p.charges) {
                       if (ch.tallyName && !seenExp.has(ch.keyword)) {
                         seenExp.add(ch.keyword);
+                        if (ch.keyword === 'Discount') {
+                          try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
+                          catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
+                          continue;
+                        }
                         // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
                         const gstPct = (ch.gst_percent != null && ch.gst_percent > 0)
