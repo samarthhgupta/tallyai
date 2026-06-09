@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import * as XLSX from 'xlsx';
 import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice } from '@/lib/db';
 import type { RejectedRecord } from '@/lib/db';
@@ -315,6 +316,51 @@ export default function PurchaseRegisterPage() {
     else { setSortKey(key); setSortAsc(key === 'vendor' || key === 'invoice_number'); }
   }
 
+  function exportToExcel() {
+    const rows = sortedInvoices.map((inv, idx) => {
+      const subtotal = (inv.subtotal ?? 0) - (inv.bill_discount_amount ?? 0);
+      const gstCharges = (inv.charges ?? []).filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
+      const taxable = subtotal + gstCharges;
+      const itcLabel: Record<string, string> = {
+        eligible: 'Eligible', reviewed_eligible: 'Reviewed', potentially_ineligible: 'At Risk', not_applicable: 'N/A',
+      };
+      return {
+        '#': idx + 1,
+        'Invoice #': inv.invoice_number ?? '',
+        'Vendor': inv.vendor_name ?? '',
+        'GSTIN': inv.vendor_gstin ?? '',
+        'Date': inv.invoice_date ?? '',
+        'Period': inv.period_month ?? '',
+        'Taxable (₹)': taxable,
+        'CGST (₹)': inv.cgst ?? 0,
+        'SGST (₹)': inv.sgst ?? 0,
+        'IGST (₹)': inv.igst ?? 0,
+        'Total (₹)': inv.total ?? 0,
+        'ITC Status': itcLabel[inv.itc_status ?? ''] ?? '',
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Right-align numeric columns
+    const numCols = ['G', 'H', 'I', 'J', 'K'];
+    numCols.forEach((col) => {
+      for (let r = 2; r <= rows.length + 1; r++) {
+        const cell = ws[`${col}${r}`];
+        if (cell) cell.z = '#,##0.00';
+      }
+    });
+    ws['!cols'] = [
+      { wch: 4 }, { wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 12 },
+      { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 },
+    ];
+    const wb = XLSX.utils.book_new();
+    const sheetName = selectedFY ? `Register ${selectedFY}` : 'Purchase Register';
+    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+    const fileName = `Purchase_Register_${selectedCompany?.name ?? 'export'}_${selectedFY ?? ''}.xlsx`
+      .replace(/[^a-zA-Z0-9_.-]/g, '_');
+    XLSX.writeFile(wb, fileName);
+  }
+
   const itcOrder: Record<string, number> = { eligible: 0, reviewed_eligible: 1, potentially_ineligible: 2, not_applicable: 3 };
   const sortedInvoices = [...invoices].sort((a, b) => {
     let cmp = 0;
@@ -619,6 +665,17 @@ export default function PurchaseRegisterPage() {
             <p className="text-sm text-gray-500 mt-0.5">All accepted invoices · source of truth for Tally export and GST returns</p>
           </div>
           <div className="flex items-center gap-2">
+            {selectedCompanyId && invoices.length > 0 && (
+              <button
+                onClick={exportToExcel}
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Export Excel
+              </button>
+            )}
             {selectedCompanyId && invoices.length > 0 && (
               <button
                 onClick={() => { setShowDeleteAll(true); setDeleteAllConfirmText(''); }}
