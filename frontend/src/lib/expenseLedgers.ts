@@ -70,7 +70,24 @@ export const EXPENSE_DEFAULTS: Record<string, { sac_code: string; gst_percent: n
 
 export function getExpenseDefaults(description: string): { sac_code: string; gst_percent: number } | null {
   const key = description.toLowerCase().trim();
-  return EXPENSE_DEFAULTS[key] ?? null;
+  // 1. Exact match
+  if (EXPENSE_DEFAULTS[key]) return EXPENSE_DEFAULTS[key];
+  // 2. Key is a substring of description (e.g. "freight & forwarding" within "freight & forwarding charges")
+  for (const k of Object.keys(EXPENSE_DEFAULTS)) {
+    if (key.includes(k)) return EXPENSE_DEFAULTS[k];
+  }
+  // 3. Description is a substring of a key
+  for (const k of Object.keys(EXPENSE_DEFAULTS)) {
+    if (k.includes(key)) return EXPENSE_DEFAULTS[k];
+  }
+  return null;
+}
+
+// Resolve the best SAC code for a charge: use stored value first, then fall back to defaults.
+export function resolveChargeSac(description: string, storedSac?: string | null): string | undefined {
+  if (storedSac && storedSac.trim()) return storedSac.trim();
+  const d = getExpenseDefaults(description);
+  return d?.sac_code || undefined;
 }
 
 // Common expense types shown as quick-add suggestions in the UI
