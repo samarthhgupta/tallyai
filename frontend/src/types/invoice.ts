@@ -132,8 +132,10 @@ export interface HsnRow {
   igst: number;
 }
 
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
 export function calcLineAmount(item: LineItem): number {
-  return item.qty * item.rate * (1 - item.disc_percent / 100);
+  return r2(item.qty * item.rate * (1 - item.disc_percent / 100));
 }
 
 function cleanHsn(hsn: string): string {
@@ -158,11 +160,11 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
     const discountShare = totalTaxable > 0 && billDiscount > 0
       ? billDiscount * (row.taxable / totalTaxable)
       : 0;
-    row.taxable = row.taxable - discountShare;
-    const tax = row.taxable * row.gst_percent / 100;
+    row.taxable = r2(row.taxable - discountShare);
+    const tax = r2(row.taxable * row.gst_percent / 100);
     if (taxType === 'cgst_sgst') {
-      row.cgst = tax / 2;
-      row.sgst = tax / 2;
+      row.cgst = r2(tax / 2);
+      row.sgst = r2(tax / 2);
     } else {
       row.igst = tax;
     }
@@ -183,13 +185,13 @@ export function buildFullTaxSummary(
   for (const c of charges) {
     const code = (c.sac ?? c.hsn ?? '').trim();
     if (!code) continue;
-    const tax = c.amount * c.gst_percent / 100;
+    const tax = r2(c.amount * c.gst_percent / 100);
     rows.push({
       hsn: code,
       gst_percent: c.gst_percent,
-      taxable: c.amount,
-      cgst: taxType === 'cgst_sgst' ? tax / 2 : 0,
-      sgst: taxType === 'cgst_sgst' ? tax / 2 : 0,
+      taxable: r2(c.amount),
+      cgst: taxType === 'cgst_sgst' ? r2(tax / 2) : 0,
+      sgst: taxType === 'cgst_sgst' ? r2(tax / 2) : 0,
       igst: taxType === 'igst' ? tax : 0,
     });
   }
