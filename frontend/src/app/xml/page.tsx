@@ -1174,6 +1174,12 @@ export default function XmlGeneratorPage() {
   const handleDownloadVouchersXml = async () => {
     const err = validateForXml();
     if (err) { alert(err); return; }
+    if (voucherMode === 'inventory' && !company?.gstin) {
+      const proceed = window.confirm(
+        'Warning: Company GSTIN is not set.\n\nWithout GSTIN, Tally cannot link this voucher to a Company Tax Unit, which is required for GST compliance in inventory mode.\n\nDo you want to continue anyway?'
+      );
+      if (!proceed) return;
+    }
     setGeneratingXml(true);
     setXmlBlob(null);
     try {
