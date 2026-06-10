@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance, clearAllTallyAcceptances } from '@/lib/db';
+import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -116,7 +116,7 @@ interface FlatDisplayRow {
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
-  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices,
+  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -124,6 +124,7 @@ function FlatPreviewTable({
   expenseLedgers: { tally_ledger_name: string }[];
   stockItems: { tally_item_name: string }[];
   initialLockedInvoices: Record<string, LockedInvoice>;
+  companyId: string;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
@@ -140,8 +141,9 @@ function FlatPreviewTable({
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
   const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
 
-  // Bulk-select state for inline accept
+  // Bulk-select state for inline accept / unaccept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
+  const [selectedLockedInvoices, setSelectedLockedInvoices] = React.useState<Set<string>>(new Set());
   const [bulkSaving, setBulkSaving] = React.useState(false);
 
   // Accepted invoices - once accepted, fields are locked in the UI (initialised from DB on mount)
@@ -446,11 +448,34 @@ function FlatPreviewTable({
     </th>
   );
 
+  const toggleLockedInvoice = (invNo: string) => setSelectedLockedInvoices((prev) => {
+    const s = new Set(prev); s.has(invNo) ? s.delete(invNo) : s.add(invNo); return s;
+  });
+
+  const handleBulkUnaccept = async () => {
+    if (selectedLockedInvoices.size === 0) return;
+    setBulkSaving(true);
+    const errs: string[] = [];
+    for (const invNo of Array.from(selectedLockedInvoices)) {
+      try {
+        await saveInvoiceTallyAcceptance(companyId, invNo, null);
+      } catch (e) { errs.push(`${invNo}: ${e instanceof Error ? e.message : String(e)}`); }
+    }
+    setLockedInvoices((prev) => {
+      const next = { ...prev };
+      selectedLockedInvoices.forEach((invNo) => delete next[invNo]);
+      return next;
+    });
+    setSelectedLockedInvoices(new Set());
+    setBulkSaving(false);
+    if (errs.length) alert(`Some failed:\n${errs.join('\n')}`);
+  };
+
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
-      {/* Bulk-accept action bar - shown when there are any suggestable rows */}
-      {suggestableInvoices.length > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200">
+      {/* Action bar */}
+      {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex-wrap">
           <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -460,14 +485,27 @@ function FlatPreviewTable({
             />
             Select All
           </label>
-          <button
-            onClick={handleBulkAccept}
-            disabled={bulkSaving || selectedRows.size === 0}
-            className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {bulkSaving ? 'Saving…' : `Accept ${selectedInvoices.size} out of ${suggestableInvoices.length} invoices`}
-          </button>
-          <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions - edit if needed, then accept to save to masters</span>
+          {selectedInvoices.size > 0 && (
+            <button
+              onClick={handleBulkAccept}
+              disabled={bulkSaving}
+              className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {bulkSaving ? 'Saving…' : `Accept ${selectedInvoices.size} invoice${selectedInvoices.size !== 1 ? 's' : ''}`}
+            </button>
+          )}
+          {selectedLockedInvoices.size > 0 && (
+            <button
+              onClick={handleBulkUnaccept}
+              disabled={bulkSaving}
+              className="px-4 py-1.5 border border-red-300 text-red-600 rounded-lg text-xs font-semibold hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {bulkSaving ? 'Saving…' : `Unaccept ${selectedLockedInvoices.size} invoice${selectedLockedInvoices.size !== 1 ? 's' : ''}`}
+            </button>
+          )}
+          {selectedInvoices.size === 0 && selectedLockedInvoices.size === 0 && (
+            <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
+          )}
         </div>
       )}
       {/* Top scrollbar mirror */}
@@ -585,9 +623,17 @@ function FlatPreviewTable({
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
                   {/* Checkbox / accepted badge - one per invoice, on the first row only */}
-                  <td className="px-2 py-2 w-8 text-center">
+                  <td className="px-2 py-2 w-12 text-center">
                     {row.isFirst && isLocked && (
-                      <span title="Accepted - fields locked" className="text-green-600 text-sm font-bold">✓</span>
+                      <label className="flex items-center justify-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedLockedInvoices.has(row.invoiceNo)}
+                          onChange={() => toggleLockedInvoice(row.invoiceNo)}
+                          className="rounded border-gray-300 text-red-500 focus:ring-red-400"
+                        />
+                        <span title="Accepted" className="text-green-600 text-sm font-bold leading-none">✓</span>
+                      </label>
                     )}
                     {row.isFirst && !isLocked && isInvSuggestable && (
                       <input
@@ -1293,32 +1339,13 @@ export default function XmlGeneratorPage() {
             Red rows indicate issues that will cause that invoice to be skipped.
           </p>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handlePreview}
-              disabled={previewing || !company || invoices.length === 0}
-              className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {previewing ? 'Analysing…' : 'Preview'}
-            </button>
-            {previewRows && (
-              <button
-                onClick={async () => {
-                  if (!company || !selectedFY) return;
-                  if (!window.confirm('This will clear all accepted ledger mappings for this financial year. The invoices stay in Purchase Register — only the Export Preview acceptances are reset. Continue?')) return;
-                  try {
-                    await clearAllTallyAcceptances(company.id, selectedFY);
-                    handlePreview();
-                  } catch (e: unknown) {
-                    alert(`Failed to unaccept: ${e instanceof Error ? e.message : String(e)}`);
-                  }
-                }}
-                className="px-4 py-2 border border-red-300 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors"
-              >
-                Unaccept All
-              </button>
-            )}
-          </div>
+          <button
+            onClick={handlePreview}
+            disabled={previewing || !company || invoices.length === 0}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {previewing ? 'Analysing…' : 'Preview'}
+          </button>
 
           {previewError && (
             <p className="mt-3 text-sm text-red-600">{previewError}</p>
@@ -1378,6 +1405,7 @@ export default function XmlGeneratorPage() {
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
                 initialLockedInvoices={initialLockedInvoices}
+                companyId={company!.id}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   if (description === 'Discount') {
