@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { updateAcceptedInvoice, moveAcceptedToRejected, deleteInvoice, computeReadiness } from '@/lib/db';
 import type { StoredInvoice, LineItem, ExtraCharge } from '@/types/invoice';
-import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary } from '@/types/invoice';
+import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary, getStateFromGstin } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
 
 interface InvoiceDetailPanelProps {
@@ -295,11 +295,54 @@ export default function InvoiceDetailPanel({
   const editNetTaxable = editSubtotal - editBillDiscount + editTaxableChargesTotal;
   const editComputedTotal = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST + editRoundOff;
 
+  // ── GST Jurisdiction Validation ──
+
+  interface GSTWarning {
+    vendorGstin: string;
+    buyerGstin: string;
+    vendorState: string;
+    buyerState: string;
+    currentTaxType: 'cgst_sgst' | 'igst';
+    expectedTaxType: 'cgst_sgst' | 'igst';
+    scenario: 'same_state_igst' | 'diff_state_cgst_sgst';
+  }
+
+  const [gstWarning, setGstWarning] = useState<GSTWarning | null>(null);
+
+  function checkGSTJurisdiction(
+    vendorGstin: string,
+    buyerGstin: string,
+    taxType: 'cgst_sgst' | 'igst',
+  ): GSTWarning | null {
+    if (!vendorGstin || vendorGstin.length < 2) return null;
+    if (!buyerGstin || buyerGstin.length < 2) return null;
+    const vendorState = getStateFromGstin(vendorGstin);
+    const buyerState = getStateFromGstin(buyerGstin);
+    if (vendorState === 'Unknown' || buyerState === 'Unknown') return null;
+    const sameState = vendorState === buyerState;
+    if (sameState && taxType === 'igst') {
+      return { vendorGstin, buyerGstin, vendorState, buyerState, currentTaxType: 'igst', expectedTaxType: 'cgst_sgst', scenario: 'same_state_igst' };
+    }
+    if (!sameState && taxType === 'cgst_sgst') {
+      return { vendorGstin, buyerGstin, vendorState, buyerState, currentTaxType: 'cgst_sgst', expectedTaxType: 'igst', scenario: 'diff_state_cgst_sgst' };
+    }
+    return null;
+  }
+
   // ── Handlers ──
 
-  const handleSave = async () => {
+  const doSave = async (taxTypeOverride?: 'cgst_sgst' | 'igst') => {
     setSaving(true);
     setSaveError('');
+    const taxType = taxTypeOverride ?? editTaxType;
+    // Recompute GST rows if tax type changed
+    const taxRows = taxTypeOverride
+      ? buildFullTaxSummary(editLineItems, editCharges, taxTypeOverride, editBillDiscount)
+      : editFullTaxRows;
+    const cgst = taxRows.reduce((s, r) => s + r.cgst, 0);
+    const sgst = taxRows.reduce((s, r) => s + r.sgst, 0);
+    const igst = taxRows.reduce((s, r) => s + r.igst, 0);
+    const total = editNetTaxable + editNonGstChargesTotal + cgst + sgst + igst + editRoundOff;
     try {
       const patch = {
         invoice_number: editInvoiceNumber,
@@ -308,22 +351,24 @@ export default function InvoiceDetailPanel({
         vendor_gstin: editVendorGstin || null,
         buyer_name: editBuyerName || null,
         buyer_gstin: editBuyerGstin || null,
-        tax_type: editTaxType,
+        tax_type: taxType,
         round_off: editRoundOff,
         bill_discount_amount: editBillDiscount,
         line_items: editLineItems,
         charges: editCharges,
         subtotal: editSubtotal,
-        cgst: editCGST,
-        sgst: editSGST,
-        igst: editIGST,
-        total: editComputedTotal,
+        cgst,
+        sgst,
+        igst,
+        total,
         readiness: liveReadiness,
         readiness_flags: liveFlags as string[],
       };
       await updateAcceptedInvoice(invoice.id, patch);
+      if (taxTypeOverride) setEditTaxType(taxTypeOverride);
       onSaved({ ...invoice, ...patch } as StoredInvoice);
       setMode('view');
+      setGstWarning(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String((err as { message?: string }).message ?? 'Save failed');
       setSaveError(msg);
@@ -331,6 +376,16 @@ export default function InvoiceDetailPanel({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = async () => {
+    // Check GST jurisdiction before saving
+    const warning = checkGSTJurisdiction(editVendorGstin, editBuyerGstin, editTaxType);
+    if (warning) {
+      setGstWarning(warning);
+      return;
+    }
+    await doSave();
   };
 
   const handleDelete = async () => {
@@ -383,6 +438,87 @@ export default function InvoiceDetailPanel({
 
   return (
     <>
+      {/* ── GST Jurisdiction Warning Modal ── */}
+      {gstWarning && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden">
+            {/* Header */}
+            <div className="bg-amber-50 border-b border-amber-200 px-5 py-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-bold text-amber-800">GST Jurisdiction Warning</p>
+                <p className="text-xs text-amber-700 mt-0.5">This is a warning only — you can always proceed. Exceptions exist for place-of-supply based transactions.</p>
+              </div>
+            </div>
+
+            {/* Details */}
+            <div className="px-5 py-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-gray-50 rounded-lg px-3 py-2.5">
+                  <p className="font-semibold text-gray-500 mb-1">Supplier</p>
+                  <p className="font-mono text-gray-800">{gstWarning.vendorGstin}</p>
+                  <p className="text-gray-600 mt-0.5">State: <strong>{gstWarning.vendorState}</strong></p>
+                </div>
+                <div className="bg-gray-50 rounded-lg px-3 py-2.5">
+                  <p className="font-semibold text-gray-500 mb-1">Customer</p>
+                  <p className="font-mono text-gray-800">{gstWarning.buyerGstin}</p>
+                  <p className="text-gray-600 mt-0.5">State: <strong>{gstWarning.buyerState}</strong></p>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Current GST Structure</span>
+                  <span className="font-semibold text-gray-900">{gstWarning.currentTaxType === 'igst' ? 'IGST' : 'CGST + SGST'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Expected (typical)</span>
+                  <span className="font-semibold text-indigo-700">{gstWarning.expectedTaxType === 'igst' ? 'IGST' : 'CGST + SGST'}</span>
+                </div>
+                <div className="border-t border-amber-200 pt-1.5">
+                  <span className="text-amber-800 font-medium">Reason: </span>
+                  <span className="text-amber-700">
+                    {gstWarning.scenario === 'same_state_igst'
+                      ? `Supplier and customer are both in ${gstWarning.vendorState}. Intra-state transactions typically use CGST + SGST.`
+                      : `Supplier is in ${gstWarning.vendorState}, customer is in ${gstWarning.buyerState}. Inter-state transactions typically use IGST.`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="px-5 pb-5 flex flex-col gap-2">
+              <button
+                onClick={() => doSave(gstWarning.expectedTaxType)}
+                disabled={saving}
+                className="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl transition-colors"
+              >
+                {saving ? 'Saving…' : gstWarning.scenario === 'same_state_igst'
+                  ? 'Convert to CGST + SGST and Save'
+                  : 'Convert to IGST and Save'}
+              </button>
+              <button
+                onClick={() => doSave()}
+                disabled={saving}
+                className="w-full px-4 py-2.5 bg-white hover:bg-gray-50 border border-gray-300 text-gray-700 text-sm font-medium rounded-xl transition-colors"
+              >
+                Keep Existing Structure and Save
+              </button>
+              <button
+                onClick={() => setGstWarning(null)}
+                className="w-full px-4 py-2.5 text-gray-500 hover:text-gray-700 text-sm font-medium transition-colors"
+              >
+                Review Invoice (go back to edit)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Backdrop */}
       <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
 
@@ -625,20 +761,20 @@ export default function InvoiceDetailPanel({
                             <td className="px-3 py-2.5 text-sm text-gray-400">{i + 1}</td>
                             <td className="px-3 py-2.5 text-sm font-mono font-medium text-gray-800">{r.hsn}</td>
                             <td className="px-3 py-2.5 text-sm text-right text-gray-700">{r.gst_percent > 0 ? `${r.gst_percent}%` : '0%'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">₹{formatINR(r.taxable)}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.cgst > 0 ? `₹${formatINR(r.cgst)}` : '₹0.00'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.sgst > 0 ? `₹${formatINR(r.sgst)}` : '₹0.00'}</td>
-                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{r.igst > 0 ? `₹${formatINR(r.igst)}` : '₹0.00'}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums font-semibold text-gray-900">{formatINR(r.taxable)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.cgst)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.sgst)}</td>
+                            <td className="px-3 py-2.5 text-sm text-right tabular-nums text-gray-700">{formatINR(r.igst)}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="border-t-2 border-gray-200 bg-gray-50">
                         <tr>
                           <td colSpan={3} className="px-3 py-2 text-xs font-bold text-gray-500 uppercase">Total</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">₹{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedCGST > 0 ? `₹${formatINR(computedCGST)}` : '0%'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedSGST > 0 ? `₹${formatINR(computedSGST)}` : '0%'}</td>
-                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{computedIGST > 0 ? `₹${formatINR(computedIGST)}` : '0%'}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(fullTaxRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedCGST)}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedSGST)}</td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-bold text-gray-900">{formatINR(computedIGST)}</td>
                         </tr>
                       </tfoot>
                     </table>

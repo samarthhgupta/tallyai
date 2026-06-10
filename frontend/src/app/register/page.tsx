@@ -23,7 +23,7 @@ function computeInvoiceFinancials(inv: StoredInvoice) {
   const lineItems = inv.line_items ?? [];
   const charges = (inv.charges ?? []).map((c) => ({
     ...c,
-    sac: resolveChargeSac(c.description, c.sac),
+    sac: resolveChargeSac(c.description ?? '', c.sac),
   }));
   const billDiscount = inv.bill_discount_amount ?? 0;
   const taxableChargesTotal = charges.filter((c) => c.gst_percent > 0).reduce((s, c) => s + c.amount, 0);
@@ -382,6 +382,18 @@ export default function PurchaseRegisterPage() {
     XLSX.writeFile(wb, fileName);
   }
 
+  // ── Totals — always derived from computeInvoiceFinancials (same as detail panel) ──
+  // IMPORTANT: must be defined before sortedInvoices so the sort comparator can access financialsById
+  const invoiceFinancials = invoices.map((inv) => ({ id: inv.id, ...computeInvoiceFinancials(inv) }));
+  const financialsById = new Map(invoiceFinancials.map((f) => [f.id, f]));
+  const totalTaxable = invoiceFinancials.reduce((s, f) => s + f.netTaxable, 0);
+  const totalCGST = invoiceFinancials.reduce((s, f) => s + f.cgst, 0);
+  const totalSGST = invoiceFinancials.reduce((s, f) => s + f.sgst, 0);
+  const totalIGST = invoiceFinancials.reduce((s, f) => s + f.igst, 0);
+  const totalGST = totalCGST + totalSGST + totalIGST;
+  const totalRoundOff = invoiceFinancials.reduce((s, f) => s + f.roundOff, 0);
+  const grandTotal = invoiceFinancials.reduce((s, f) => s + f.total, 0);
+
   const itcOrder: Record<string, number> = { eligible: 0, reviewed_eligible: 1, potentially_ineligible: 2, not_applicable: 3 };
   const sortedInvoices = [...invoices].sort((a, b) => {
     const fa = financialsById.get(a.id)!;
@@ -502,16 +514,6 @@ export default function PurchaseRegisterPage() {
     }
   };
 
-  // ── Totals — always derived from computeInvoiceFinancials (same as detail panel) ──
-  const invoiceFinancials = invoices.map((inv) => ({ id: inv.id, ...computeInvoiceFinancials(inv) }));
-  const financialsById = new Map(invoiceFinancials.map((f) => [f.id, f]));
-  const totalTaxable = invoiceFinancials.reduce((s, f) => s + f.netTaxable, 0);
-  const totalCGST = invoiceFinancials.reduce((s, f) => s + f.cgst, 0);
-  const totalSGST = invoiceFinancials.reduce((s, f) => s + f.sgst, 0);
-  const totalIGST = invoiceFinancials.reduce((s, f) => s + f.igst, 0);
-  const totalGST = totalCGST + totalSGST + totalIGST;
-  const totalRoundOff = invoiceFinancials.reduce((s, f) => s + f.roundOff, 0);
-  const grandTotal = invoiceFinancials.reduce((s, f) => s + f.total, 0);
   const itcEligibleCount = invoices.filter(inv => inv.itc_status === 'eligible').length;
   const itcAtRiskCount = invoices.filter(inv => inv.itc_status === 'potentially_ineligible').length;
   const itcReviewedCount = invoices.filter(inv => inv.itc_status === 'reviewed_eligible').length;
