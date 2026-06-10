@@ -194,10 +194,10 @@ function FlatPreviewTable({
       sac_code: c.charge_sac_code,
     }));
     if (discountPreviewRow && (invoice?.bill_discount_amount ?? 0) > 0) {
-      const discountSuggested = !!discountPreviewRow.warning;
+      const discountSuggested = discountPreviewRow.is_suggested === true;
       charges.push({
         desc: 'Discount',
-        ledger: discountSuggested ? 'Discount' : discountPreviewRow.tally_ledger_name,
+        ledger: discountPreviewRow.tally_ledger_name,
         suggested: discountSuggested,
         amount: discountPreviewRow.amount,
         isDiscount: true,
@@ -325,7 +325,8 @@ function FlatPreviewTable({
     for (const row of displayRows) {
       if (!seen.has(row.invoiceNo)) {
         seen.add(row.invoiceNo);
-        if (!lockedInvoices[row.invoiceNo]) suggestableInvoices.push(row.invoiceNo);
+        const hasSuggestions = rows.some((r) => r.invoice_number === row.invoiceNo && r.is_suggested);
+        if (!lockedInvoices[row.invoiceNo] || hasSuggestions) suggestableInvoices.push(row.invoiceNo);
       }
     }
   }
@@ -517,7 +518,12 @@ function FlatPreviewTable({
               const prevRow = displayRows[i - 1];
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
               const locked = lockedInvoices[row.invoiceNo];
-              const isLocked = !!locked;
+              // If any preview row for this invoice has a fresh AI suggestion, treat it as
+              // needing re-acceptance even if it was previously accepted.
+              const invHasSuggestions = rows.some(
+                (r: PreviewRow) => r.invoice_number === row.invoiceNo && r.is_suggested
+              );
+              const isLocked = !!locked && !invHasSuggestions;
               const rowBg = isLocked ? 'bg-green-50/30' : (isNewInvoice ? 'bg-white' : 'bg-blue-50/20');
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
               const isInvSuggestable = !isLocked && suggestableInvoices.includes(row.invoiceNo);
