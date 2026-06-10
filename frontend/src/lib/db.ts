@@ -224,6 +224,12 @@ export function computeReadiness(
     readiness = 'critical';
   }
 
+  const unidentifiedCharges = (inv.charges ?? []).filter((c) => !c.description?.trim());
+  if (unidentifiedCharges.length > 0) {
+    flags.push(`${unidentifiedCharges.length} unidentified charge(s) — must be resolved before accepting`);
+    readiness = 'critical';
+  }
+
   // Buyer name mismatch is critical regardless of GST - wrong company invoice must never be accepted
   if (companyName && inv.buyer_name?.trim()) {
     const buyerLower = inv.buyer_name.toLowerCase();

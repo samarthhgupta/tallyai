@@ -68,8 +68,7 @@ export const EXPENSE_DEFAULTS: Record<string, { sac_code: string; gst_percent: n
   'rounding off':      { sac_code: '',        gst_percent: 0  },
 };
 
-export function getExpenseDefaults(description: string | null | undefined): { sac_code: string; gst_percent: number } | null {
-  if (!description) return null;
+export function getExpenseDefaults(description: string): { sac_code: string; gst_percent: number } | null {
   const key = description.toLowerCase().trim();
   // 1. Exact match
   if (EXPENSE_DEFAULTS[key]) return EXPENSE_DEFAULTS[key];
@@ -85,9 +84,8 @@ export function getExpenseDefaults(description: string | null | undefined): { sa
 }
 
 // Resolve the best SAC code for a charge: use stored value first, then fall back to defaults.
-export function resolveChargeSac(description: string | null | undefined, storedSac?: string | null): string | undefined {
+export function resolveChargeSac(description: string, storedSac?: string | null): string | undefined {
   if (storedSac && storedSac.trim()) return storedSac.trim();
-  if (!description) return undefined;
   const d = getExpenseDefaults(description);
   return d?.sac_code || undefined;
 }
