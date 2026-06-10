@@ -1432,16 +1432,18 @@ export default function XmlGeneratorPage() {
                     }
                     // 3. Expense/charge ledgers → expense_ledger_masters (Discount → company setting)
                     for (const ch of p.charges) {
-                      if (ch.tallyName && !seenExp.has(ch.keyword)) {
-                        seenExp.add(ch.keyword);
+                      // Key by keyword+rate so Freight@0% and Freight@5% both get saved
+                      const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
+                      if (ch.tallyName && !seenExp.has(expKey)) {
+                        seenExp.add(expKey);
                         if (ch.keyword === 'Discount') {
                           try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
                           catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
                           continue;
                         }
-                        // Use extracted GST/SAC from invoice; fall back to built-in lookup
+                        // Use the actual charge GST rate (even 0%); only fall back to defaults if null
                         const defaults = getExpenseDefaults(ch.keyword);
-                        const gstPct = (ch.gst_percent != null && ch.gst_percent > 0)
+                        const gstPct = ch.gst_percent != null
                           ? ch.gst_percent
                           : (defaults?.gst_percent ?? null);
                         const sacCode = ch.sac_code || defaults?.sac_code || undefined;
