@@ -172,21 +172,32 @@ function findTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string, rate
 }
 
 
-function findExpenseLedger(expenseLedgers: ExpenseLedgerMaster[], description: string): string | null {
+function findExpenseLedger(
+  expenseLedgers: ExpenseLedgerMaster[],
+  description: string,
+  gstRate?: number,
+): string | null {
   const q = norm(description);
-  // Exact keyword
-  const byKeyword = expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === q);
+  // When a GST rate is supplied, require exact gst_percent match.
+  // A rate-agnostic master (gst_percent = null) does NOT match a rated charge —
+  // this forces rate-encoded suggestions ("Freight @ 5%" vs "Freight @ 0%").
+  const rateOk = (l: ExpenseLedgerMaster) =>
+    gstRate === undefined || l.gst_percent === gstRate;
+
+  // Exact keyword + matching rate
+  const byKeyword = expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === q && rateOk(l));
   if (byKeyword) return byKeyword.tally_ledger_name;
-  // Partial keyword
+  // Partial keyword + matching rate
   const partial = expenseLedgers.find(
-    (l) => l.expense_keyword && (q.includes(norm(l.expense_keyword)) || norm(l.expense_keyword).includes(q)),
+    (l) => l.expense_keyword && (q.includes(norm(l.expense_keyword)) || norm(l.expense_keyword).includes(q)) && rateOk(l),
   );
   if (partial) return partial.tally_ledger_name;
-  // Exact ledger name
-  const byName = expenseLedgers.find((l) => norm(l.tally_ledger_name) === q);
+  // Exact ledger name + matching rate
+  const byName = expenseLedgers.find((l) => norm(l.tally_ledger_name) === q && rateOk(l));
   if (byName) return byName.tally_ledger_name;
-  // Fuzzy match
-  const fuzzy = suggestExpenseLedger(expenseLedgers, description);
+  // Fuzzy match + matching rate
+  const candidates = gstRate !== undefined ? expenseLedgers.filter(rateOk) : expenseLedgers;
+  const fuzzy = suggestExpenseLedger(candidates, description);
   return fuzzy?.tally_ledger_name ?? null;
 }
 
@@ -338,7 +349,7 @@ function buildChargeEntries(
   if (!inv.charges?.length) return entries;
   for (const charge of inv.charges) {
     if (!charge.amount || charge.amount === 0) continue;
-    const ledger = findExpenseLedger(expenseLedgers, charge.description);
+    const ledger = findExpenseLedger(expenseLedgers, charge.description, charge.gst_percent ?? undefined);
     if (!ledger) {
       warnings.push(`No expense ledger mapped for charge "${charge.description}" - charge excluded from XML`);
       continue;
@@ -943,7 +954,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   if (inv.charges?.length) {
     for (const charge of inv.charges) {
       if (!charge.amount || charge.amount === 0) continue;
-      const ledger = findExpenseLedger(input.expenseLedgers, charge.description);
+      const ledger = findExpenseLedger(input.expenseLedgers, charge.description, charge.gst_percent ?? undefined);
       if (!ledger) {
         warnings.push(`No expense ledger mapped for charge "${charge.description}" - booking to purchase ledger`);
         unmappedChargesTotal += charge.amount;
@@ -2012,7 +2023,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     if (inv.charges) {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
-        const l = findExpenseLedger(input.expenseLedgers, charge.description);
+        const l = findExpenseLedger(input.expenseLedgers, charge.description, charge.gst_percent ?? undefined);
         const gstRate = charge.gst_percent ?? 0;
         const suggestedName = charge.description ? `${charge.description} @ ${gstRate}%` : `Unknown Charge @ ${gstRate}%`;
         rows.push({
@@ -2101,7 +2112,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     if (inv.charges) {
       for (const charge of inv.charges) {
         if (!charge.amount) continue;
-        const l = findExpenseLedger(input.expenseLedgers, charge.description);
+        const l = findExpenseLedger(input.expenseLedgers, charge.description, charge.gst_percent ?? undefined);
         rows.push({
           ...base,
           ledger_type: 'Expense',
