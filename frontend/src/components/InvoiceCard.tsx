@@ -386,6 +386,10 @@ export function InvoiceCard({
     if (d.vendor_gstin && !GSTIN_RE.test(d.vendor_gstin)) {
       errors['vendor_gstin'] = 'Invalid GSTIN format (15 chars: 00AAAAA0000A0Z0)';
     }
+    (d.charges ?? []).forEach((c, i) => {
+      if (!c.description?.trim()) errors[`charge_${i}_description`] = 'Charge name required';
+      if (!c.sac?.trim()) errors[`charge_${i}_sac`] = 'SAC required';
+    });
     return errors;
   }
 
@@ -860,62 +864,125 @@ export function InvoiceCard({
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* Section 4 - Additional Charges (Non-GST)                             */}
-      {/* Only charges with gst_percent === 0. GST-applicable charges appear   */}
-      {/* in Tax Summary (Section 5) and contribute to Total Taxable Value.    */}
+      {/* Section 4 - Additional Charges                                       */}
+      {/* Edit mode: all charges with full fields. View mode: non-GST only.   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {(current.charges ?? []).some(c => c.gst_percent === 0) && (
+      {((current.charges ?? []).length > 0) && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
           <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
-            4. Additional Charges (Non-GST)
+            4. Additional Charges
           </h4>
+
+          {/* Unidentified charge warning banner (view mode) */}
+          {!editMode && (current.charges ?? []).some(c => !c.description?.trim()) && (
+            <div className="mb-3 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+              <svg className="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <span><strong>Unidentified charge(s) detected.</strong> Edit this invoice to assign a Charge Name, SAC code, and GST rate before accepting.</span>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-50">
-                  {['Description', 'SAC', 'Ledger Name', 'Amount'].map((h) => (
-                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
-                  ))}
+                  {editMode
+                    ? ['Description', 'SAC', 'GST %', 'Amount'].map((h) => (
+                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                      ))
+                    : ['Description', 'SAC', 'Ledger Name', 'Amount'].map((h) => (
+                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                      ))
+                  }
                 </tr>
               </thead>
               <tbody>
-                {(current.charges ?? []).filter(c => c.gst_percent === 0).map((c: ExtraCharge, i: number) => {
-                  const sac = getSacForCharge(c.description);
-                  // find original index for edit callbacks
-                  const origIdx = (current.charges ?? []).indexOf(c);
+                {(editMode ? draft.charges ?? [] : (current.charges ?? []).filter(c => c.gst_percent === 0)).map((c: ExtraCharge, i: number) => {
+                  const isUnidentified = !c.description?.trim();
+                  const descError = validationErrors[`charge_${i}_description`];
+                  const sacError = validationErrors[`charge_${i}_sac`];
+                  const knownCharge = CHARGE_TYPES.find((ct) => ct.label === c.description);
+                  const resolvedSac = c.sac || knownCharge?.sac || getSacForCharge(c.description);
                   return (
-                    <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
+                    <tr key={i} className={`hover:bg-gray-50 ${editMode ? (isUnidentified ? 'bg-red-50/60' : 'bg-blue-50/30') : ''}`}>
 
                       {/* Description */}
                       <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[200px]">
                         {editMode ? (
-                          <select
-                            value={c.description}
-                            onChange={(e) => setCharge(origIdx, 'description', e.target.value)}
-                            className="w-full bg-blue-50 border-0 border-b border-blue-300 focus:outline-none focus:border-indigo-500 focus:bg-indigo-50 py-0.5 text-sm rounded-sm"
-                          >
-                            {CHARGE_TYPES.map((ct) => (
-                              <option key={ct.label} value={ct.label}>{ct.label}</option>
-                            ))}
-                            {!CHARGE_TYPES.find((ct) => ct.label === c.description) && (
-                              <option value={c.description}>{c.description}</option>
-                            )}
-                          </select>
+                          <div>
+                            <select
+                              value={CHARGE_TYPES.find((ct) => ct.label === c.description) ? c.description : '__custom__'}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '__custom__') return;
+                                const ct = CHARGE_TYPES.find((ct) => ct.label === val);
+                                setCharge(i, 'description', val);
+                                if (ct?.sac) setCharge(i, 'sac', ct.sac);
+                              }}
+                              className={`w-full border-b focus:outline-none py-0.5 text-sm rounded-sm ${descError ? 'border-red-400 bg-red-50' : 'border-blue-300 bg-blue-50 focus:border-indigo-500 focus:bg-indigo-50'}`}
+                            >
+                              <option value="__custom__">{c.description ? `"${c.description}" (custom)` : '— Select or type below —'}</option>
+                              {CHARGE_TYPES.map((ct) => (
+                                <option key={ct.label} value={ct.label}>{ct.label}</option>
+                              ))}
+                            </select>
+                            {/* Free-text input for custom name */}
+                            <input
+                              type="text"
+                              value={c.description}
+                              onChange={(e) => {
+                                setCharge(i, 'description', e.target.value);
+                                setValidationErrors((prev) => { const n = { ...prev }; delete n[`charge_${i}_description`]; return n; });
+                              }}
+                              placeholder="Custom charge name"
+                              className={`mt-1 w-full border rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 ${descError ? 'border-red-400 bg-red-50 focus:ring-red-400' : 'border-gray-300 focus:ring-indigo-400'}`}
+                            />
+                            {descError && <p className="text-red-600 text-xs mt-0.5">{descError}</p>}
+                          </div>
                         ) : c.description}
                       </td>
 
                       {/* SAC */}
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500">{sac || ''}</td>
-
-                      {/* Ledger Name */}
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
-                        {c.description} @ 0%
+                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
+                        {editMode ? (
+                          <div>
+                            <input
+                              type="text"
+                              value={c.sac ?? ''}
+                              onChange={(e) => {
+                                setCharge(i, 'sac', e.target.value);
+                                setValidationErrors((prev) => { const n = { ...prev }; delete n[`charge_${i}_sac`]; return n; });
+                              }}
+                              placeholder="e.g. 9965"
+                              className={`w-full border rounded px-1.5 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 ${sacError ? 'border-red-400 bg-red-50 focus:ring-red-400' : 'border-gray-300 focus:ring-indigo-400'}`}
+                            />
+                            {sacError && <p className="text-red-600 text-xs mt-0.5">{sacError}</p>}
+                          </div>
+                        ) : (resolvedSac || '')}
                       </td>
+
+                      {editMode ? (
+                        /* GST % — edit mode */
+                        <td className="px-2 py-1.5 border border-gray-200 w-20">
+                          <input
+                            type="number" min="0" max="28" step="0.01"
+                            value={c.gst_percent}
+                            onChange={(e) => setCharge(i, 'gst_percent', e.target.value)}
+                            className="w-full border border-gray-300 rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                          />
+                        </td>
+                      ) : (
+                        /* Ledger Name — view mode */
+                        <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
+                          {c.description} @ {c.gst_percent}%
+                        </td>
+                      )}
 
                       {/* Amount */}
                       <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
                         {editMode ? (
-                          <CellInput value={c.amount} onChange={(v) => setCharge(origIdx, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
+                          <CellInput value={c.amount} onChange={(v) => setCharge(i, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
                         ) : formatINR(c.amount)}
                       </td>
 
