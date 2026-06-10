@@ -6,6 +6,7 @@ import type {
   InvoiceReadiness,
   ITCStatus,
 } from '@/types/invoice';
+import { buildHsnSummary } from '@/types/invoice';
 import type { FYPeriod } from '@/lib/fyPeriod';
 
 export interface Company {
@@ -352,6 +353,14 @@ export async function insertAcceptedInvoices(
     const finalItcRemark = itcRemarkOverride ?? r.itcRemark;
     // Derive period from invoice date - not from user-selected month
     const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
+
+    // Recompute GST so bill discount always reduces the taxable base before storing.
+    // AI extraction may store gross CGST (before discount); this corrects it at acceptance time.
+    const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0);
+    const cgst = parseFloat(hsnRows.reduce((s: number, row: { cgst: number }) => s + row.cgst, 0).toFixed(2));
+    const sgst = parseFloat(hsnRows.reduce((s: number, row: { sgst: number }) => s + row.sgst, 0).toFixed(2));
+    const igst = parseFloat(hsnRows.reduce((s: number, row: { igst: number }) => s + row.igst, 0).toFixed(2));
+
     return {
       batch_id: batchId,
       company_id: companyId,
@@ -368,9 +377,9 @@ export async function insertAcceptedInvoices(
       subtotal: inv.subtotal,
       bill_discount_amount: inv.bill_discount_amount ?? 0,
       bill_discount_percent: inv.bill_discount_percent ?? null,
-      cgst: inv.cgst,
-      sgst: inv.sgst,
-      igst: inv.igst,
+      cgst,
+      sgst,
+      igst,
       charges: inv.charges ?? [],
       round_off: inv.round_off,
       total: inv.total,
@@ -738,6 +747,16 @@ export async function saveInvoiceTallyAcceptance(
     .update({ tally_ledger_acceptance: acceptance })
     .eq('company_id', companyId)
     .eq('invoice_number', invoiceNumber);
+  if (error) throw error;
+}
+
+export async function clearAllTallyAcceptances(companyId: string, financialYear: string): Promise<void> {
+  const { error } = await db()
+    .from('invoices')
+    .update({ tally_ledger_acceptance: null })
+    .eq('company_id', companyId)
+    .eq('financial_year', financialYear)
+    .eq('status', 'accepted');
   if (error) throw error;
 }
 
