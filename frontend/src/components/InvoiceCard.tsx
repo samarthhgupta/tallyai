@@ -867,7 +867,7 @@ export function InvoiceCard({
       {/* Section 4 - Additional Charges                                       */}
       {/* Edit mode: all charges with full fields. View mode: non-GST only.   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {((current.charges ?? []).length > 0) && (
+      {((current.charges ?? []).length > 0 || editMode) && (
         <div className="px-5 pb-4 pt-4 border-t border-gray-100">
           <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
             4. Additional Charges
@@ -888,7 +888,7 @@ export function InvoiceCard({
               <thead>
                 <tr className="bg-gray-50">
                   {editMode
-                    ? ['Description', 'SAC', 'GST %', 'Amount'].map((h) => (
+                    ? ['Description', 'SAC', 'GST %', 'Amount', ''].map((h) => (
                         <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
                       ))
                     : ['Description', 'SAC', 'Ledger Name', 'Amount'].map((h) => (
@@ -986,12 +986,45 @@ export function InvoiceCard({
                         ) : formatINR(c.amount)}
                       </td>
 
+                      {/* Remove (edit mode only) */}
+                      {editMode && (
+                        <td className="px-2 py-1.5 border border-gray-200 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setDraft((d) => ({ ...d, charges: (d.charges ?? []).filter((_, j) => j !== i) }))}
+                            className="text-gray-300 hover:text-red-500"
+                            title="Remove charge"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </td>
+                      )}
+
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
+          {editMode && (
+            <div className="pt-2.5">
+              <button
+                type="button"
+                onClick={() => setDraft((d) => ({
+                  ...d,
+                  charges: [...(d.charges ?? []), { description: '', amount: 0, gst_percent: 0, sac: '' }],
+                }))}
+                className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Charge
+              </button>
+            </div>
+          )}
         </div>
       )}
 
