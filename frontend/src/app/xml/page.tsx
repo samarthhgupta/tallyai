@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
+import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance, clearAllTallyAcceptances } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -1293,13 +1293,32 @@ export default function XmlGeneratorPage() {
             Red rows indicate issues that will cause that invoice to be skipped.
           </p>
 
-          <button
-            onClick={handlePreview}
-            disabled={previewing || !company || invoices.length === 0}
-            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {previewing ? 'Analysing…' : 'Preview'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handlePreview}
+              disabled={previewing || !company || invoices.length === 0}
+              className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {previewing ? 'Analysing…' : 'Preview'}
+            </button>
+            {previewRows && (
+              <button
+                onClick={async () => {
+                  if (!company || !selectedFY) return;
+                  if (!window.confirm('This will clear all accepted ledger mappings for this financial year. The invoices stay in Purchase Register — only the Export Preview acceptances are reset. Continue?')) return;
+                  try {
+                    await clearAllTallyAcceptances(company.id, selectedFY);
+                    handlePreview();
+                  } catch (e: unknown) {
+                    alert(`Failed to unaccept: ${e instanceof Error ? e.message : String(e)}`);
+                  }
+                }}
+                className="px-4 py-2 border border-red-300 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors"
+              >
+                Unaccept All
+              </button>
+            )}
+          </div>
 
           {previewError && (
             <p className="mt-3 text-sm text-red-600">{previewError}</p>
