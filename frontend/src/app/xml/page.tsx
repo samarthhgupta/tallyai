@@ -356,7 +356,11 @@ function FlatPreviewTable({
     for (const invNo of Array.from(selectedInvoices)) {
       const invRows = displayRows.filter((r) => r.invoiceNo === invNo);
       const firstRow = invRows.find((r) => r.isFirst);
-      if (!firstRow) continue;
+      if (!firstRow) {
+        setBulkSaving(false);
+        alert(`Invoice ${invNo}: Preview not generated or invoice not found. Please generate the Export Preview first before accepting.`);
+        return;
+      }
 
       const vendorLedger = vendorEdits[firstRow.vendorName] ?? firstRow.vendorLedger;
       const purchaseLedger = purchaseLedgerEdits[invNo] ?? firstRow.purchaseLedger;
