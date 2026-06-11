@@ -138,6 +138,7 @@ function FlatPreviewTable({
   const [purchaseLedgerEdits, setPurchaseLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
   const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
   const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
+  const [chargeFreetext, setChargeFreetext] = React.useState<Record<string, boolean>>({}); // desc → show freetext input
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
   const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
 
@@ -755,18 +756,23 @@ function FlatPreviewTable({
                         <td className="px-3 py-2 min-w-[160px]">
                           {ch && (
                             ch.suggested ? (
-                              expenseLedgers.length > 0 ? (
+                              expenseLedgers.length > 0 && !chargeFreetext[ch.desc] ? (
                                 <select defaultValue="" onChange={(e) => {
+                                  if (e.target.value === '__new__') {
+                                    setChargeFreetext((p) => ({ ...p, [ch.desc]: true }));
+                                    return;
+                                  }
                                   if (!e.target.value) return;
                                   setChargeEdits((p) => ({ ...p, [ch.desc]: e.target.value }));
                                   onMapExpense(ch.desc, e.target.value);
                                 }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
                                   <option value="">{chargeEdits[ch.desc] ?? ch.ledger} ✦</option>
                                   {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                                  <option value="__new__">+ Create new ledger…</option>
                                 </select>
                               ) : (
                                 <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested color={ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}
-                                  onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); onMapExpense(ch.desc, v); }} />
+                                  onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); onMapExpense(ch.desc, v); }} />
                               )
                             ) : (
                               <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>{ch.ledger}</span>
@@ -1483,17 +1489,17 @@ export default function XmlGeneratorPage() {
                       const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
                       if (ch.tallyName && !seenExp.has(expKey)) {
                         seenExp.add(expKey);
-                        if (ch.keyword === 'Discount') {
-                          try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
-                          catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
-                          continue;
-                        }
-                        // Use the actual charge GST rate (even 0%); only fall back to defaults if null
+                        // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
                         const gstPct = ch.gst_percent != null
                           ? ch.gst_percent
                           : (defaults?.gst_percent ?? null);
                         const sacCode = ch.sac_code || defaults?.sac_code || undefined;
+                        // Discount: also persist to company.discount_ledger_name
+                        if (ch.keyword === 'Discount') {
+                          try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
+                          catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
+                        }
                         try {
                           await addExpenseLedger(company.id, {
                             tally_ledger_name: ch.tallyName,
