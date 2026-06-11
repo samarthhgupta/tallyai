@@ -595,8 +595,12 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
   const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
-  const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
-  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
+  const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+  // Per-invoice accepted discount ledger first, then rate-aware master lookup
+  const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+    ? (inv.tally_ledger_acceptance?.charges?.['Discount'] ?? findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate))
+    : null;
+  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, !!discountLedger);
 
   const entries: string[] = [];
   entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-inv.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
@@ -608,8 +612,8 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
 
-  if (hasDiscountLedger) {
-    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(input.discountLedgerName!)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-(inv.bill_discount_amount ?? 0))}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+  if (discountLedger) {
+    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(discountLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-(inv.bill_discount_amount ?? 0))}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
 
   // Use stored invoice tax values (accountant-reviewed) instead of recomputing from line items.
@@ -895,10 +899,13 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     billRefName: inv.invoice_number,
   }));
 
-  // 2. Bill discount (if any, using discount ledger)
-  const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
-  if (hasDiscountLedger) {
-    ledgerEntries.push(invChargeLedgerEntry(input.discountLedgerName!, -(inv.bill_discount_amount ?? 0)));
+  // 2. Bill discount (if any) — per-invoice accepted ledger first, then rate-aware master lookup
+  const invGoodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+  const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+    ? (inv.tally_ledger_acceptance?.charges?.['Discount'] ?? findExpenseLedger(input.expenseLedgers, 'Discount', invGoodsGstRate))
+    : null;
+  if (discountLedger) {
+    ledgerEntries.push(invChargeLedgerEntry(discountLedger, -(inv.bill_discount_amount ?? 0)));
   } else if ((inv.bill_discount_amount ?? 0) > 0) {
     warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked - no discount ledger configured`);
   }
@@ -1982,7 +1989,12 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
-    const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
+    const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+    // Rate-aware discount lookup: Discount@5% master never matches Discount@18% invoice
+    const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+      ? (inv.tally_ledger_acceptance?.charges?.['Discount'] ?? findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate))
+      : null;
+    const hasDiscountLedger = !!discountLedger;
     const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
 
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
@@ -1994,9 +2006,8 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
-      const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: discountLedger ?? discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
     }
 
     // Use stored invoice GST values (accountant-reviewed) — they already reflect
@@ -2085,10 +2096,12 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
-      const hasDiscountLedger = !!(input.discountLedgerName);
       const goodsGstRate = inv.line_items?.[0]?.gst_percent ?? 0;
+      // Rate-aware discount lookup: matches Discount@5% master only for @5% invoices
+      const discountLedger = inv.tally_ledger_acceptance?.charges?.['Discount']
+        ?? findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate);
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: discountLedger ?? discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: discountLedger ? 'OK' : 'Suggested', is_suggested: !discountLedger, charge_gst_percent: goodsGstRate, warning: discountLedger ? undefined : 'No discount ledger configured' });
     }
 
     const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
