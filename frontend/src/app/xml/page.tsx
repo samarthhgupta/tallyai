@@ -118,6 +118,7 @@ function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
+  fileBase,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -126,6 +127,7 @@ function FlatPreviewTable({
   stockItems: { tally_item_name: string }[];
   initialLockedInvoices: Record<string, LockedInvoice>;
   companyId: string;
+  fileBase: string;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
@@ -322,7 +324,67 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
-  // One checkbox per INVOICE - only for invoices that have at least one suggested field.
+  // ── Excel export matching the table layout exactly ──────────────────────────
+  const handleDownloadExcel = () => {
+    const chargeHeaders: string[] = [];
+    for (let ci = 0; ci < maxCharges; ci++) {
+      chargeHeaders.push(`Charge ${ci + 1} (Invoice)`, `Charge ${ci + 1} Ledger (Tally)`, `Charge ${ci + 1} Amt (₹)`);
+    }
+    const headers = [
+      'Date', 'Invoice No', 'Voucher Type',
+      'Vendor (Invoice)', 'Vendor Ledger (Tally)', 'GSTIN', 'GST Reg Type',
+      'Purchase Ledger (Tally)',
+      'Item Name (Invoice)', 'HSN', 'Stock Item (Tally)',
+      'Tax Rate %', 'Qty', 'UOM', 'Rate (₹)', 'Discount %', 'Amount (₹)',
+      ...chargeHeaders,
+      'CGST Ledger (Tally)', 'CGST Amt (₹)',
+      'SGST Ledger (Tally)', 'SGST Amt (₹)',
+      'IGST Ledger (Tally)', 'IGST Amt (₹)',
+      'Round Off Ledger (Tally)', 'Round Off Amt (₹)',
+    ];
+
+    const dataRows = displayRows.map((row) => {
+      const chargeCells: (string | number | null)[] = [];
+      for (let ci = 0; ci < maxCharges; ci++) {
+        const ch = row.charges[ci];
+        chargeCells.push(ch?.desc ?? '', ch?.ledger ?? '', ch?.amount ?? '');
+      }
+      return [
+        row.invoiceDate, row.invoiceNo, row.voucherType,
+        row.vendorName, row.vendorLedger, row.gstin, row.gstRegType,
+        row.purchaseLedger,
+        row.itemDesc, row.hsn, row.stockItem,
+        row.taxRate ?? '', row.qty ?? '', row.uom, row.rate ?? '', row.disc ?? '', row.amount,
+        ...chargeCells,
+        row.taxType === 'cgst_sgst' ? row.cgstLedger : '', row.taxType === 'cgst_sgst' ? row.cgstAmt || '' : '',
+        row.taxType === 'cgst_sgst' ? row.sgstLedger : '', row.taxType === 'cgst_sgst' ? row.sgstAmt || '' : '',
+        row.taxType === 'igst'      ? row.igstLedger : '', row.taxType === 'igst'      ? row.igstAmt || '' : '',
+        row.roLedger, row.roAmt || '',
+      ];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+    const colWidths = [
+      { wch: 12 }, { wch: 16 }, { wch: 12 },
+      { wch: 28 }, { wch: 28 }, { wch: 18 }, { wch: 12 },
+      { wch: 22 },
+      { wch: 30 }, { wch: 12 }, { wch: 28 },
+      { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
+      ...Array(maxCharges * 3).fill({ wch: 22 }),
+      { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
+      { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
+    ];
+    ws['!cols'] = colWidths;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${fileBase}_preview.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
   // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
   const suggestableInvoices: string[] = [];
   {
@@ -485,6 +547,20 @@ function FlatPreviewTable({
 
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
+      {/* Top toolbar: Excel download always visible when there are rows */}
+      {displayRows.length > 0 && (
+        <div className="flex items-center justify-end px-4 py-2 border-b border-gray-100 bg-white">
+          <button
+            onClick={handleDownloadExcel}
+            className="flex items-center gap-2 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Download as Excel
+          </button>
+        </div>
+      )}
       {/* Action bar */}
       {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex-wrap">
@@ -1173,29 +1249,6 @@ export default function XmlGeneratorPage() {
   };
 
   // ── Download preview as Excel ──
-  const handleDownloadExcel = () => {
-    if (!previewRows) return;
-    const wsData = [
-      ['Invoice No', 'Date', 'Vendor (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
-      ...previewRows.map((r) => [
-        r.invoice_number, r.invoice_date, r.vendor_name, r.party_ledger,
-        r.ledger_type, r.tally_ledger_name, r.amount, r.status,
-        r.skip_reason ?? r.warning ?? '',
-      ]),
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([wbout], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${fileBase}_preview.xlsx`;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-  };
-
   const buildXmlInput = async () => {
     const masters = await loadMasters(company!.id);
     const fresh = await getCompany(company!.id);
@@ -1425,15 +1478,6 @@ export default function XmlGeneratorPage() {
                     </span>
                   </div>
                 )}
-                <button
-                  onClick={handleDownloadExcel}
-                  className="ml-auto flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download as Excel
-                </button>
               </div>
 
               {/* Auto-suggest notice */}
@@ -1445,6 +1489,7 @@ export default function XmlGeneratorPage() {
                 suppliers={cachedMasters?.suppliers ?? []}
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
+                fileBase={fileBase}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
                 onMapExpense={async (description, ledgerName) => {
