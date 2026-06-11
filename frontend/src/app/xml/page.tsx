@@ -360,6 +360,11 @@ function FlatPreviewTable({
 
       const vendorLedger = vendorEdits[firstRow.vendorName] ?? firstRow.vendorLedger;
       const purchaseLedger = purchaseLedgerEdits[invNo] ?? firstRow.purchaseLedger;
+      if (!purchaseLedger?.trim()) {
+        setBulkSaving(false);
+        alert(`Invoice ${invNo}: Purchase Ledger (Tally) is required. Please enter or accept a purchase ledger before accepting this invoice.`);
+        return;
+      }
       const cgstLedger = taxLedgerEdits.cgst ?? firstRow.cgstLedger;
       const sgstLedger = taxLedgerEdits.sgst ?? firstRow.sgstLedger;
       const igstLedger = taxLedgerEdits.igst ?? firstRow.igstLedger;
@@ -591,6 +596,8 @@ function FlatPreviewTable({
                 onSave: (v: string) => void; placeholder?: string;
               }) => {
                 const [draft, setDraft] = React.useState(value);
+                // Sync when the parent-supplied value changes (e.g. after preview regenerates)
+                React.useEffect(() => { setDraft(value); }, [value]);
                 if (!suggested) return <span className={`font-mono font-medium ${color}`}>{value || '-'}</span>;
                 return (
                   <div className="flex items-center gap-1 min-w-[140px]">
@@ -1512,23 +1519,17 @@ export default function XmlGeneratorPage() {
                         catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
                       }
                     }
-                    // 3. Expense/charge ledgers → expense_ledger_masters (Discount → company setting)
+                    // 3. Expense/charge ledgers → expense_ledger_masters
                     for (const ch of p.charges) {
-                      // Key by keyword+rate so Freight@0% and Freight@5% both get saved
+                      // Key by keyword+rate: Discount@5% and Discount@18% are different ledgers
                       const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
                       if (ch.tallyName && !seenExp.has(expKey)) {
                         seenExp.add(expKey);
-                        // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
                         const gstPct = ch.gst_percent != null
                           ? ch.gst_percent
                           : (defaults?.gst_percent ?? null);
                         const sacCode = ch.sac_code || defaults?.sac_code || undefined;
-                        // Discount: also persist to company.discount_ledger_name
-                        if (ch.keyword === 'Discount') {
-                          try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
-                          catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
-                        }
                         try {
                           await addExpenseLedger(company.id, {
                             tally_ledger_name: ch.tallyName,
