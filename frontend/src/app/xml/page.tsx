@@ -8,6 +8,7 @@ import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/expenseLedgers';
+import { loadPurchaseLedgers, addPurchaseLedger } from '@/lib/purchaseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
@@ -184,9 +185,9 @@ function FlatPreviewTable({
     const vendorLedger    = partyRow?.tally_ledger_name ?? '-';
     const vendorSuggested = partyRow?.status === 'Suggested';
 
-    // ONE purchase ledger per invoice - read from accepted invoice, else empty (user must set it)
-    const invPlLedger = invoice?.tally_ledger_acceptance?.purchaseLedger ?? '';
-    const invPlSuggested = !invPlLedger;
+    // ONE purchase ledger per invoice - accepted value first, then preview suggestion (e.g. 'Purchase')
+    const invPlLedger = invoice?.tally_ledger_acceptance?.purchaseLedger ?? purchRows[0]?.tally_ledger_name ?? '';
+    const invPlSuggested = !invoice?.tally_ledger_acceptance?.purchaseLedger;
 
     const charges: FlatDisplayRow['charges'] = chargeRows.map((c) => ({
       desc: c.item_description ?? c.tally_ledger_name,
@@ -203,6 +204,7 @@ function FlatPreviewTable({
         ledger: discountPreviewRow.tally_ledger_name,
         suggested: discountSuggested,
         amount: discountPreviewRow.amount,
+        gst_percent: discountPreviewRow.charge_gst_percent,
         isDiscount: true,
       });
     }
@@ -1038,14 +1040,15 @@ function SuggestionsPanel({
 // ─── Shared master loader ─────────────────────────────────────────────────────
 
 async function loadMasters(companyId: string) {
-  const [suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes] = await Promise.all([
+  const [suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters] = await Promise.all([
     loadSuppliers(companyId),
     loadDutiesTaxes(companyId),
     loadStockItems(companyId),
     loadExpenseLedgers(companyId),
     loadVoucherTypes(companyId),
+    loadPurchaseLedgers(companyId),
   ]);
-  return { suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes };
+  return { suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters };
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -1144,6 +1147,7 @@ export default function XmlGeneratorPage() {
 
       const rows = buildTallyPreview({
         invoices, ...masters,
+        purchaseLedgers: masters.purchaseLedgerMasters.map((l) => ({ gst_percent: null as null, tally_ledger_name: l.tally_ledger_name })),
         tallyCompanyName: company!.tally_company_name!,
         voucherMode,
         discountLedgerName: fresh.discount_ledger_name,
@@ -1186,6 +1190,7 @@ export default function XmlGeneratorPage() {
     const fresh = await getCompany(company!.id);
     return {
       invoices, ...masters,
+      purchaseLedgers: masters.purchaseLedgerMasters.map((l) => ({ gst_percent: null as null, tally_ledger_name: l.tally_ledger_name })),
       tallyCompanyName: company!.tally_company_name!,
       financialYear: selectedFY,
       voucherMode,
@@ -1466,6 +1471,11 @@ export default function XmlGeneratorPage() {
                       seenVendor.add(p.vendorName);
                       try { await addSupplier(company.id, { vendor_name: p.vendorName, vendor_gstin: p.vendorGstin, tally_ledger_name: p.vendorLedger }); }
                       catch (e) { errs.push(`Vendor "${p.vendorName}": ${getErrMsg(e)}`); }
+                    }
+                    // 1b. Purchase ledger → purchase_ledger_config
+                    if (p.purchaseLedger) {
+                      try { await addPurchaseLedger(company.id, p.purchaseLedger); }
+                      catch (e) { errs.push(`Purchase ledger: ${getErrMsg(e)}`); }
                     }
                     // 2. Stock items → stock_item_masters
                     for (const si of p.stockItems) {

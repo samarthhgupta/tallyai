@@ -1989,14 +1989,14 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     for (const row of hsnRows) {
-      const suggestedPurchase = 'Purchase';
+      const suggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
       rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: row.taxable, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
       const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
     }
 
     // Use stored invoice GST values (accountant-reviewed) — they already reflect
@@ -2088,7 +2088,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       const hasDiscountLedger = !!(input.discountLedgerName);
       const goodsGstRate = inv.line_items?.[0]?.gst_percent ?? 0;
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
     }
 
     const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
