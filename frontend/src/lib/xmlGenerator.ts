@@ -1989,7 +1989,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     for (const row of hsnRows) {
-      const suggestedPurchase = hasGst ? 'GST Purchase' : 'Purchase';
+      const suggestedPurchase = 'Purchase';
       rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: row.taxable, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
     }
 
