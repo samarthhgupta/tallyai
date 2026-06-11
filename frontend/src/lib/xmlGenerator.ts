@@ -2095,6 +2095,10 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
 
+    // Dedicated Purchase row so FlatPreviewTable can surface the suggestion regardless of mode
+    const invSuggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
+    rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || invSuggestedPurchase, amount: 0, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
+
     if ((inv.bill_discount_amount ?? 0) > 0) {
       const goodsGstRate = inv.line_items?.[0]?.gst_percent ?? 0;
       // Rate-aware discount lookup: matches Discount@5% master only for @5% invoices
