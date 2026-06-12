@@ -4,8 +4,18 @@
 // inv.cgst / inv.sgst / inv.igst / inv.total, which may be stale.
 
 import { buildFullTaxSummary, calcLineAmount } from '@/types/invoice';
-import type { StoredInvoice, HsnRow, ExtraCharge } from '@/types/invoice';
+import type { LineItem, HsnRow, ExtraCharge } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
+
+// Minimal invoice shape required by the canonical engine.
+// Both ExtractedInvoice and StoredInvoice satisfy this interface.
+export interface InvoiceForDerivation {
+  line_items?: LineItem[];
+  charges?: ExtraCharge[];
+  tax_type: 'cgst_sgst' | 'igst';
+  bill_discount_amount?: number | null;
+  round_off?: number | null;
+}
 
 export interface InvoiceFinancials {
   goods_subtotal: number;
@@ -25,7 +35,7 @@ export interface InvoiceFinancials {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-export function deriveInvoiceFinancials(inv: StoredInvoice): InvoiceFinancials {
+export function deriveInvoiceFinancials(inv: InvoiceForDerivation): InvoiceFinancials {
   const lineItems = inv.line_items ?? [];
   const billDiscount = inv.bill_discount_amount ?? 0;
 

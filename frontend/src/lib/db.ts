@@ -6,7 +6,7 @@ import type {
   InvoiceReadiness,
   ITCStatus,
 } from '@/types/invoice';
-import { buildHsnSummary } from '@/types/invoice';
+import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 import type { FYPeriod } from '@/lib/fyPeriod';
 
 export interface Company {
@@ -354,12 +354,20 @@ export async function insertAcceptedInvoices(
     // Derive period from invoice date - not from user-selected month
     const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
 
-    // Recompute GST so bill discount always reduces the taxable base before storing.
-    // AI extraction may store gross CGST (before discount); this corrects it at acceptance time.
-    const hsnRows = buildHsnSummary(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0);
-    const cgst = parseFloat(hsnRows.reduce((s: number, row: { cgst: number }) => s + row.cgst, 0).toFixed(2));
-    const sgst = parseFloat(hsnRows.reduce((s: number, row: { sgst: number }) => s + row.sgst, 0).toFixed(2));
-    const igst = parseFloat(hsnRows.reduce((s: number, row: { igst: number }) => s + row.igst, 0).toFixed(2));
+    // Derive all financial values from the canonical engine.
+    // This ensures cgst/sgst/igst/total are always internally consistent and include
+    // both line-item GST and taxable charge GST (e.g. freight at 5%).
+    //
+    // ARCHITECTURE: supplier_* columns capture the raw AI-extracted values for audit.
+    // The derived cgst/sgst/igst/total columns are the operational source of truth
+    // and must be computed by deriveInvoiceFinancials — never taken from AI extraction.
+    //
+    // HISTORICAL NOTE: Rows accepted before migration 034 have supplier_* = NULL and
+    // may have stale cgst/sgst/igst (built from buildHsnSummary, goods only).
+    // All operational screens derive values at runtime, so those rows are safe
+    // operationally, but their stored derived columns should not be trusted for
+    // raw-column reporting without re-deriving from line_items + charges.
+    const d = deriveInvoiceFinancials(inv);
 
     return {
       batch_id: batchId,
@@ -377,12 +385,20 @@ export async function insertAcceptedInvoices(
       subtotal: inv.subtotal,
       bill_discount_amount: inv.bill_discount_amount ?? 0,
       bill_discount_percent: inv.bill_discount_percent ?? null,
-      cgst,
-      sgst,
-      igst,
+      // Supplier archival columns — AI-extracted values, written once, never updated.
+      // Do not use these for any calculation or display. For audit only.
+      supplier_cgst:     inv.cgst     ?? null,
+      supplier_sgst:     inv.sgst     ?? null,
+      supplier_igst:     inv.igst     ?? null,
+      supplier_total:    inv.total    ?? null,
+      supplier_roundoff: inv.round_off ?? null,
+      // Derived columns — canonical engine output. Source of truth for all operational workflows.
+      cgst:      d.cgst,
+      sgst:      d.sgst,
+      igst:      d.igst,
       charges: inv.charges ?? [],
-      round_off: inv.round_off,
-      total: inv.total,
+      round_off: inv.round_off ?? 0,
+      total:     d.total,
       confidence: inv.confidence,
       confidence_reasons: inv.confidence_reasons ?? [],
       line_items: inv.line_items,
