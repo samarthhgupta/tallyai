@@ -7,6 +7,7 @@ import type {
   ITCStatus,
 } from '@/types/invoice';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
+import { resolveChargeSac } from '@/lib/expenseLedgers';
 import type { FYPeriod } from '@/lib/fyPeriod';
 
 export interface Company {
@@ -228,6 +229,23 @@ export function computeReadiness(
   const unidentifiedCharges = (inv.charges ?? []).filter((c) => !c.description?.trim());
   if (unidentifiedCharges.length > 0) {
     flags.push(`${unidentifiedCharges.length} unidentified charge(s) — must be resolved before accepting`);
+    readiness = 'critical';
+  }
+
+  // Charges where GST% > 0 and amount > 0 but no SAC can be resolved block
+  // acceptance because GST cannot be calculated — the charge will be silently
+  // excluded from all GST computations, understating CGST/SGST/IGST and the
+  // party ledger amount by the same amount (balanced but wrong).
+  // Resolution: enter a SAC code on the charge, or set GST% to 0 if non-taxable.
+  const unresolvedTaxableCharges = (inv.charges ?? []).filter(
+    (c) => (c.gst_percent ?? 0) > 0 && (c.amount ?? 0) > 0 && !resolveChargeSac(c.description ?? '', c.sac ?? null),
+  );
+  for (const c of unresolvedTaxableCharges) {
+    flags.push(
+      `Charge "${c.description || 'Unknown'}" has GST rate ${c.gst_percent}% but no SAC code. ` +
+      `GST cannot be calculated for this charge. ` +
+      `Enter a SAC code or change GST% to 0 if this charge is non-taxable.`,
+    );
     readiness = 'critical';
   }
 

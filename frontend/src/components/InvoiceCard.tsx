@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ExtractedInvoice, LineItem, HsnRow, ExtraCharge } from '@/types/invoice';
 import { formatINR, getStateFromGstin, calcLineAmount, buildHsnSummary } from '@/types/invoice';
+import { CHARGE_TYPE_LIST, resolveChargeSac } from '@/lib/expenseLedgers';
 import type { LocalCompany } from '@/lib/companies';
 import { matchCompany, type MatchResult } from '@/lib/companies';
 import type { InvoiceFingerprint } from '@/lib/invoiceHistory';
@@ -17,38 +18,8 @@ interface AuditEntry {
   timestamp: string;
 }
 
-// ─── Charge types & SAC mapping ────────────────────────────────────────────────
-
-const CHARGE_TYPES: { label: string; sac: string }[] = [
-  { label: 'Freight',                      sac: '9965' },
-  { label: 'Freight Charges',              sac: '9965' },
-  { label: 'Freight & Forwarding Charges', sac: '9965' },
-  { label: 'F&F Charges',                  sac: '9965' },
-  { label: 'Transport Charges',            sac: '9965' },
-  { label: 'Transportation Charges',       sac: '9965' },
-  { label: 'Delivery Charges',             sac: '9965' },
-  { label: 'Builty Charges',               sac: '9965' },
-  { label: 'LR Charges',                   sac: '9965' },
-  { label: 'Lorry Charges',                sac: '9965' },
-  { label: 'Cartage Charges',              sac: '9965' },
-  { label: 'Postage',                      sac: '9968' },
-  { label: 'Postal Charges',               sac: '9968' },
-  { label: 'Courier Charges',              sac: '9968' },
-  { label: 'Courier Service',              sac: '9968' },
-  { label: 'Dispatch Charges',             sac: '9968' },
-  { label: 'Shipping Charges',             sac: '9968' },
-  { label: 'Shipping Service',             sac: '9968' },
-  { label: 'Packing Charges',              sac: '' },
-  { label: 'Handling Charges',             sac: '' },
-  { label: 'Other Charges',                sac: '' },
-];
-
-function getSacForCharge(description: string): string {
-  const match = CHARGE_TYPES.find(
-    (ct) => ct.label.toLowerCase() === description.toLowerCase()
-  );
-  return match?.sac ?? '';
-}
+// CHARGE_TYPE_LIST and resolveChargeSac are imported from expenseLedgers.ts —
+// single source of truth for charge description → SAC mapping.
 
 function calcAutoRoundOff(d: ExtractedInvoice): number {
   const subtotal = d.line_items.reduce((s, it) => s + calcLineAmount(it), 0);
@@ -327,7 +298,7 @@ export function InvoiceCard({
     .map((c) => {
       const tax = c.amount * c.gst_percent / 100;
       return {
-        hsn: getSacForCharge(c.description) || c.description,
+        hsn: resolveChargeSac(c.description, c.sac) || c.description,
         gst_percent: c.gst_percent,
         taxable: c.amount,
         cgst: current.tax_type === 'cgst_sgst' ? tax / 2 : 0,
@@ -902,8 +873,8 @@ export function InvoiceCard({
                   const isUnidentified = !c.description?.trim();
                   const descError = validationErrors[`charge_${i}_description`];
                   const sacError = validationErrors[`charge_${i}_sac`];
-                  const knownCharge = CHARGE_TYPES.find((ct) => ct.label === c.description);
-                  const resolvedSac = c.sac || knownCharge?.sac || getSacForCharge(c.description);
+                  const knownCharge = CHARGE_TYPE_LIST.find((ct) => ct.label === c.description);
+                  const resolvedSac = c.sac || knownCharge?.sac || resolveChargeSac(c.description, null);
                   return (
                     <tr key={i} className={`hover:bg-gray-50 ${editMode ? (isUnidentified ? 'bg-red-50/60' : 'bg-blue-50/30') : ''}`}>
 
@@ -912,18 +883,18 @@ export function InvoiceCard({
                         {editMode ? (
                           <div>
                             <select
-                              value={CHARGE_TYPES.find((ct) => ct.label === c.description) ? c.description : '__custom__'}
+                              value={CHARGE_TYPE_LIST.find((ct) => ct.label === c.description) ? c.description : '__custom__'}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 if (val === '__custom__') return;
-                                const ct = CHARGE_TYPES.find((ct) => ct.label === val);
+                                const ct = CHARGE_TYPE_LIST.find((ct) => ct.label === val);
                                 setCharge(i, 'description', val);
                                 if (ct?.sac) setCharge(i, 'sac', ct.sac);
                               }}
                               className={`w-full border-b focus:outline-none py-0.5 text-sm rounded-sm ${descError ? 'border-red-400 bg-red-50' : 'border-blue-300 bg-blue-50 focus:border-indigo-500 focus:bg-indigo-50'}`}
                             >
                               <option value="__custom__">{c.description ? `"${c.description}" (custom)` : '— Select or type below —'}</option>
-                              {CHARGE_TYPES.map((ct) => (
+                              {CHARGE_TYPE_LIST.map((ct) => (
                                 <option key={ct.label} value={ct.label}>{ct.label}</option>
                               ))}
                             </select>

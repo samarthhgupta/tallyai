@@ -36,37 +36,115 @@ export interface ExpenseLedgerImportResult {
   errors: Array<{ row: number; ledger: string; reason: string }>;
 }
 
-// Built-in defaults for common expense types - used to auto-fill SAC + GST %
-// when no extracted data is available (fallback lookup).
+// Built-in defaults for common expense types — single source of truth for
+// charge description → SAC code + GST % mapping.
+//
+// Used by:
+//   1. resolveChargeSac()         — canonical engine SAC resolution
+//   2. CHARGE_TYPE_LIST export    — InvoiceCard dropdown (derived below)
+//
+// ADD NEW CHARGE TYPES HERE ONLY. Do not add to InvoiceCard or any other file.
+// Descriptions are matched case-insensitively with three-pass fuzzy matching
+// (exact → description-contains-key → key-contains-description).
 export const EXPENSE_DEFAULTS: Record<string, { sac_code: string; gst_percent: number }> = {
-  'freight':           { sac_code: '996511', gst_percent: 5  },
-  'freight charges':   { sac_code: '996511', gst_percent: 5  },
-  'freight & forwarding': { sac_code: '996511', gst_percent: 5 },
-  'freight forwarding': { sac_code: '996511', gst_percent: 5 },
-  'delivery charges':  { sac_code: '996511', gst_percent: 5  },
-  'transport':         { sac_code: '996511', gst_percent: 5  },
-  'transportation':    { sac_code: '996511', gst_percent: 5  },
-  'transportation charges': { sac_code: '996511', gst_percent: 5 },
-  'courier':           { sac_code: '996812', gst_percent: 18 },
-  'courier charges':   { sac_code: '996812', gst_percent: 18 },
-  'postage':           { sac_code: '996811', gst_percent: 18 },
-  'postage & telegram': { sac_code: '996811', gst_percent: 18 },
-  'packing':           { sac_code: '998540', gst_percent: 18 },
-  'packing charges':   { sac_code: '998540', gst_percent: 18 },
-  'packaging charges': { sac_code: '998540', gst_percent: 18 },
-  'loading':           { sac_code: '996719', gst_percent: 18 },
-  'unloading':         { sac_code: '996719', gst_percent: 18 },
-  'loading charges':   { sac_code: '996719', gst_percent: 18 },
-  'loading & unloading': { sac_code: '996719', gst_percent: 18 },
-  'handling charges':  { sac_code: '996719', gst_percent: 18 },
-  'insurance':         { sac_code: '997135', gst_percent: 18 },
-  'insurance charges': { sac_code: '997135', gst_percent: 18 },
-  'labour':            { sac_code: '998519', gst_percent: 18 },
-  'labour charges':    { sac_code: '998519', gst_percent: 18 },
-  'accounting charges': { sac_code: '998211', gst_percent: 18 },
-  'round off':         { sac_code: '',        gst_percent: 0  },
-  'rounding off':      { sac_code: '',        gst_percent: 0  },
+  // ── Freight / Transport (SAC 996511 @ 5%) ─────────────────────────────────
+  'freight':                       { sac_code: '996511', gst_percent: 5  },
+  'freight charges':               { sac_code: '996511', gst_percent: 5  },
+  'freight & forwarding':          { sac_code: '996511', gst_percent: 5  },
+  'freight & forwarding charges':  { sac_code: '996511', gst_percent: 5  },
+  'freight forwarding':            { sac_code: '996511', gst_percent: 5  },
+  'f&f charges':                   { sac_code: '996511', gst_percent: 5  },
+  'delivery charges':              { sac_code: '996511', gst_percent: 5  },
+  'transport':                     { sac_code: '996511', gst_percent: 5  },
+  'transport charges':             { sac_code: '996511', gst_percent: 5  },
+  'transportation':                { sac_code: '996511', gst_percent: 5  },
+  'transportation charges':        { sac_code: '996511', gst_percent: 5  },
+  'cartage':                       { sac_code: '996511', gst_percent: 5  },
+  'cartage charges':               { sac_code: '996511', gst_percent: 5  },
+  'builty charges':                { sac_code: '996511', gst_percent: 5  },
+  'lr charges':                    { sac_code: '996511', gst_percent: 5  },
+  'lorry charges':                 { sac_code: '996511', gst_percent: 5  },
+  // ── Courier / Dispatch / Shipping (SAC 996812 @ 18%) ──────────────────────
+  'courier':                       { sac_code: '996812', gst_percent: 18 },
+  'courier charges':               { sac_code: '996812', gst_percent: 18 },
+  'courier service':               { sac_code: '996812', gst_percent: 18 },
+  'dispatch charges':              { sac_code: '996812', gst_percent: 18 },
+  'shipping charges':              { sac_code: '996812', gst_percent: 18 },
+  'shipping service':              { sac_code: '996812', gst_percent: 18 },
+  // ── Postage (SAC 996811 @ 18%) ────────────────────────────────────────────
+  'postage':                       { sac_code: '996811', gst_percent: 18 },
+  'postal charges':                { sac_code: '996811', gst_percent: 18 },
+  'postage & telegram':            { sac_code: '996811', gst_percent: 18 },
+  // ── Packing (SAC 998540 @ 18%) ────────────────────────────────────────────
+  'packing':                       { sac_code: '998540', gst_percent: 18 },
+  'packing charges':               { sac_code: '998540', gst_percent: 18 },
+  'packaging charges':             { sac_code: '998540', gst_percent: 18 },
+  // ── Loading / Handling (SAC 996719 @ 18%) ─────────────────────────────────
+  'loading':                       { sac_code: '996719', gst_percent: 18 },
+  'unloading':                     { sac_code: '996719', gst_percent: 18 },
+  'loading charges':               { sac_code: '996719', gst_percent: 18 },
+  'unloading charges':             { sac_code: '996719', gst_percent: 18 },
+  'loading & unloading':           { sac_code: '996719', gst_percent: 18 },
+  'handling charges':              { sac_code: '996719', gst_percent: 18 },
+  // ── Insurance (SAC 997135 @ 18%) ──────────────────────────────────────────
+  'insurance':                     { sac_code: '997135', gst_percent: 18 },
+  'insurance charges':             { sac_code: '997135', gst_percent: 18 },
+  // ── Labour (SAC 998519 @ 18%) ─────────────────────────────────────────────
+  'labour':                        { sac_code: '998519', gst_percent: 18 },
+  'labour charges':                { sac_code: '998519', gst_percent: 18 },
+  // ── Accounting (SAC 998211 @ 18%) ─────────────────────────────────────────
+  'accounting charges':            { sac_code: '998211', gst_percent: 18 },
+  // ── Round-off (excluded from GST — empty SAC intentional) ─────────────────
+  'round off':                     { sac_code: '',        gst_percent: 0  },
+  'rounding off':                  { sac_code: '',        gst_percent: 0  },
 };
+
+// Derived charge type list for UI dropdowns — authoritative labels with SAC codes.
+// InvoiceCard imports this instead of maintaining its own CHARGE_TYPES list.
+// Source of truth is EXPENSE_DEFAULTS above — do not add entries here directly.
+export const CHARGE_TYPE_LIST: { label: string; sac: string; gst_percent: number }[] = [
+  // Transport @ 5%
+  { label: 'Freight',                      sac: '996511', gst_percent: 5  },
+  { label: 'Freight Charges',              sac: '996511', gst_percent: 5  },
+  { label: 'Freight & Forwarding Charges', sac: '996511', gst_percent: 5  },
+  { label: 'F&F Charges',                  sac: '996511', gst_percent: 5  },
+  { label: 'Transport Charges',            sac: '996511', gst_percent: 5  },
+  { label: 'Transportation Charges',       sac: '996511', gst_percent: 5  },
+  { label: 'Delivery Charges',             sac: '996511', gst_percent: 5  },
+  { label: 'Cartage',                      sac: '996511', gst_percent: 5  },
+  { label: 'Cartage Charges',              sac: '996511', gst_percent: 5  },
+  { label: 'Builty Charges',               sac: '996511', gst_percent: 5  },
+  { label: 'LR Charges',                   sac: '996511', gst_percent: 5  },
+  { label: 'Lorry Charges',               sac: '996511', gst_percent: 5  },
+  // Courier / Dispatch @ 18%
+  { label: 'Courier',                      sac: '996812', gst_percent: 18 },
+  { label: 'Courier Charges',              sac: '996812', gst_percent: 18 },
+  { label: 'Courier Service',              sac: '996812', gst_percent: 18 },
+  { label: 'Dispatch Charges',             sac: '996812', gst_percent: 18 },
+  { label: 'Shipping Charges',             sac: '996812', gst_percent: 18 },
+  { label: 'Shipping Service',             sac: '996812', gst_percent: 18 },
+  // Postage @ 18%
+  { label: 'Postage',                      sac: '996811', gst_percent: 18 },
+  { label: 'Postal Charges',               sac: '996811', gst_percent: 18 },
+  { label: 'Postage & Telegram',           sac: '996811', gst_percent: 18 },
+  // Packing @ 18%
+  { label: 'Packing Charges',              sac: '998540', gst_percent: 18 },
+  { label: 'Packaging Charges',            sac: '998540', gst_percent: 18 },
+  // Loading / Handling @ 18%
+  { label: 'Loading Charges',              sac: '996719', gst_percent: 18 },
+  { label: 'Unloading Charges',            sac: '996719', gst_percent: 18 },
+  { label: 'Loading & Unloading',          sac: '996719', gst_percent: 18 },
+  { label: 'Handling Charges',             sac: '996719', gst_percent: 18 },
+  // Insurance @ 18%
+  { label: 'Insurance',                    sac: '997135', gst_percent: 18 },
+  { label: 'Insurance Charges',            sac: '997135', gst_percent: 18 },
+  // Labour @ 18%
+  { label: 'Labour Charges',               sac: '998519', gst_percent: 18 },
+  // Accounting @ 18%
+  { label: 'Accounting Charges',           sac: '998211', gst_percent: 18 },
+  // Non-taxable (no SAC needed)
+  { label: 'Other Charges',                sac: '',        gst_percent: 0  },
+];
 
 export function getExpenseDefaults(description: string): { sac_code: string; gst_percent: number } | null {
   const key = description.toLowerCase().trim();
