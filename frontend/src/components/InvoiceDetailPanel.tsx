@@ -295,6 +295,15 @@ export default function InvoiceDetailPanel({
   const editNetTaxable = editSubtotal - editBillDiscount + editTaxableChargesTotal;
   const editComputedTotal = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST + editRoundOff;
 
+  // Auto-recompute round_off whenever financials change (user may override manually)
+  useEffect(() => {
+    const subtotalBeforeRoundOff = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST;
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const autoRoundOff = r2(Math.round(subtotalBeforeRoundOff) - subtotalBeforeRoundOff);
+    setEditRoundOff(autoRoundOff);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editLineItems, editCharges, editBillDiscount, editTaxType]);
+
   // ── GST Jurisdiction Validation ──
 
   interface GSTWarning {

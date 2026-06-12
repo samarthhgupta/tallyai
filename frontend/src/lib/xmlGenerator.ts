@@ -17,6 +17,7 @@ import type { ExpenseLedgerMaster } from './expenseLedgers';
 import type { VoucherTypeMaster } from './voucherTypes';
 import { resolveVoucherType } from './voucherTypes';
 import { calcLineAmount } from '@/types/invoice';
+import { deriveInvoiceFinancials } from './invoiceCalculations';
 
 // Full state names keyed by GSTIN first-2-digits (Tally needs full names, not abbreviations)
 const GSTIN_STATE_FULL: Record<string, string> = {
@@ -312,30 +313,35 @@ function buildTaxEntriesFromHsn(
   return { entries };
 }
 
-function buildTaxEntriesFromInvoiceTotals(
-  inv: StoredInvoice,
-  taxableAmount: number,
+// Builds ALLLEDGERENTRIES.LIST tax blocks from already-derived cgst/sgst/igst values.
+// taxBase is used only to infer the rate label for the Duties & Taxes master lookup.
+function buildTaxEntries(
+  taxType: 'cgst_sgst' | 'igst',
+  cgst: number,
+  sgst: number,
+  igst: number,
+  taxBase: number,
   dutiesTaxes: DutiesTaxesMaster[],
 ): { entries: string[]; skip?: string } {
   const entries: string[] = [];
-  if (inv.tax_type === 'cgst_sgst') {
-    if (inv.cgst > 0) {
-      const rate = taxableAmount > 0 ? Math.round((inv.cgst / taxableAmount) * 100) : 0;
+  if (taxType === 'cgst_sgst') {
+    if (cgst > 0) {
+      const rate = taxBase > 0 ? Math.round((cgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'CGST', rate) ?? findTaxLedger(dutiesTaxes, 'CGST', 0);
       if (!ledger) return { entries, skip: 'No CGST ledger configured in Duties & Taxes master' };
-      entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(inv.cgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+      entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(cgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
     }
-    if (inv.sgst > 0) {
-      const rate = taxableAmount > 0 ? Math.round((inv.sgst / taxableAmount) * 100) : 0;
+    if (sgst > 0) {
+      const rate = taxBase > 0 ? Math.round((sgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'SGST', rate) ?? findTaxLedger(dutiesTaxes, 'SGST', 0);
       if (!ledger) return { entries, skip: 'No SGST ledger configured in Duties & Taxes master' };
-      entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(inv.sgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+      entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(sgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
     }
-  } else if (inv.igst > 0) {
-    const rate = taxableAmount > 0 ? Math.round((inv.igst / taxableAmount) * 100) : 0;
+  } else if (igst > 0) {
+    const rate = taxBase > 0 ? Math.round((igst / taxBase) * 100) : 0;
     const ledger = findTaxLedger(dutiesTaxes, 'IGST', rate) ?? findTaxLedger(dutiesTaxes, 'IGST', 0);
     if (!ledger) return { entries, skip: 'No IGST ledger configured in Duties & Taxes master' };
-    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(inv.igst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(igst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
   return { entries };
 }
@@ -590,16 +596,20 @@ interface VoucherResult { xml: string | null; skip?: string; warnings: string[];
 
 function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
+  const d = deriveInvoiceFinancials(inv);
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
-  const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+  const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
-  const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
-  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
+  const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+  const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+    ? findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate)
+    : null;
+  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, !!discountLedger);
 
   const entries: string[] = [];
-  entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-inv.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+  entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-d.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
   if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
@@ -608,13 +618,11 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
 
-  if (hasDiscountLedger) {
-    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(input.discountLedgerName!)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-(inv.bill_discount_amount ?? 0))}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
+  if (discountLedger) {
+    entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(discountLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-(inv.bill_discount_amount ?? 0))}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
   }
 
-  // Use stored invoice tax values (accountant-reviewed) instead of recomputing from line items.
-  // This correctly reflects discount-reduced taxable base and GST on additional charges.
-  const tax = buildTaxEntriesFromInvoiceTotals(inv, inv.total, input.dutiesTaxes);
+  const tax = buildTaxEntries(inv.tax_type, d.cgst, d.sgst, d.igst, d.net_goods_taxable + d.taxable_charges_total, input.dutiesTaxes);
   if (tax.skip) return { xml: null, skip: tax.skip, warnings };
   entries.push(...tax.entries);
   entries.push(...buildChargeEntries(inv, input.expenseLedgers, warnings));
@@ -850,10 +858,11 @@ function buildAllInventoryEntry(
 
 function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
+  const d = deriveInvoiceFinancials(inv);
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
-  const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+  const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
@@ -891,25 +900,28 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     isdeemedpositive: 'No',
     isPartyledger: 'Yes',
     islastdeemedpositive: 'No',
-    amount: inv.total,
+    amount: d.total,
     billRefName: inv.invoice_number,
   }));
 
-  // 2. Bill discount (if any, using discount ledger)
-  const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
-  if (hasDiscountLedger) {
-    ledgerEntries.push(invChargeLedgerEntry(input.discountLedgerName!, -(inv.bill_discount_amount ?? 0)));
+  // 2. Bill discount (if any) — rate-aware master lookup only (no stale acceptance fallback)
+  const invGoodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+  const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+    ? findExpenseLedger(input.expenseLedgers, 'Discount', invGoodsGstRate)
+    : null;
+  if (discountLedger) {
+    ledgerEntries.push(invChargeLedgerEntry(discountLedger, -(inv.bill_discount_amount ?? 0)));
   } else if ((inv.bill_discount_amount ?? 0) > 0) {
     warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked - no discount ledger configured`);
   }
 
   // 3. Tax ledgers - NEGATIVE amounts (debit to ITC accounts)
-  const taxBase = totalItemsAmount + unmappedItemsAmount - (inv.bill_discount_amount ?? 0);
+  const taxBase = d.net_goods_taxable + d.taxable_charges_total;
   // Round to nearest 0.5 so 2.456% → 2.5% (not 3% via Math.round)
   const roundHalf = (r: number) => Math.round(r * 2) / 2;
   if (inv.tax_type === 'cgst_sgst') {
-    if (inv.cgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((inv.cgst / taxBase) * 100) : 0;
+    if (d.cgst > 0) {
+      const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
       if (!ledger) return { xml: null, skip: 'No CGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -917,12 +929,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
         isdeemedpositive: 'Yes',
         isPartyledger: 'No',
         islastdeemedpositive: 'Yes',
-        amount: -inv.cgst,
+        amount: -d.cgst,
         rateOfInvoiceTax: rate || undefined,
       }));
     }
-    if (inv.sgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((inv.sgst / taxBase) * 100) : 0;
+    if (d.sgst > 0) {
+      const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
       if (!ledger) return { xml: null, skip: 'No SGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -930,12 +942,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
         isdeemedpositive: 'Yes',
         isPartyledger: 'No',
         islastdeemedpositive: 'Yes',
-        amount: -inv.sgst,
+        amount: -d.sgst,
         rateOfInvoiceTax: rate || undefined,
       }));
     }
-  } else if (inv.igst > 0) {
-    const rate = taxBase > 0 ? roundHalf((inv.igst / taxBase) * 100) : 0;
+  } else if (d.igst > 0) {
+    const rate = taxBase > 0 ? roundHalf((d.igst / taxBase) * 100) : 0;
     const ledger = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
     if (!ledger) return { xml: null, skip: 'No IGST ledger configured in Duties & Taxes master', warnings };
     ledgerEntries.push(invLedgerEntry({
@@ -943,7 +955,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
       isdeemedpositive: 'Yes',
       isPartyledger: 'No',
       islastdeemedpositive: 'Yes',
-      amount: -inv.igst,
+      amount: -d.igst,
       rateOfInvoiceTax: rate || undefined,
     }));
   }
@@ -966,19 +978,19 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   }
 
   // 5. Round-off
-  if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
+  if (d.round_off && Math.abs(d.round_off) > 0.001) {
     const ledger = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
     if (ledger) {
-      ledgerEntries.push(invChargeLedgerEntry(ledger, -Math.abs(inv.round_off)));
+      ledgerEntries.push(invChargeLedgerEntry(ledger, -Math.abs(d.round_off)));
     }
   }
 
   // 6. Balance catch-up: unmapped items + unmapped charges + bill discount (when no discount ledger)
   //    create a gap between mapped debits and party credit. Book it to the purchase ledger.
-  const taxes = (inv.cgst ?? 0) + (inv.sgst ?? 0) + (inv.igst ?? 0);
-  const roundOff = inv.round_off ? Math.abs(inv.round_off) : 0;
+  const taxes = d.cgst + d.sgst + d.igst;
+  const roundOff = Math.abs(d.round_off);
   const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOff;
-  const gap = parseFloat((inv.total - totalDebits).toFixed(2));
+  const gap = parseFloat((d.total - totalDebits).toFixed(2));
   const netPurchaseLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netPurchaseLedgerAdj) > 0.01) {
     if (netPurchaseLedgerAdj > 0) {
@@ -1976,16 +1988,21 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
   const rows: PreviewRow[] = [];
 
   for (const inv of input.invoices) {
-    const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+    const d = deriveInvoiceFinancials(inv);
+    const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
-    const hasDiscountLedger = !!(input.discountLedgerName && (inv.bill_discount_amount ?? 0) > 0);
+    const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
+    const discountLedger = (inv.bill_discount_amount ?? 0) > 0
+      ? findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate)
+      : null;
+    const hasDiscountLedger = !!discountLedger;
     const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0, hasDiscountLedger);
 
-    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
+    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -d.total, status: partyStatus, is_suggested: !supplier });
 
     const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     for (const row of hsnRows) {
@@ -1994,29 +2011,27 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
-      const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: discountLedger ?? discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
     }
 
-    // Use stored invoice GST values (accountant-reviewed) — they already reflect
-    // discount-reduced taxable base and GST on additional charges.
+    const taxBase = d.net_goods_taxable + d.taxable_charges_total;
     if (inv.tax_type === 'cgst_sgst') {
-      if ((inv.cgst ?? 0) > 0) {
-        const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
-        const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate);
-        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: inv.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      if (d.cgst > 0) {
+        const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
+        const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: d.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-      if ((inv.sgst ?? 0) > 0) {
-        const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
-        const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate);
-        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: inv.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      if (d.sgst > 0) {
+        const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
+        const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: d.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     } else {
-      if ((inv.igst ?? 0) > 0) {
-        const rate = hsnRows[0]?.gst_percent ?? 0;
-        const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate);
-        rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: inv.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      if (d.igst > 0) {
+        const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
+        const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
+        rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: d.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     }
 
@@ -2040,9 +2055,9 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
       }
     }
 
-    if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
+    if (d.round_off && Math.abs(d.round_off) > 0.001) {
       const l = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
-      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: inv.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: d.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
   }
   return rows;
@@ -2052,20 +2067,19 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
   const rows: PreviewRow[] = [];
 
   for (const inv of input.invoices) {
-    const hasGst = (inv.cgst ?? 0) > 0 || (inv.sgst ?? 0) > 0 || (inv.igst ?? 0) > 0;
+    const d = deriveInvoiceFinancials(inv);
+    const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
     const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
-    let totalItemsAmount = 0;
 
     for (const item of inv.line_items) {
       const desc = item.description ?? '';
       const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
       const itemNet = calcLineAmount(item);
-      totalItemsAmount += itemNet;
       const uom = item.uom || stockItem?.unit || 'NOS';
       const hsnRate = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : `${desc} @ ${item.gst_percent ?? 0}%`;
       rows.push({
@@ -2082,31 +2096,35 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       });
     }
 
-    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -inv.total, status: partyStatus, is_suggested: !supplier });
+    rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -d.total, status: partyStatus, is_suggested: !supplier });
+
+    // Dedicated Purchase row so FlatPreviewTable can surface the suggestion regardless of mode
+    const invSuggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
+    rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || invSuggestedPurchase, amount: 0, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
-      const hasDiscountLedger = !!(input.discountLedgerName);
       const goodsGstRate = inv.line_items?.[0]?.gst_percent ?? 0;
+      const discountLedger = findExpenseLedger(input.expenseLedgers, 'Discount', goodsGstRate);
       const discountSuggestedName = `Discount (${goodsGstRate}% GST)`;
-      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: hasDiscountLedger ? input.discountLedgerName! : discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: hasDiscountLedger ? 'OK' : 'Suggested', is_suggested: !hasDiscountLedger, charge_gst_percent: goodsGstRate, warning: hasDiscountLedger ? undefined : 'No discount ledger configured' });
+      rows.push({ ...base, ledger_type: 'Discount', tally_ledger_name: discountLedger ?? discountSuggestedName, amount: -(inv.bill_discount_amount ?? 0), status: discountLedger ? 'OK' : 'Suggested', is_suggested: !discountLedger, charge_gst_percent: goodsGstRate, warning: discountLedger ? undefined : 'No discount ledger configured' });
     }
 
-    const taxable = totalItemsAmount - (inv.bill_discount_amount ?? 0);
+    const taxBase = d.net_goods_taxable + d.taxable_charges_total;
     if (inv.tax_type === 'cgst_sgst') {
-      if (inv.cgst > 0) {
-        const rate = taxable > 0 ? Math.round((inv.cgst / taxable) * 100) : 0;
+      if (d.cgst > 0) {
+        const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
-        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: inv.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: d.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-      if (inv.sgst > 0) {
-        const rate = taxable > 0 ? Math.round((inv.sgst / taxable) * 100) : 0;
+      if (d.sgst > 0) {
+        const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
-        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: inv.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: d.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-    } else if (inv.igst > 0) {
-      const rate = taxable > 0 ? Math.round((inv.igst / taxable) * 100) : 0;
+    } else if (d.igst > 0) {
+      const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
       const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
-      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: inv.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: d.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
 
     if (inv.charges) {
@@ -2127,9 +2145,9 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       }
     }
 
-    if (inv.round_off && Math.abs(inv.round_off) > 0.001) {
+    if (d.round_off && Math.abs(d.round_off) > 0.001) {
       const l = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
-      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: inv.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: l ?? 'Round Off', amount: d.round_off, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
   }
   return rows;
