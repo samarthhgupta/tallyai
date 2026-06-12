@@ -237,16 +237,6 @@ function FlatPreviewTable({
       igstSuggested: igst?.is_suggested === true,
     };
 
-    // Helper: per-item tax from taxable amount and gst rate
-    const itemTax = (taxable: number, gstPct: number | null) => {
-      const pct = gstPct ?? 0;
-      return {
-        cgstAmt: invTaxType === 'cgst_sgst' ? Math.round(taxable * (pct / 2) / 100 * 100) / 100 : 0,
-        sgstAmt: invTaxType === 'cgst_sgst' ? Math.round(taxable * (pct / 2) / 100 * 100) / 100 : 0,
-        igstAmt: invTaxType === 'igst'       ? Math.round(taxable * pct / 100 * 100) / 100 : 0,
-      };
-    };
-
     if (isInventoryMode) {
       if (invRows2.length === 0) {
         displayRows.push({
@@ -261,7 +251,6 @@ function FlatPreviewTable({
       }
       invRows2.forEach((row, idx) => {
         const lineItem = invoice?.line_items.find((li) => li.description === row.item_description);
-        const tax = itemTax(row.amount, lineItem?.gst_percent ?? null);
         displayRows.push({
           ...base,
           isFirst: idx === 0,
@@ -273,7 +262,9 @@ function FlatPreviewTable({
           stockItem: row.tally_ledger_name ?? '',
           stockItemSuggested: row.is_suggested === true,
           taxRate: lineItem?.gst_percent ?? null,
-          ...tax,
+          cgstAmt: idx === 0 ? (cgst?.amount ?? 0) : 0,
+          sgstAmt: idx === 0 ? (sgst?.amount ?? 0) : 0,
+          igstAmt: idx === 0 ? (igst?.amount ?? 0) : 0,
           qty:  row.qty ?? null,
           uom:  row.uom ?? '',
           rate: row.rate ?? null,
@@ -297,7 +288,6 @@ function FlatPreviewTable({
       lineItems.forEach((item, idx) => {
         const hsnSuggestion = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : '';
         const itemAmt = calcLineAmount(item);
-        const tax = itemTax(itemAmt, item.gst_percent ?? null);
         displayRows.push({
           ...base,
           isFirst: idx === 0,
@@ -314,7 +304,9 @@ function FlatPreviewTable({
           rate: item.rate ?? null,
           disc: (item.disc_percent ?? 0) > 0 ? item.disc_percent : null,
           amount: itemAmt,
-          ...tax,
+          cgstAmt: idx === 0 ? (cgst?.amount ?? 0) : 0,
+          sgstAmt: idx === 0 ? (sgst?.amount ?? 0) : 0,
+          igstAmt: idx === 0 ? (igst?.amount ?? 0) : 0,
         });
       });
     }
