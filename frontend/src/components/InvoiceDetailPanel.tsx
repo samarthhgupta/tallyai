@@ -5,6 +5,7 @@ import { updateAcceptedInvoice, moveAcceptedToRejected, deleteInvoice, computeRe
 import type { StoredInvoice, LineItem, ExtraCharge } from '@/types/invoice';
 import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary, getStateFromGstin } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
+import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 
 interface InvoiceDetailPanelProps {
   invoice: StoredInvoice;
@@ -295,6 +296,15 @@ export default function InvoiceDetailPanel({
   const editNetTaxable = editSubtotal - editBillDiscount + editTaxableChargesTotal;
   const editComputedTotal = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST + editRoundOff;
 
+  // Auto-recompute round_off whenever financials change (user may override manually)
+  useEffect(() => {
+    const subtotalBeforeRoundOff = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST;
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const autoRoundOff = r2(Math.round(subtotalBeforeRoundOff) - subtotalBeforeRoundOff);
+    setEditRoundOff(autoRoundOff);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editLineItems, editCharges, editBillDiscount, editTaxType]);
+
   // ── GST Jurisdiction Validation ──
 
   interface GSTWarning {
@@ -335,14 +345,17 @@ export default function InvoiceDetailPanel({
     setSaving(true);
     setSaveError('');
     const taxType = taxTypeOverride ?? editTaxType;
-    // Recompute GST rows if tax type changed
-    const taxRows = taxTypeOverride
-      ? buildFullTaxSummary(editLineItems, editCharges, taxTypeOverride, editBillDiscount)
-      : editFullTaxRows;
-    const cgst = taxRows.reduce((s, r) => s + r.cgst, 0);
-    const sgst = taxRows.reduce((s, r) => s + r.sgst, 0);
-    const igst = taxRows.reduce((s, r) => s + r.igst, 0);
-    const total = editNetTaxable + editNonGstChargesTotal + cgst + sgst + igst + editRoundOff;
+    // Use canonical engine for all financial values — same engine as acceptance pipeline,
+    // Purchase Register, Export Preview, and XML generation. Supplier archival columns
+    // are never touched on edit; they are written once at acceptance and immutable.
+    const d = deriveInvoiceFinancials({
+      ...invoice,
+      line_items: editLineItems,
+      charges: editCharges,
+      tax_type: taxType,
+      bill_discount_amount: editBillDiscount,
+      round_off: editRoundOff,
+    });
     try {
       const patch = {
         invoice_number: editInvoiceNumber,
@@ -357,10 +370,10 @@ export default function InvoiceDetailPanel({
         line_items: editLineItems,
         charges: editCharges,
         subtotal: editSubtotal,
-        cgst,
-        sgst,
-        igst,
-        total,
+        cgst:  d.cgst,
+        sgst:  d.sgst,
+        igst:  d.igst,
+        total: d.total,
         readiness: liveReadiness,
         readiness_flags: liveFlags as string[],
       };

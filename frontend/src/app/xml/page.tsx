@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance, clearAllTallyAcceptances } from '@/lib/db';
+import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -118,7 +118,6 @@ function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
-  fileBase,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -127,7 +126,6 @@ function FlatPreviewTable({
   stockItems: { tally_item_name: string }[];
   initialLockedInvoices: Record<string, LockedInvoice>;
   companyId: string;
-  fileBase: string;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
@@ -324,67 +322,7 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
-  // ── Excel export matching the table layout exactly ──────────────────────────
-  const handleDownloadExcel = () => {
-    const chargeHeaders: string[] = [];
-    for (let ci = 0; ci < maxCharges; ci++) {
-      chargeHeaders.push(`Charge ${ci + 1} (Invoice)`, `Charge ${ci + 1} Ledger (Tally)`, `Charge ${ci + 1} Amt (₹)`);
-    }
-    const headers = [
-      'Date', 'Invoice No', 'Voucher Type',
-      'Vendor (Invoice)', 'Vendor Ledger (Tally)', 'GSTIN', 'GST Reg Type',
-      'Purchase Ledger (Tally)',
-      'Item Name (Invoice)', 'HSN', 'Stock Item (Tally)',
-      'Tax Rate %', 'Qty', 'UOM', 'Rate (₹)', 'Discount %', 'Amount (₹)',
-      ...chargeHeaders,
-      'CGST Ledger (Tally)', 'CGST Amt (₹)',
-      'SGST Ledger (Tally)', 'SGST Amt (₹)',
-      'IGST Ledger (Tally)', 'IGST Amt (₹)',
-      'Round Off Ledger (Tally)', 'Round Off Amt (₹)',
-    ];
-
-    const dataRows = displayRows.map((row) => {
-      const chargeCells: (string | number | null)[] = [];
-      for (let ci = 0; ci < maxCharges; ci++) {
-        const ch = row.charges[ci];
-        chargeCells.push(ch?.desc ?? '', ch?.ledger ?? '', ch?.amount ?? '');
-      }
-      return [
-        row.invoiceDate, row.invoiceNo, row.voucherType,
-        row.vendorName, row.vendorLedger, row.gstin, row.gstRegType,
-        row.purchaseLedger,
-        row.itemDesc, row.hsn, row.stockItem,
-        row.taxRate ?? '', row.qty ?? '', row.uom, row.rate ?? '', row.disc ?? '', row.amount,
-        ...chargeCells,
-        row.taxType === 'cgst_sgst' ? row.cgstLedger : '', row.taxType === 'cgst_sgst' ? row.cgstAmt || '' : '',
-        row.taxType === 'cgst_sgst' ? row.sgstLedger : '', row.taxType === 'cgst_sgst' ? row.sgstAmt || '' : '',
-        row.taxType === 'igst'      ? row.igstLedger : '', row.taxType === 'igst'      ? row.igstAmt || '' : '',
-        row.roLedger, row.roAmt || '',
-      ];
-    });
-
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-    const colWidths = [
-      { wch: 12 }, { wch: 16 }, { wch: 12 },
-      { wch: 28 }, { wch: 28 }, { wch: 18 }, { wch: 12 },
-      { wch: 22 },
-      { wch: 30 }, { wch: 12 }, { wch: 28 },
-      { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
-      ...Array(maxCharges * 3).fill({ wch: 22 }),
-      { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
-      { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
-    ];
-    ws['!cols'] = colWidths;
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([wbout], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${fileBase}_preview.xlsx`;
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-  };
+  // One checkbox per INVOICE - only for invoices that have at least one suggested field.
   // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
   const suggestableInvoices: string[] = [];
   {
@@ -418,19 +356,10 @@ function FlatPreviewTable({
     for (const invNo of Array.from(selectedInvoices)) {
       const invRows = displayRows.filter((r) => r.invoiceNo === invNo);
       const firstRow = invRows.find((r) => r.isFirst);
-      if (!firstRow) {
-        setBulkSaving(false);
-        alert(`Invoice ${invNo}: Preview not generated or invoice not found. Please generate the Export Preview first before accepting.`);
-        return;
-      }
+      if (!firstRow) continue;
 
       const vendorLedger = vendorEdits[firstRow.vendorName] ?? firstRow.vendorLedger;
       const purchaseLedger = purchaseLedgerEdits[invNo] ?? firstRow.purchaseLedger;
-      if (!purchaseLedger?.trim()) {
-        setBulkSaving(false);
-        alert(`Invoice ${invNo}: Purchase Ledger (Tally) is required. Please enter or accept a purchase ledger before accepting this invoice.`);
-        return;
-      }
       const cgstLedger = taxLedgerEdits.cgst ?? firstRow.cgstLedger;
       const sgstLedger = taxLedgerEdits.sgst ?? firstRow.sgstLedger;
       const igstLedger = taxLedgerEdits.igst ?? firstRow.igstLedger;
@@ -547,20 +476,6 @@ function FlatPreviewTable({
 
   return (
     <div className="rounded-lg border border-gray-200 shadow-sm">
-      {/* Top toolbar: Excel download always visible when there are rows */}
-      {displayRows.length > 0 && (
-        <div className="flex items-center justify-end px-4 py-2 border-b border-gray-100 bg-white">
-          <button
-            onClick={handleDownloadExcel}
-            className="flex items-center gap-2 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Download as Excel
-          </button>
-        </div>
-      )}
       {/* Action bar */}
       {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex-wrap">
@@ -676,8 +591,6 @@ function FlatPreviewTable({
                 onSave: (v: string) => void; placeholder?: string;
               }) => {
                 const [draft, setDraft] = React.useState(value);
-                // Sync when the parent-supplied value changes (e.g. after preview regenerates)
-                React.useEffect(() => { setDraft(value); }, [value]);
                 if (!suggested) return <span className={`font-mono font-medium ${color}`}>{value || '-'}</span>;
                 return (
                   <div className="flex items-center gap-1 min-w-[140px]">
@@ -1249,6 +1162,29 @@ export default function XmlGeneratorPage() {
   };
 
   // ── Download preview as Excel ──
+  const handleDownloadExcel = () => {
+    if (!previewRows) return;
+    const wsData = [
+      ['Invoice No', 'Date', 'Vendor (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
+      ...previewRows.map((r) => [
+        r.invoice_number, r.invoice_date, r.vendor_name, r.party_ledger,
+        r.ledger_type, r.tally_ledger_name, r.amount, r.status,
+        r.skip_reason ?? r.warning ?? '',
+      ]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tally Preview');
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${fileBase}_preview.xlsx`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
   const buildXmlInput = async () => {
     const masters = await loadMasters(company!.id);
     const fresh = await getCompany(company!.id);
@@ -1414,32 +1350,13 @@ export default function XmlGeneratorPage() {
             Red rows indicate issues that will cause that invoice to be skipped.
           </p>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handlePreview}
-              disabled={previewing || !company || invoices.length === 0}
-              className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {previewing ? 'Analysing…' : 'Preview'}
-            </button>
-            {previewRows && (
-              <button
-                onClick={async () => {
-                  if (!company || !selectedFY) return;
-                  if (!window.confirm('This will clear all accepted ledger mappings for this financial year. The invoices stay in Purchase Register — only the Export Preview acceptances are reset. Continue?')) return;
-                  try {
-                    await clearAllTallyAcceptances(company.id, selectedFY);
-                    handlePreview();
-                  } catch (e: unknown) {
-                    alert(`Failed to unaccept: ${e instanceof Error ? e.message : String(e)}`);
-                  }
-                }}
-                className="px-4 py-2 border border-red-300 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 transition-colors"
-              >
-                Unaccept All
-              </button>
-            )}
-          </div>
+          <button
+            onClick={handlePreview}
+            disabled={previewing || !company || invoices.length === 0}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {previewing ? 'Analysing…' : 'Preview'}
+          </button>
 
           {previewError && (
             <p className="mt-3 text-sm text-red-600">{previewError}</p>
@@ -1478,6 +1395,15 @@ export default function XmlGeneratorPage() {
                     </span>
                   </div>
                 )}
+                <button
+                  onClick={handleDownloadExcel}
+                  className="ml-auto flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Download as Excel
+                </button>
               </div>
 
               {/* Auto-suggest notice */}
@@ -1489,7 +1415,6 @@ export default function XmlGeneratorPage() {
                 suppliers={cachedMasters?.suppliers ?? []}
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
-                fileBase={fileBase}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
                 onMapExpense={async (description, ledgerName) => {
@@ -1568,17 +1493,23 @@ export default function XmlGeneratorPage() {
                         catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
                       }
                     }
-                    // 3. Expense/charge ledgers → expense_ledger_masters
+                    // 3. Expense/charge ledgers → expense_ledger_masters (Discount → company setting)
                     for (const ch of p.charges) {
-                      // Key by keyword+rate: Discount@5% and Discount@18% are different ledgers
+                      // Key by keyword+rate so Freight@0% and Freight@5% both get saved
                       const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
                       if (ch.tallyName && !seenExp.has(expKey)) {
                         seenExp.add(expKey);
+                        // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
                         const gstPct = ch.gst_percent != null
                           ? ch.gst_percent
                           : (defaults?.gst_percent ?? null);
                         const sacCode = ch.sac_code || defaults?.sac_code || undefined;
+                        // Discount: also persist to company.discount_ledger_name
+                        if (ch.keyword === 'Discount') {
+                          try { await updateCompany(company.id, { discount_ledger_name: ch.tallyName }); }
+                          catch (e) { errs.push(`Discount ledger: ${getErrMsg(e)}`); }
+                        }
                         try {
                           await addExpenseLedger(company.id, {
                             tally_ledger_name: ch.tallyName,
