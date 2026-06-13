@@ -1056,6 +1056,8 @@ export default function XmlGeneratorPage() {
 
 
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
+  const [showSuggestionDrillDown, setShowSuggestionDrillDown] = useState(false);
+  const [showWarningDrillDown, setShowWarningDrillDown] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[] | null>(null);
@@ -1252,9 +1254,17 @@ export default function XmlGeneratorPage() {
     }
   };
 
-  const previewSkippedCount  = previewRows?.filter((r) => r.status === 'Skipped').length ?? 0;
-  const previewSuggestedCount = previewRows?.filter((r) => r.status === 'Suggested').length ?? 0;
-  const previewWarningCount  = previewRows?.filter((r) => r.warning).length ?? 0;
+  // All counts are invoice-level (unique invoice numbers), not PreviewRow-level.
+  // This keeps them consistent with previewInvoiceCount.
+  const previewSkippedCount  = previewRows
+    ? new Set(previewRows.filter((r) => r.status === 'Skipped').map((r) => r.invoice_number)).size
+    : 0;
+  const previewSuggestedCount = previewRows
+    ? new Set(previewRows.filter((r) => r.status === 'Suggested').map((r) => r.invoice_number)).size
+    : 0;
+  const previewWarningCount  = previewRows
+    ? new Set(previewRows.filter((r) => r.warning).map((r) => r.invoice_number)).size
+    : 0;
   // An invoice is "ready" if it has no Skipped rows (Suggested rows are AI-filled and included in XML)
   const previewInvoiceCount  = previewRows
     ? new Set(
@@ -1264,6 +1274,44 @@ export default function XmlGeneratorPage() {
           .filter((n) => !previewRows.some((r) => r.invoice_number === n && r.status === 'Skipped'))
       ).size
     : 0;
+
+  // Drill-down data for suggestion and warning badges
+  const suggestionDrillDown: { invoiceNo: string; field: string; value: string }[] = previewRows
+    ? (() => {
+        const seen = new Set<string>();
+        return previewRows
+          .filter((r) => r.status === 'Suggested')
+          .filter((r) => { const k = `${r.invoice_number}|${r.ledger_type}`; if (seen.has(k)) return false; seen.add(k); return true; })
+          .map((r) => ({
+            invoiceNo: r.invoice_number,
+            field: r.ledger_type === 'Party' ? 'Vendor Ledger'
+              : r.ledger_type === 'Purchase' ? 'Purchase Ledger'
+              : r.ledger_type === 'CGST' ? 'CGST Ledger'
+              : r.ledger_type === 'SGST' ? 'SGST Ledger'
+              : r.ledger_type === 'IGST' ? 'IGST Ledger'
+              : r.ledger_type === 'Expense' ? `Charge Ledger (${r.item_description ?? ''})`
+              : r.ledger_type === 'Discount' ? 'Discount Ledger'
+              : r.ledger_type === 'Round Off' ? 'Round Off Ledger'
+              : r.ledger_type === 'Inventory' ? `Stock Item (${r.item_description ?? ''})`
+              : r.ledger_type,
+            value: r.tally_ledger_name,
+          }));
+      })()
+    : [];
+
+  const warningDrillDown: { invoiceNo: string; warning: string; severity: 'Blocking' | 'Informational' }[] = previewRows
+    ? (() => {
+        const seen = new Set<string>();
+        return previewRows
+          .filter((r) => r.warning)
+          .filter((r) => { const k = `${r.invoice_number}|${r.warning}`; if (seen.has(k)) return false; seen.add(k); return true; })
+          .map((r) => ({
+            invoiceNo: r.invoice_number,
+            warning: r.warning!,
+            severity: r.warning!.startsWith('No purchase ledger') ? 'Blocking' : 'Informational',
+          }));
+      })()
+    : [];
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -1356,7 +1404,7 @@ export default function XmlGeneratorPage() {
 
           {previewRows && (
             <div className="mt-5 space-y-4">
-              {/* Summary bar */}
+              {/* Summary toolbar */}
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                   <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1367,29 +1415,35 @@ export default function XmlGeneratorPage() {
                   </span>
                 </div>
                 {previewSuggestedCount > 0 && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+                  <button
+                    onClick={() => setShowSuggestionDrillDown((v) => !v)}
+                    className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 hover:bg-amber-100 transition-colors text-left"
+                  >
                     <span className="text-sm font-semibold text-amber-800">
-                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''} - verify ✦
+                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''}
                     </span>
-                  </div>
+                  </button>
                 )}
                 {previewSkippedCount > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2">
                     <span className="text-sm font-semibold text-red-800">
-                      {previewSkippedCount} row{previewSkippedCount !== 1 ? 's' : ''} with errors
+                      {previewSkippedCount} invoice{previewSkippedCount !== 1 ? 's' : ''} with errors
                     </span>
                   </div>
                 )}
                 {previewWarningCount > 0 && (
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2">
-                    <span className="text-sm font-semibold text-gray-600">
+                  <button
+                    onClick={() => setShowWarningDrillDown((v) => !v)}
+                    className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2 hover:bg-orange-100 transition-colors text-left"
+                  >
+                    <span className="text-sm font-semibold text-orange-700">
                       {previewWarningCount} warning{previewWarningCount !== 1 ? 's' : ''}
                     </span>
-                  </div>
+                  </button>
                 )}
                 <button
                   onClick={handleDownloadExcel}
-                  className="ml-auto flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                 >
                   <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -1397,6 +1451,68 @@ export default function XmlGeneratorPage() {
                   Download as Excel
                 </button>
               </div>
+
+              {/* AI Suggestions drill-down */}
+              {showSuggestionDrillDown && suggestionDrillDown.length > 0 && (
+                <div className="border border-amber-200 rounded-lg overflow-hidden">
+                  <div className="bg-amber-50 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-amber-800">AI Suggestions — fields auto-filled by TallyAI, verify before export</span>
+                    <button onClick={() => setShowSuggestionDrillDown(false)} className="text-amber-500 hover:text-amber-700 text-lg leading-none">×</button>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-amber-100">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice No</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Field</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">AI Suggested Value</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {suggestionDrillDown.map((s, i) => (
+                        <tr key={i} className="hover:bg-amber-50/40">
+                          <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{s.invoiceNo}</td>
+                          <td className="px-4 py-2 text-gray-600">{s.field}</td>
+                          <td className="px-4 py-2 text-gray-800 font-mono text-xs">{s.value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Warnings drill-down */}
+              {showWarningDrillDown && warningDrillDown.length > 0 && (
+                <div className="border border-orange-200 rounded-lg overflow-hidden">
+                  <div className="bg-orange-50 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-orange-800">Warnings — review before downloading XML</span>
+                    <button onClick={() => setShowWarningDrillDown(false)} className="text-orange-400 hover:text-orange-600 text-lg leading-none">×</button>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-orange-100">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice No</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Warning</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Severity</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {warningDrillDown.map((w, i) => (
+                        <tr key={i} className="hover:bg-orange-50/40">
+                          <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{w.invoiceNo}</td>
+                          <td className="px-4 py-2 text-gray-700">{w.warning}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              w.severity === 'Blocking' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {w.severity}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               {/* Auto-suggest notice */}
 
