@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS uom_pending_review (
   resolved_at             timestamptz
 );
 
--- ── Seed canonical UOMs ────────────────────────────────────────────────────
+-- ── Seed canonical UOMs ────────────────────────────────────────────
 INSERT INTO uom_canonical (name, full_name, gst_uom_code, sort_order) VALUES
   ('Pcs',   'Pieces',       'PCS', 1),
   ('Nos',   'Numbers',      'NOS', 2),
@@ -68,7 +68,7 @@ INSERT INTO uom_canonical (name, full_name, gst_uom_code, sort_order) VALUES
   ('Sq Mtr', 'Square Metres', 'SQM', 27)
 ON CONFLICT (name) DO NOTHING;
 
--- ── Seed global aliases (company_id = NULL) ────────────────────────────────
+-- ── Seed global aliases (company_id = NULL) ──────────────────────────────────────────
 INSERT INTO uom_alias (alias, canonical_id, company_id)
 SELECT a.alias, c.id, NULL
 FROM (VALUES
@@ -161,5 +161,5 @@ CREATE POLICY "uom_alias_read" ON uom_alias
 CREATE POLICY "uom_pending_review_company" ON uom_pending_review
   FOR ALL TO authenticated
   USING (company_id IN (
-    SELECT company_id FROM company_users WHERE user_id = auth.uid()
+    SELECT id FROM companies WHERE created_by = auth.uid()
   ));
