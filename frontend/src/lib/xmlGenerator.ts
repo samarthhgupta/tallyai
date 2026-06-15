@@ -988,9 +988,12 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 
   // 6. Balance catch-up: unmapped items + unmapped charges + bill discount (when no discount ledger)
   //    create a gap between mapped debits and party credit. Book it to the purchase ledger.
+  // When a discount ledger was used, the discount credit is already booked; subtract it so we
+  // don't double-count it as a spurious Purchase credit (which caused Tally debit/credit mismatch).
   const taxes = d.cgst + d.sgst + d.igst;
   const roundOff = Math.abs(d.round_off);
-  const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOff;
+  const bookedDiscount = discountLedger ? (inv.bill_discount_amount ?? 0) : 0;
+  const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOff - bookedDiscount;
   const gap = parseFloat((d.total - totalDebits).toFixed(2));
   const netPurchaseLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netPurchaseLedgerAdj) > 0.01) {
