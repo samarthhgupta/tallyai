@@ -161,5 +161,5 @@ CREATE POLICY "uom_alias_read" ON uom_alias
 CREATE POLICY "uom_pending_review_company" ON uom_pending_review
   FOR ALL TO authenticated
   USING (company_id IN (
-    SELECT company_id FROM company_users WHERE user_id = auth.uid()
+    SELECT id FROM companies WHERE created_by = auth.uid()
   ));
