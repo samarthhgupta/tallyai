@@ -18,6 +18,11 @@ import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import * as XLSX from 'xlsx';
+import { normalizeUom } from '@/lib/uomRegistry';
+
+// Accounting mode has no stock master — show normalised invoice UOM
+const normalizeUomDisplay = (raw: string | null | undefined): string =>
+  normalizeUom(raw).canonical;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -300,7 +305,7 @@ function FlatPreviewTable({
           stockItemSuggested: !!hsnSuggestion,
           taxRate: item.gst_percent ?? null,
           qty:  item.qty ?? null,
-          uom:  item.uom ?? '',
+          uom:  normalizeUomDisplay(item.uom),
           rate: item.rate ?? null,
           disc: (item.disc_percent ?? 0) > 0 ? item.disc_percent : null,
           amount: itemAmt,

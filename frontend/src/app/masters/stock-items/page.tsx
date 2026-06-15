@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
+import { normalizeUom } from '@/lib/uomRegistry';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
@@ -94,10 +95,12 @@ export default function StockItemsPage() {
     setFormError('');
     try {
       const gstPct = form.gst_percent !== '' ? parseFloat(form.gst_percent) : undefined;
+      const rawUnit = form.unit?.trim() || '';
+      const resolvedUnit = rawUnit ? normalizeUom(rawUnit).canonical : 'Nos';
       const params = {
         tally_item_name: form.tally_item_name, // stored exactly as typed
         alias_name: form.alias_name || undefined,
-        unit: form.unit || undefined,
+        unit: resolvedUnit,
         hsn_code: form.hsn_code || undefined,
         gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
       };
@@ -185,10 +188,11 @@ export default function StockItemsPage() {
       const rows = dataRows.map((r) => {
         const rawGst = gstCol !== -1 ? r[gstCol] : undefined;
         const gstPct = rawGst !== undefined && rawGst !== '' ? parseFloat(String(rawGst)) : null;
+        const rawUnit = unitCol !== -1 ? String(r[unitCol] ?? '').trim() : '';
         return {
           tally_item_name: String(r[nameCol] ?? ''), // NOT trimmed
           alias_name: aliasCol !== -1 ? String(r[aliasCol] ?? '') : '',
-          unit: unitCol !== -1 ? String(r[unitCol] ?? '') : '',
+          unit: rawUnit ? normalizeUom(rawUnit).canonical : 'Nos',
           hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
           gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
         };
