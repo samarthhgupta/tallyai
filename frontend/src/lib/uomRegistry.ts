@@ -40,9 +40,13 @@ export const CANONICAL_UOMS: CanonicalUom[] = [
   { name: 'Pkt',   fullName: 'Packets',      gstCode: 'PKT' },
   { name: 'Sht',   fullName: 'Sheets',       gstCode: 'SHT' },
   { name: 'Strp',  fullName: 'Strips',       gstCode: 'STP' },
-  { name: 'Tube',  fullName: 'Tubes',        gstCode: 'TBE' },
-  { name: 'Tin',   fullName: 'Tins',         gstCode: 'TIN' },
-  { name: 'Can',   fullName: 'Cans',         gstCode: 'CAN' },
+  { name: 'Tube',   fullName: 'Tubes',          gstCode: 'TBE' },
+  { name: 'Tin',   fullName: 'Tins',           gstCode: 'TIN' },
+  { name: 'Can',   fullName: 'Cans',           gstCode: 'CAN' },
+  // New canonicals approved 2026-06-15
+  { name: 'Coil',   fullName: 'Coils',         gstCode: 'COL' },
+  { name: 'Drum',   fullName: 'Drums',         gstCode: 'DRM' },
+  { name: 'Sq Mtr', fullName: 'Square Metres', gstCode: 'SQM' },
 ];
 
 // Canonical names indexed for O(1) lookup
@@ -54,11 +58,14 @@ const CANONICAL_INDEX = new Map<string, CanonicalUom>(
 const ALIAS_MAP: Record<string, string> = {
   // Pcs
   'PCS': 'Pcs', 'pcs': 'Pcs', 'Pc': 'Pcs', 'pc': 'Pcs', 'PC': 'Pcs',
-  'Pcs.': 'Pcs', 'pcs.': 'Pcs', 'Piece': 'Pcs', 'Pieces': 'Pcs',
+  'Pcs.': 'Pcs', 'pcs.': 'Pcs', 'Pc.': 'Pcs', 'PC.': 'Pcs',
+  'Piece': 'Pcs', 'Pieces': 'Pcs', 'Each': 'Pcs', 'EACH': 'Pcs', 'each': 'Pcs',
   'PANEL': 'Pcs', 'PANELS': 'Pcs', 'Unit': 'Pcs', 'Units': 'Pcs', 'UNIT': 'Pcs',
   // Nos
   'NOS': 'Nos', 'nos': 'Nos', 'Number': 'Nos', 'Numbers': 'Nos',
   'Num': 'Nos', 'NUM': 'Nos',
+  'N': 'Nos', 'NO': 'Nos', 'No': 'Nos', 'No.': 'Nos', 'NO.': 'Nos',
+  'NOS.': 'Nos', 'Nos.': 'Nos', 'nos.': 'Nos',
   // Set
   'SET': 'Set', 'set': 'Set', 'Sets': 'Set', 'SETS': 'Set',
   // Pair
@@ -69,6 +76,7 @@ const ALIAS_MAP: Record<string, string> = {
   'Dozens': 'Doz', 'DZN': 'Doz',
   // Kg
   'KG': 'Kg', 'kg': 'Kg', 'Kgs': 'Kg', 'KGS': 'Kg',
+  'KG.': 'Kg', 'Kgs.': 'Kg', 'KGS.': 'Kg',
   'Kilogram': 'Kg', 'Kilograms': 'Kg',
   // Gm
   'GM': 'Gm', 'gm': 'Gm', 'g': 'Gm', 'Gram': 'Gm', 'Grams': 'Gm', 'GMS': 'Gm',
@@ -78,11 +86,14 @@ const ALIAS_MAP: Record<string, string> = {
   // Ft
   'FT': 'Ft', 'ft': 'Ft', 'FEET': 'Ft', 'Feet': 'Ft', 'foot': 'Ft', 'Foot': 'Ft',
   // Sq Ft
-  'SQ FT': 'Sq Ft', 'sq ft': 'Sq Ft', 'Sqft': 'Sq Ft',
-  'SQFT': 'Sq Ft', 'Sq. Ft.': 'Sq Ft',
+  'SQ FT': 'Sq Ft', 'sq ft': 'Sq Ft', 'Sqft': 'Sq Ft', 'Sqft.': 'Sq Ft',
+  'SQFT': 'Sq Ft', 'SQFT.': 'Sq Ft', 'Sq. Ft.': 'Sq Ft',
+  // Sq Mtr
+  'Sq.Mtr': 'Sq Mtr', 'SQ MTR': 'Sq Mtr', 'sq mtr': 'Sq Mtr',
+  'SqMtr': 'Sq Mtr', 'Sq. Mtr.': 'Sq Mtr', 'SQM': 'Sq Mtr',
   // Ltr
   'LTR': 'Ltr', 'ltr': 'Ltr', 'L': 'Ltr', 'Litre': 'Ltr', 'Litres': 'Ltr',
-  'Liter': 'Ltr', 'Liters': 'Ltr',
+  'Liter': 'Ltr', 'Liters': 'Ltr', 'LTR.': 'Ltr', 'LTRS': 'Ltr', 'LTRS.': 'Ltr',
   // Ml
   'ML': 'Ml', 'ml': 'Ml', 'Millilitre': 'Ml', 'Milliliter': 'Ml',
   // Box
@@ -100,6 +111,8 @@ const ALIAS_MAP: Record<string, string> = {
   'TRAY': 'Tray', 'Trays': 'Tray', 'TRAYS': 'Tray',
   // Pkt
   'PACKET': 'Pkt', 'Packet': 'Pkt', 'Packets': 'Pkt', 'PKT': 'Pkt',
+  'Pkt.': 'Pkt', 'PKT.': 'Pkt', 'pkt': 'Pkt', 'Pack': 'Pkt', 'PACK': 'Pkt',
+  'Pkgs': 'Pkt', 'PKGS': 'Pkt', 'Pkg': 'Pkt', 'PKG': 'Pkt',
   // Sht
   'SHEET': 'Sht', 'Sheet': 'Sht', 'Sheets': 'Sht', 'SHT': 'Sht',
   // Strp
@@ -110,6 +123,10 @@ const ALIAS_MAP: Record<string, string> = {
   'TIN': 'Tin', 'Tins': 'Tin',
   // Can
   'CAN': 'Can', 'Cans': 'Can', 'CANS': 'Can',
+  // Drum (new canonical)
+  'DRM': 'Drum', 'drm': 'Drum', 'DRUM': 'Drum', 'Drum': 'Drum', 'Drums': 'Drum',
+  // Coil (new canonical — no aliases needed beyond case variants)
+  'COIL': 'Coil', 'coil': 'Coil', 'Coils': 'Coil', 'COILS': 'Coil',
 };
 
 export interface NormalizeResult {

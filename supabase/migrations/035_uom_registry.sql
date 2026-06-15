@@ -62,7 +62,10 @@ INSERT INTO uom_canonical (name, full_name, gst_uom_code, sort_order) VALUES
   ('Strp',  'Strips',       'STP', 21),
   ('Tube',  'Tubes',        'TBE', 22),
   ('Tin',   'Tins',         'TIN', 23),
-  ('Can',   'Cans',         'CAN', 24)
+  ('Can',   'Cans',         'CAN', 24),
+  ('Coil',   'Coils',         'COL', 25),
+  ('Drum',   'Drums',         'DRM', 26),
+  ('Sq Mtr', 'Square Metres', 'SQM', 27)
 ON CONFLICT (name) DO NOTHING;
 
 -- ── Seed global aliases (company_id = NULL) ────────────────────────────────
@@ -71,10 +74,13 @@ SELECT a.alias, c.id, NULL
 FROM (VALUES
   -- Pcs
   ('PCS','Pcs'),('pcs','Pcs'),('Pc','Pcs'),('pc','Pcs'),('PC','Pcs'),
-  ('Pcs.','Pcs'),('pcs.','Pcs'),('Piece','Pcs'),('Pieces','Pcs'),
+  ('Pcs.','Pcs'),('pcs.','Pcs'),('Pc.','Pcs'),('PC.','Pcs'),
+  ('Piece','Pcs'),('Pieces','Pcs'),('Each','Pcs'),('EACH','Pcs'),('each','Pcs'),
   ('PANEL','Pcs'),('PANELS','Pcs'),('Unit','Pcs'),('Units','Pcs'),('UNIT','Pcs'),
   -- Nos
   ('NOS','Nos'),('nos','Nos'),('Number','Nos'),('Numbers','Nos'),('Num','Nos'),('NUM','Nos'),
+  ('N','Nos'),('NO','Nos'),('No','Nos'),('No.','Nos'),('NO.','Nos'),
+  ('NOS.','Nos'),('Nos.','Nos'),('nos.','Nos'),
   -- Set
   ('SET','Set'),('set','Set'),('Sets','Set'),('SETS','Set'),
   -- Pair
@@ -82,7 +88,9 @@ FROM (VALUES
   -- Doz
   ('DOZ','Doz'),('doz','Doz'),('Dozen','Doz'),('Dozens','Doz'),('DZN','Doz'),
   -- Kg
-  ('KG','Kg'),('kg','Kg'),('Kgs','Kg'),('KGS','Kg'),('Kilogram','Kg'),('Kilograms','Kg'),
+  ('KG','Kg'),('kg','Kg'),('Kgs','Kg'),('KGS','Kg'),
+  ('KG.','Kg'),('Kgs.','Kg'),('KGS.','Kg'),
+  ('Kilogram','Kg'),('Kilograms','Kg'),
   -- Gm
   ('GM','Gm'),('gm','Gm'),('g','Gm'),('Gram','Gm'),('Grams','Gm'),('GMS','Gm'),
   -- Mtr
@@ -90,10 +98,14 @@ FROM (VALUES
   -- Ft
   ('FT','Ft'),('ft','Ft'),('FEET','Ft'),('Feet','Ft'),('foot','Ft'),('Foot','Ft'),
   -- Sq Ft
-  ('SQ FT','Sq Ft'),('sq ft','Sq Ft'),('Sqft','Sq Ft'),('SQFT','Sq Ft'),('Sq. Ft.','Sq Ft'),
+  ('SQ FT','Sq Ft'),('sq ft','Sq Ft'),('Sqft','Sq Ft'),('Sqft.','Sq Ft'),
+  ('SQFT','Sq Ft'),('SQFT.','Sq Ft'),('Sq. Ft.','Sq Ft'),
+  -- Sq Mtr
+  ('Sq.Mtr','Sq Mtr'),('SQ MTR','Sq Mtr'),('sq mtr','Sq Mtr'),
+  ('SqMtr','Sq Mtr'),('Sq. Mtr.','Sq Mtr'),('SQM','Sq Mtr'),
   -- Ltr
   ('LTR','Ltr'),('ltr','Ltr'),('L','Ltr'),('Litre','Ltr'),('Litres','Ltr'),
-  ('Liter','Ltr'),('Liters','Ltr'),
+  ('Liter','Ltr'),('Liters','Ltr'),('LTR.','Ltr'),('LTRS','Ltr'),('LTRS.','Ltr'),
   -- Ml
   ('ML','Ml'),('ml','Ml'),('Millilitre','Ml'),('Milliliter','Ml'),
   -- Box
@@ -111,6 +123,8 @@ FROM (VALUES
   ('TRAY','Tray'),('Trays','Tray'),('TRAYS','Tray'),
   -- Pkt
   ('PACKET','Pkt'),('Packet','Pkt'),('Packets','Pkt'),('PKT','Pkt'),
+  ('Pkt.','Pkt'),('PKT.','Pkt'),('pkt','Pkt'),('Pack','Pkt'),('PACK','Pkt'),
+  ('Pkgs','Pkt'),('PKGS','Pkt'),('Pkg','Pkt'),('PKG','Pkt'),
   -- Sht
   ('SHEET','Sht'),('Sheet','Sht'),('Sheets','Sht'),('SHT','Sht'),
   -- Strp
@@ -121,8 +135,14 @@ FROM (VALUES
   ('TIN','Tin'),('Tins','Tin'),
   -- Can
   ('CAN','Can'),('Cans','Can'),('CANS','Can'),
-  -- Pair/Doz (already above, but also common alt spellings)
-  ('pairs','Pair'),('dozen','Doz')
+  -- Pair/Doz
+  ('pairs','Pair'),('dozen','Doz'),
+  -- Drum (new)
+  ('DRM','Drum'),('drm','Drum'),('DRUM','Drum'),('Drums','Drum'),
+  -- Coil (new)
+  ('COIL','Coil'),('coil','Coil'),('Coils','Coil'),('COILS','Coil'),
+  -- Sq Mtr aliases already above
+  ('Sq Mtr','Sq Mtr')  -- canonical self-alias for lookup consistency
 ) AS a(alias, canonical_name)
 JOIN uom_canonical c ON c.name = a.canonical_name
 ON CONFLICT (alias, company_id) DO NOTHING;
