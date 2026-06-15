@@ -632,6 +632,73 @@ def normalize_hsn_codes(inv: dict) -> dict:
     return inv
 
 
+# Mirrors uomRegistry.ts ALIAS_MAP and CANONICAL_UOMS — keep in sync.
+_UOM_CANONICAL = {
+    'Pcs', 'Nos', 'Set', 'Pair', 'Doz', 'Kg', 'Gm', 'Mtr', 'Ft', 'Sq Ft',
+    'Ltr', 'Ml', 'Box', 'Bag', 'Roll', 'Bdl', 'Bal', 'Tray', 'Pkt', 'Sht',
+    'Strp', 'Tube', 'Tin', 'Can',
+}
+_UOM_ALIAS: dict[str, str] = {
+    'PCS': 'Pcs', 'pcs': 'Pcs', 'Pc': 'Pcs', 'pc': 'Pcs', 'PC': 'Pcs',
+    'Pcs.': 'Pcs', 'pcs.': 'Pcs', 'Piece': 'Pcs', 'Pieces': 'Pcs',
+    'PANEL': 'Pcs', 'PANELS': 'Pcs', 'Unit': 'Pcs', 'Units': 'Pcs', 'UNIT': 'Pcs',
+    'NOS': 'Nos', 'nos': 'Nos', 'Number': 'Nos', 'Numbers': 'Nos', 'Num': 'Nos', 'NUM': 'Nos',
+    'SET': 'Set', 'set': 'Set', 'Sets': 'Set', 'SETS': 'Set',
+    'PAIR': 'Pair', 'pair': 'Pair', 'Pairs': 'Pair', 'pairs': 'Pair', 'Pr': 'Pair', 'PR': 'Pair',
+    'DOZ': 'Doz', 'doz': 'Doz', 'Dozen': 'Doz', 'dozen': 'Doz', 'Dozens': 'Doz', 'DZN': 'Doz',
+    'KG': 'Kg', 'kg': 'Kg', 'Kgs': 'Kg', 'KGS': 'Kg', 'Kilogram': 'Kg', 'Kilograms': 'Kg',
+    'GM': 'Gm', 'gm': 'Gm', 'g': 'Gm', 'Gram': 'Gm', 'Grams': 'Gm', 'GMS': 'Gm',
+    'MTR': 'Mtr', 'mtr': 'Mtr', 'Meter': 'Mtr', 'Meters': 'Mtr', 'Metre': 'Mtr', 'Metres': 'Mtr',
+    'FT': 'Ft', 'ft': 'Ft', 'FEET': 'Ft', 'Feet': 'Ft', 'foot': 'Ft', 'Foot': 'Ft',
+    'SQ FT': 'Sq Ft', 'sq ft': 'Sq Ft', 'Sqft': 'Sq Ft', 'SQFT': 'Sq Ft', 'Sq. Ft.': 'Sq Ft',
+    'LTR': 'Ltr', 'ltr': 'Ltr', 'L': 'Ltr', 'Litre': 'Ltr', 'Litres': 'Ltr',
+    'Liter': 'Ltr', 'Liters': 'Ltr',
+    'ML': 'Ml', 'ml': 'Ml', 'Millilitre': 'Ml', 'Milliliter': 'Ml',
+    'BOX': 'Box', 'box': 'Box', 'Boxes': 'Box', 'BOXES': 'Box',
+    'Carton': 'Box', 'CARTON': 'Box', 'Cartons': 'Box', 'CTN': 'Box', 'ctn': 'Box',
+    'BAG': 'Bag', 'bag': 'Bag', 'Bags': 'Bag', 'BAGS': 'Bag',
+    'ROLL': 'Roll', 'roll': 'Roll', 'Rolls': 'Roll', 'ROLLS': 'Roll',
+    'BUNDLE': 'Bdl', 'Bundle': 'Bdl', 'Bundles': 'Bdl', 'BDL': 'Bdl', 'bdl': 'Bdl',
+    'BALE': 'Bal', 'Bale': 'Bal', 'Bales': 'Bal', 'BAL': 'Bal',
+    'TRAY': 'Tray', 'Trays': 'Tray', 'TRAYS': 'Tray',
+    'PACKET': 'Pkt', 'Packet': 'Pkt', 'Packets': 'Pkt', 'PKT': 'Pkt',
+    'SHEET': 'Sht', 'Sheet': 'Sht', 'Sheets': 'Sht', 'SHT': 'Sht',
+    'STRIP': 'Strp', 'Strip': 'Strp', 'Strips': 'Strp',
+    'TUBE': 'Tube', 'Tubes': 'Tube',
+    'TIN': 'Tin', 'Tins': 'Tin',
+    'CAN': 'Can', 'Cans': 'Can', 'CANS': 'Can',
+}
+import re as _re
+_NUMERIC_PREFIX = _re.compile(r'^(\d+)\s+(.+)$')
+
+
+def normalize_uom(raw: str | None) -> str:
+    """Normalise an extracted UOM to its canonical form.
+
+    Resolution order:
+      1. Strip numeric prefix ("5 Pcs" → "Pcs")
+      2. Canonical exact match
+      3. Alias lookup
+      4. Return raw value unchanged (unknown UOM — flagged separately if needed)
+    """
+    if not raw or not raw.strip():
+        return 'Nos'
+    s = raw.strip()
+    m = _NUMERIC_PREFIX.match(s)
+    if m:
+        s = m.group(2).strip()
+    if s in _UOM_CANONICAL:
+        return s
+    return _UOM_ALIAS.get(s, s)
+
+
+def normalize_uoms(inv: dict) -> dict:
+    """Normalise UOM on every line item after Claude extraction."""
+    for item in inv.get("line_items", []):
+        item["uom"] = normalize_uom(item.get("uom"))
+    return inv
+
+
 def correct_line_item_rates(inv: dict) -> dict:
     """
     Self-correct extracted rates using the printed amount as ground truth.
@@ -1120,6 +1187,7 @@ async def _extract_invoices_from_file(
 
             for inv in all_invoices:
                 inv = normalize_hsn_codes(inv)
+                inv = normalize_uoms(inv)
                 inv = correct_line_item_rates(inv)
                 inv = detect_bill_discount_from_total(inv)
                 inv["confidence"] = compute_confidence(inv)
@@ -1167,6 +1235,7 @@ async def _extract_invoices_from_file(
 
     for inv in invoices:
         inv = normalize_hsn_codes(inv)
+        inv = normalize_uoms(inv)
         inv = correct_line_item_rates(inv)
         inv = detect_bill_discount_from_total(inv)
         inv["confidence"] = compute_confidence(inv)
@@ -1235,6 +1304,7 @@ def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
         # Re-run post-processing on merged invoice only
         if not base.get("duplicate_of"):
             base = normalize_hsn_codes(base)
+        base = normalize_uoms(base)
         base = correct_line_item_rates(base)
         base = detect_bill_discount_from_total(base)
         base["confidence"] = compute_confidence(base)

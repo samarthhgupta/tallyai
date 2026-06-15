@@ -18,6 +18,7 @@ import type { VoucherTypeMaster } from './voucherTypes';
 import { resolveVoucherType } from './voucherTypes';
 import { calcLineAmount } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
+import { resolveUom, getCanonical } from './uomRegistry';
 
 // Full state names keyed by GSTIN first-2-digits (Tally needs full names, not abbreviations)
 const GSTIN_STATE_FULL: Record<string, string> = {
@@ -736,7 +737,7 @@ function buildAllInventoryEntry(
   purchaseLedger: string,
 ): string {
   const itemNet = calcLineAmount(item);
-  const uom = item.uom || stockItem.unit || 'NOS';
+  const uom = resolveUom(stockItem.unit, item.uom);
   const negAmt = -Math.abs(itemNet);
   const discLine = item.disc_percent > 0 ? `\n        <DISCOUNT> ${fmt2(item.disc_percent)}</DISCOUNT>` : '';
   const hsnCode = item.hsn ? item.hsn.replace(/[\s.]/g, '') : '';
@@ -1621,24 +1622,11 @@ function buildExpenseLedgerBlock(el: ExpenseLedgerMaster, fyStart: string): stri
 }
 
 
-const UNIT_FORMAL_NAMES: Record<string, string> = {
-  'Nos': 'Numbers', 'NOS': 'Numbers', 'nos': 'Numbers',
-  'Pcs': 'Pieces', 'PCS': 'Pieces', 'pcs': 'Pieces', 'pc': 'Pieces', 'PC': 'Pieces',
-  'Kg': 'Kilograms', 'KG': 'Kilograms', 'kg': 'Kilograms',
-  'Gm': 'Grams', 'GM': 'Grams', 'gm': 'Grams', 'g': 'Grams',
-  'Mtr': 'Metres', 'MTR': 'Metres', 'mtr': 'Metres', 'm': 'Metres',
-  'Ltr': 'Litres', 'LTR': 'Litres', 'ltr': 'Litres', 'L': 'Litres',
-  'Box': 'Boxes', 'BOX': 'Boxes', 'box': 'Boxes',
-  'Set': 'Sets', 'SET': 'Sets', 'set': 'Sets',
-  'Doz': 'Dozens', 'DOZ': 'Dozens', 'doz': 'Dozens',
-  'Pair': 'Pairs', 'PAIR': 'Pairs', 'pair': 'Pairs',
-  'Roll': 'Rolls', 'ROLL': 'Rolls', 'roll': 'Rolls',
-  'Bag': 'Bags', 'BAG': 'Bags', 'bag': 'Bags',
-};
-
 function buildUnitBlock(unitName: string, fyStart: string): string {
-  const formalName = UNIT_FORMAL_NAMES[unitName] ?? `${unitName} Unit`;
-  const gstRepUom = `${unitName.toUpperCase()}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
+  const entry = getCanonical(unitName);
+  const formalName = entry?.fullName ?? unitName;
+  const gstCode    = entry?.gstCode  ?? unitName.toUpperCase().replace(/\s+/g, '');
+  const gstRepUom  = `${gstCode}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
   const fyStart2 = fyStart;
   return `
     <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -1665,7 +1653,7 @@ function buildUnitBlock(unitName: string, fyStart: string): string {
 
 function buildStockItemBlock(s: StockItemMaster, gstPercent: number, fyStart: string): string {
   const halfRate = gstPercent / 2;
-  const unit = s.unit || 'Nos';
+  const unit = resolveUom(s.unit, null);
 
   const gstDetailsBlock = gstPercent > 0 ? `
         <GSTDETAILS.LIST>
@@ -1815,7 +1803,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
 
     const seenUnits = new Set<string>();
     for (const s of itemsToExport) {
-      const unit = s.unit || 'Nos';
+      const unit = resolveUom(s.unit, null);
       if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitBlock(unit, fyStart)); }
     }
     for (const stockItem of itemsToExport) {
@@ -2080,7 +2068,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
       const desc = item.description ?? '';
       const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
       const itemNet = calcLineAmount(item);
-      const uom = item.uom || stockItem?.unit || 'NOS';
+      const uom = resolveUom(stockItem?.unit, item.uom);
       const hsnRate = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : `${desc} @ ${item.gst_percent ?? 0}%`;
       rows.push({
         ...base, ledger_type: 'Inventory',
