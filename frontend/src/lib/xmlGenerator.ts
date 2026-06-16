@@ -911,7 +911,14 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     ? findExpenseLedger(input.expenseLedgers, 'Discount', invGoodsGstRate)
     : null;
   if (discountLedger) {
-    ledgerEntries.push(invChargeLedgerEntry(discountLedger, -(inv.bill_discount_amount ?? 0)));
+    // Discount is income for the buyer → CREDIT entry (ISDEEMEDPOSITIVE=No, positive amount)
+    ledgerEntries.push(invLedgerEntry({
+      ledgerName: discountLedger,
+      isdeemedpositive: 'No',
+      isPartyledger: 'No',
+      islastdeemedpositive: 'No',
+      amount: inv.bill_discount_amount ?? 0,
+    }));
   } else if ((inv.bill_discount_amount ?? 0) > 0) {
     warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked - no discount ledger configured`);
   }
@@ -978,23 +985,33 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     }
   }
 
-  // 5. Round-off
+  // 5. Round-off: positive round-off = expense (DEBIT); negative = income (CREDIT)
+  let roundOffDebit = 0;
+  let roundOffCredit = 0;
   if (d.round_off && Math.abs(d.round_off) > 0.001) {
     const ledger = findExpenseLedger(input.expenseLedgers, 'Round Off') ?? findExpenseLedger(input.expenseLedgers, 'Rounding Off');
     if (ledger) {
-      ledgerEntries.push(invChargeLedgerEntry(ledger, -Math.abs(d.round_off)));
+      if (d.round_off > 0) {
+        roundOffDebit = d.round_off;
+        ledgerEntries.push(invChargeLedgerEntry(ledger, -d.round_off));
+      } else {
+        roundOffCredit = Math.abs(d.round_off);
+        ledgerEntries.push(invLedgerEntry({
+          ledgerName: ledger,
+          isdeemedpositive: 'No',
+          isPartyledger: 'No',
+          islastdeemedpositive: 'No',
+          amount: roundOffCredit,
+        }));
+      }
     }
   }
 
-  // 6. Balance catch-up: unmapped items + unmapped charges + bill discount (when no discount ledger)
-  //    create a gap between mapped debits and party credit. Book it to the purchase ledger.
-  // When a discount ledger was used, the discount credit is already booked; subtract it so we
-  // don't double-count it as a spurious Purchase credit (which caused Tally debit/credit mismatch).
+  // 6. Balance catch-up: any gap between explicit debits and party credit goes to purchase ledger.
   const taxes = d.cgst + d.sgst + d.igst;
-  const roundOff = Math.abs(d.round_off);
   const bookedDiscount = discountLedger ? (inv.bill_discount_amount ?? 0) : 0;
-  const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOff - bookedDiscount;
-  const gap = parseFloat((d.total - totalDebits).toFixed(2));
+  const totalDebits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOffDebit;
+  const gap = parseFloat((d.total - totalDebits + bookedDiscount + roundOffCredit).toFixed(2));
   const netPurchaseLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netPurchaseLedgerAdj) > 0.01) {
     if (netPurchaseLedgerAdj > 0) {
