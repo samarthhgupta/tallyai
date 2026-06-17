@@ -16,6 +16,7 @@ const NAV = [
       { label: 'Expense Ledgers', href: '/masters/expense-ledgers' },
       { label: 'Duties & Taxes', href: '/masters/duties-taxes' },
       { label: 'Voucher Types', href: '/masters/voucher-types' },
+      { label: 'Import from Tally XML', href: '/masters/import-xml' },
     ],
   },
   { label: 'Purchase Register', href: '/register' },
