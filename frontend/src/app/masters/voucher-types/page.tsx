@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
 import {
@@ -140,41 +140,40 @@ export default function VoucherTypesPage() {
   const savedCategories = PURCHASE_CATEGORIES.filter((cat) => records.find((r) => r.purchase_category === cat));
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 p-8 max-w-3xl">
+    <AppLayout>
+      <main className="flex-1 p-8 max-w-3xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Voucher Types</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Voucher Types</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Maps each type of purchase to the exact Tally Voucher Type name.
             The voucher type appears in every XML voucher as{' '}
-            <code className="bg-gray-100 px-1 rounded text-xs font-mono">VOUCHERTYPENAME</code>.
+            <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs font-mono">VOUCHERTYPENAME</code>.
           </p>
         </div>
 
         {/* How it works */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800 mb-6">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-5 py-4 text-sm text-blue-800 dark:text-blue-300 mb-6">
           <p className="font-semibold mb-1">How the mapping works</p>
-          <ul className="list-disc list-inside space-y-1 text-blue-700 text-xs">
+          <ul className="list-disc list-inside space-y-1 text-blue-700 dark:text-blue-300 text-xs">
             <li><strong>GST Purchase</strong> - invoice has CGST, SGST, or IGST &gt; 0 → use this voucher type</li>
             <li><strong>Non-GST / Exempt</strong> - invoice has no GST → use this voucher type</li>
             <li><strong>Default / Fallback</strong> - used if no specific category matches</li>
           </ul>
-          <p className="mt-2 text-xs text-blue-600">
+          <p className="mt-2 text-xs text-blue-600 dark:text-blue-400">
             If a category has no mapping, the system falls back to <code className="bg-blue-100 px-1 rounded font-mono">Purchase</code> (Tally built-in).
           </p>
         </div>
 
         {/* ── Bulk action bar ── */}
         {selectedCategories.size > 0 && (
-          <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
-            <span className="text-sm text-red-700 font-medium">{selectedCategories.size} selected</span>
+          <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <span className="text-sm text-red-700 dark:text-red-400 font-medium">{selectedCategories.size} selected</span>
             <button onClick={() => setShowBulkConfirm(true)}
-              className="text-sm text-red-600 hover:text-red-800 font-medium">
+              className="text-sm text-red-600 dark:text-red-400 hover:text-red-800 font-medium">
               Remove Selected ({selectedCategories.size})
             </button>
             <button onClick={() => setSelectedCategories(new Set())}
-              className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+              className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 ml-auto">
               Cancel
             </button>
           </div>
@@ -191,7 +190,7 @@ export default function VoucherTypesPage() {
               const isSaved = !!existing;
               const isSelected = selectedCategories.has(category);
               return (
-                <div key={category} className={`bg-white border rounded-xl p-5 transition-colors ${isSelected ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}>
+                <div key={category} className={`bg-white dark:bg-gray-800 border rounded-xl p-5 transition-colors ${isSelected ? 'border-red-300 bg-red-50 dark:bg-red-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-start gap-3">
                       {isSaved && (
@@ -199,26 +198,26 @@ export default function VoucherTypesPage() {
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => toggleSelectCategory(category)}
-                          className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          className="mt-0.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                         />
                       )}
                       <div>
-                        <p className="text-sm font-semibold text-gray-800">
+                        <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
                           {PURCHASE_CATEGORY_LABELS[category]}
                         </p>
                         {isSaved ? (
-                          <p className="text-xs text-green-600 font-medium mt-0.5">
+                          <p className="text-xs text-green-600 dark:text-green-400 font-medium mt-0.5">
                             ✓ Mapped to &ldquo;<span className="font-mono">{existing.tally_voucher_type_name}</span>&rdquo;
                           </p>
                         ) : (
-                          <p className="text-xs text-gray-400 mt-0.5">Not configured - falls back to &ldquo;Purchase&rdquo;</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Not configured - falls back to &ldquo;Purchase&rdquo;</p>
                         )}
                       </div>
                     </div>
                     {isSaved && (
                       <button
                         onClick={() => handleDelete(category)}
-                        className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
+                        className="text-xs text-red-500 dark:text-red-400 hover:text-red-700 font-medium transition-colors"
                       >
                         Remove
                       </button>
@@ -233,10 +232,10 @@ export default function VoucherTypesPage() {
                         onChange={(e) => setInputs((p) => ({ ...p, [category]: e.target.value }))}
                         onKeyDown={(e) => e.key === 'Enter' && handleSave(category)}
                         placeholder={`e.g. ${DEFAULT_SUGGESTIONS[category]}`}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-900 dark:text-gray-100 dark:bg-gray-700 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                       {errors[category] && (
-                        <p className="text-xs text-red-600 mt-1">{errors[category]}</p>
+                        <p className="text-xs text-red-600 dark:text-red-400 mt-1">{errors[category]}</p>
                       )}
                     </div>
                     <button
@@ -247,14 +246,14 @@ export default function VoucherTypesPage() {
                       {saving[category] ? 'Saving…' : isSaved ? 'Update' : 'Save'}
                     </button>
                     {saved[category] && (
-                      <span className="text-xs text-green-600 font-medium shrink-0">✓ Saved</span>
+                      <span className="text-xs text-green-600 dark:text-green-400 font-medium shrink-0">✓ Saved</span>
                     )}
                   </div>
 
                   {!inputs[category] && (
                     <button
                       onClick={() => setInputs((p) => ({ ...p, [category]: DEFAULT_SUGGESTIONS[category] }))}
-                      className="mt-2 text-xs text-indigo-600 hover:underline"
+                      className="mt-2 text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
                     >
                       Use suggestion: &ldquo;{DEFAULT_SUGGESTIONS[category]}&rdquo;
                     </button>
@@ -266,13 +265,13 @@ export default function VoucherTypesPage() {
         )}
 
         {savedCategories.length > 1 && selectedCategories.size === 0 && (
-          <p className="mt-3 text-xs text-gray-400">
+          <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
             Select checkboxes on configured mappings to bulk remove them.
           </p>
         )}
 
-        <div className="mt-6 bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-xs text-gray-600">
-          <p className="font-semibold text-gray-700 mb-1">How to find your Voucher Type names in Tally</p>
+        <div className="mt-6 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-5 py-4 text-xs text-gray-600 dark:text-gray-400">
+          <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">How to find your Voucher Type names in Tally</p>
           <ol className="list-decimal list-inside space-y-1">
             <li>Open Tally → Gateway of Tally → Accounts Info → Voucher Types → Display</li>
             <li>Note the exact names as shown (case-sensitive)</li>
@@ -284,12 +283,12 @@ export default function VoucherTypesPage() {
       {/* ── Bulk delete confirmation modal ── */}
       {showBulkConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-2">Remove {selectedCategories.size} mapping{selectedCategories.size !== 1 ? 's' : ''}?</h2>
-            <p className="text-sm text-gray-500 mb-5">The system will fall back to &ldquo;Purchase&rdquo; for removed categories.</p>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Remove {selectedCategories.size} mapping{selectedCategories.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">The system will fall back to &ldquo;Purchase&rdquo; for removed categories.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900">
                 Cancel
               </button>
               <button onClick={handleBulkDelete} disabled={bulkDeleting}
@@ -300,6 +299,6 @@ export default function VoucherTypesPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }

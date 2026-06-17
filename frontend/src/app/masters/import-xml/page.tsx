@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
 import { bulkUpsertStockItems, type StockItemImportRow } from '@/lib/stockItems';
@@ -302,20 +302,19 @@ export default function ImportXmlPage() {
     merged.dutiesTaxes.length + merged.voucherTypes.length;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 p-8 max-w-3xl">
+    <AppLayout>
+      <main className="flex-1 p-8 max-w-3xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Import from Tally XML</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Import from Tally XML</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Upload Tally &ldquo;All Masters&rdquo; XML exports. Records are auto-routed to the correct master based on their type.
           </p>
         </div>
 
         {/* How it works */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-xs text-blue-800 mb-6">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-5 py-4 text-xs text-blue-800 dark:text-blue-300 mb-6">
           <p className="font-semibold text-sm mb-1">What gets imported</p>
-          <ul className="list-disc list-inside space-y-1 text-blue-700">
+          <ul className="list-disc list-inside space-y-1 text-blue-700 dark:text-blue-300">
             <li><strong>Stock Items</strong> — with HSN code, GST rate, and unit of measure</li>
             <li><strong>Suppliers</strong> — Sundry Creditors with GSTIN</li>
             <li><strong>Purchase Ledgers</strong> — ledgers under &ldquo;Purchase Accounts&rdquo;</li>
@@ -323,7 +322,7 @@ export default function ImportXmlPage() {
             <li><strong>Duties &amp; Taxes</strong> — CGST/SGST/IGST/CESS ledgers with rates</li>
             <li><strong>Voucher Types</strong> — Purchase voucher types</li>
           </ul>
-          <p className="mt-2 text-blue-600">All other ledger groups are skipped. Existing records are updated, not duplicated.</p>
+          <p className="mt-2 text-blue-600 dark:text-blue-400">All other ledger groups are skipped. Existing records are updated, not duplicated.</p>
         </div>
 
         {/* Drop zone */}
@@ -331,11 +330,11 @@ export default function ImportXmlPage() {
           <div
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
-            className="border-2 border-dashed border-gray-300 rounded-xl p-12 text-center hover:border-indigo-400 transition-colors bg-white"
+            className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-12 text-center hover:border-indigo-400 transition-colors bg-white dark:bg-gray-800"
           >
             <div className="text-4xl mb-3">📂</div>
-            <p className="text-sm font-medium text-gray-700 mb-1">Drop Tally XML files here</p>
-            <p className="text-xs text-gray-400 mb-4">or click to select files — multiple files supported</p>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Drop Tally XML files here</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">or click to select files — multiple files supported</p>
             <label className="cursor-pointer px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors">
               Select XML Files
               <input
@@ -358,12 +357,12 @@ export default function ImportXmlPage() {
         {parsed.length > 0 && !results && (
           <div>
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
                 Preview — {parsed.length} file{parsed.length !== 1 ? 's' : ''} analysed
               </h2>
               <button
                 onClick={() => { setParsed([]); setImportError(''); }}
-                className="text-sm text-gray-500 hover:text-gray-700"
+                className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700"
               >
                 ✕ Clear
               </button>
@@ -372,8 +371,8 @@ export default function ImportXmlPage() {
             {/* Per-file breakdown */}
             <div className="space-y-3 mb-5">
               {parsed.map((p) => (
-                <div key={p.fileName} className="bg-white border border-gray-200 rounded-xl p-4">
-                  <p className="text-xs font-semibold text-gray-500 mb-2 font-mono truncate">{p.fileName}</p>
+                <div key={p.fileName} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 font-mono truncate">{p.fileName}</p>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <Stat label="Stock Items" count={p.stockItems.length} />
                     <Stat label="Suppliers" count={p.suppliers.length} />
@@ -383,7 +382,7 @@ export default function ImportXmlPage() {
                     <Stat label="Voucher Types" count={p.voucherTypes.length} />
                   </div>
                   {p.skipped > 0 && (
-                    <p className="text-xs text-gray-400 mt-2">{p.skipped} ledger{p.skipped !== 1 ? 's' : ''} skipped (unrecognised groups)</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">{p.skipped} ledger{p.skipped !== 1 ? 's' : ''} skipped (unrecognised groups)</p>
                   )}
                 </div>
               ))}
@@ -391,8 +390,8 @@ export default function ImportXmlPage() {
 
             {/* Totals */}
             {parsed.length > 1 && (
-              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-5">
-                <p className="text-xs font-semibold text-indigo-700 mb-2">Combined total across all files</p>
+              <div className="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4 mb-5">
+                <p className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-2">Combined total across all files</p>
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <Stat label="Stock Items" count={merged.stockItems.length} />
                   <Stat label="Suppliers" count={merged.suppliers.length} />
@@ -405,7 +404,7 @@ export default function ImportXmlPage() {
             )}
 
             {importError && (
-              <p className="text-sm text-red-600 mb-3">{importError}</p>
+              <p className="text-sm text-red-600 dark:text-red-400 mb-3">{importError}</p>
             )}
 
             <div className="flex gap-3">
@@ -418,12 +417,12 @@ export default function ImportXmlPage() {
                   {importing ? 'Importing…' : `Import ${totalParsed} records into ${company?.name ?? 'company'}`}
                 </button>
               ) : (
-                <p className="text-sm text-gray-500 py-2">No importable records found in the selected files.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-2">No importable records found in the selected files.</p>
               )}
               <button
                 onClick={() => { setParsed([]); setImportError(''); }}
                 disabled={importing}
-                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700"
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700"
               >
                 Cancel
               </button>
@@ -436,39 +435,39 @@ export default function ImportXmlPage() {
           <div>
             <div className="flex items-center gap-2 mb-5">
               <span className="text-xl">✅</span>
-              <h2 className="text-base font-semibold text-gray-900">Import complete</h2>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Import complete</h2>
             </div>
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                   <tr>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Master</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-green-600 uppercase tracking-wide text-right">Inserted</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-blue-600 uppercase tracking-wide text-right">Updated</th>
-                    <th className="px-4 py-3 text-xs font-semibold text-red-500 uppercase tracking-wide text-right">Errors</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Master</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide text-right">Inserted</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide text-right">Updated</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-red-500 dark:text-red-400 uppercase tracking-wide text-right">Errors</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 text-xs">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700 text-xs">
                   <ResultRow label="Stock Items" inserted={results.stockItems.inserted} updated={results.stockItems.updated} errors={results.stockItems.errors} />
                   <ResultRow label="Suppliers" inserted={results.suppliers.inserted} updated={results.suppliers.updated} errors={results.suppliers.errors} />
                   <tr>
-                    <td className="px-4 py-3 font-medium text-gray-700">Purchase Ledgers</td>
-                    <td className="px-4 py-3 text-right text-green-700">{results.purchaseLedgers.added}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">—</td>
-                    <td className="px-4 py-3 text-right text-gray-400">{results.purchaseLedgers.skipped > 0 ? `${results.purchaseLedgers.skipped} dup` : '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Purchase Ledgers</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.purchaseLedgers.added}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">{results.purchaseLedgers.skipped > 0 ? `${results.purchaseLedgers.skipped} dup` : '—'}</td>
                   </tr>
                   <ResultRow label="Expense Ledgers" inserted={results.expenseLedgers.inserted} updated={results.expenseLedgers.updated} errors={results.expenseLedgers.errors} />
                   <tr>
-                    <td className="px-4 py-3 font-medium text-gray-700">Duties &amp; Taxes</td>
-                    <td className="px-4 py-3 text-right text-green-700">{results.dutiesTaxes.added}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">—</td>
-                    <td className="px-4 py-3 text-right text-red-500">{results.dutiesTaxes.errors || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Duties &amp; Taxes</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.dutiesTaxes.added}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
+                    <td className="px-4 py-3 text-right text-red-500 dark:text-red-400">{results.dutiesTaxes.errors || '—'}</td>
                   </tr>
                   <tr>
-                    <td className="px-4 py-3 font-medium text-gray-700">Voucher Types</td>
-                    <td className="px-4 py-3 text-right text-green-700">{results.voucherTypes.added}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">—</td>
-                    <td className="px-4 py-3 text-right text-red-500">{results.voucherTypes.errors || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Voucher Types</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.voucherTypes.added}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
+                    <td className="px-4 py-3 text-right text-red-500 dark:text-red-400">{results.voucherTypes.errors || '—'}</td>
                   </tr>
                 </tbody>
               </table>
@@ -482,7 +481,7 @@ export default function ImportXmlPage() {
               </button>
               <button
                 onClick={() => router.push('/masters/suppliers')}
-                className="px-4 py-2 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                className="px-4 py-2 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium"
               >
                 View Masters →
               </button>
@@ -490,13 +489,13 @@ export default function ImportXmlPage() {
           </div>
         )}
       </main>
-    </div>
+    </AppLayout>
   );
 }
 
 function Stat({ label, count }: { label: string; count: number }) {
   return (
-    <div className={`px-3 py-2 rounded-lg text-center ${count > 0 ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-50 text-gray-400'}`}>
+    <div className={`px-3 py-2 rounded-lg text-center ${count > 0 ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-500'}`}>
       <div className="font-bold text-base">{count}</div>
       <div className="text-[10px] leading-tight mt-0.5">{label}</div>
     </div>
@@ -506,10 +505,10 @@ function Stat({ label, count }: { label: string; count: number }) {
 function ResultRow({ label, inserted, updated, errors }: { label: string; inserted: number; updated: number; errors: number }) {
   return (
     <tr>
-      <td className="px-4 py-3 font-medium text-gray-700">{label}</td>
-      <td className="px-4 py-3 text-right text-green-700">{inserted || '—'}</td>
-      <td className="px-4 py-3 text-right text-blue-700">{updated || '—'}</td>
-      <td className="px-4 py-3 text-right text-red-500">{errors || '—'}</td>
+      <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">{label}</td>
+      <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{inserted || '—'}</td>
+      <td className="px-4 py-3 text-right text-blue-700 dark:text-blue-300">{updated || '—'}</td>
+      <td className="px-4 py-3 text-right text-red-500 dark:text-red-400">{errors || '—'}</td>
     </tr>
   );
 }

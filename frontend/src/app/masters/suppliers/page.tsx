@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
 import {
@@ -282,16 +282,15 @@ export default function SupplierMastersPage() {
   const unregCount = filtered.filter(isUnregistered).length;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 px-6 py-8">
+    <AppLayout>
+      <main className="flex-1 px-6 py-8">
         <div className="max-w-5xl">
 
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Supplier Master</h1>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Supplier Master</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 Maps vendor GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
               </p>
             </div>
@@ -566,6 +565,6 @@ export default function SupplierMastersPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }

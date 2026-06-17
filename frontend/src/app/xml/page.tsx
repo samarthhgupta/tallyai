@@ -13,7 +13,7 @@ import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
@@ -544,7 +544,7 @@ function FlatPreviewTable({
   };
 
   const TH = ({ children, right }: { children: React.ReactNode; right?: boolean }) => (
-    <th className={`px-3 py-2.5 border-b border-gray-200 font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap text-[11px] bg-gray-50 ${right ? 'text-right' : 'text-left'}`}>
+    <th className={`px-3 py-2.5 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap text-[11px] bg-gray-50 dark:bg-gray-800 ${right ? 'text-right' : 'text-left'}`}>
       {children}
     </th>
   );
@@ -573,16 +573,16 @@ function FlatPreviewTable({
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 shadow-sm">
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
       {/* Action bar */}
       {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex-wrap">
-          <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700 flex-wrap">
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={allSelected}
               onChange={toggleAll}
-              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
             />
             Select All
           </label>
@@ -599,13 +599,13 @@ function FlatPreviewTable({
             <button
               onClick={handleBulkUnaccept}
               disabled={bulkSaving}
-              className="px-4 py-1.5 border border-red-300 text-red-600 rounded-lg text-xs font-semibold hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-1.5 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {bulkSaving ? 'Saving…' : `Unaccept ${selectedLockedInvoices.size} invoice${selectedLockedInvoices.size !== 1 ? 's' : ''}`}
             </button>
           )}
           {selectedInvoices.size === 0 && selectedLockedInvoices.size === 0 && (
-            <span className="text-xs text-amber-700">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
+            <span className="text-xs text-amber-700 dark:text-amber-400">✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters</span>
           )}
         </div>
       )}
@@ -616,7 +616,7 @@ function FlatPreviewTable({
       {/* Table with sticky header */}
       <div ref={tableContainerRef} onScroll={onTableScroll} className="overflow-x-auto max-h-[70vh] overflow-y-auto">
         <table className="min-w-max text-xs border-collapse">
-          <thead className="bg-gray-50 sticky top-0 z-10">
+          <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0 z-10">
             <tr>
               <TH> </TH>
               <TH>Date</TH>
@@ -663,8 +663,8 @@ function FlatPreviewTable({
                 (r: PreviewRow) => r.invoice_number === row.invoiceNo && r.is_suggested
               );
               const isLocked = !!locked && !invHasSuggestions;
-              const rowBg = isLocked ? 'bg-green-50/30' : (isNewInvoice ? 'bg-white' : 'bg-blue-50/20');
-              const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300' : 'border-t border-gray-100';
+              const rowBg = isLocked ? 'bg-green-50/30 dark:bg-green-900/20' : (isNewInvoice ? 'bg-white dark:bg-gray-800' : 'bg-blue-50/20 dark:bg-blue-900/20');
+              const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300 dark:border-gray-600' : 'border-t border-gray-100 dark:border-gray-700';
               const isInvSuggestable = !isLocked && suggestableInvoices.includes(row.invoiceNo);
               const isChecked = selectedInvoices.has(row.invoiceNo);
 
@@ -699,7 +699,7 @@ function FlatPreviewTable({
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
                       onBlur={() => { const v = draft.trim(); if (v) onSave(v); }}
-                      className={`border border-amber-300 rounded px-2 py-0.5 text-xs bg-amber-50 focus:ring-1 focus:ring-indigo-400 flex-1 font-mono min-w-0`}
+                      className={`border border-amber-300 dark:border-amber-700 rounded px-2 py-0.5 text-xs bg-amber-50 dark:bg-amber-900/20 dark:text-gray-100 focus:ring-1 focus:ring-indigo-400 flex-1 font-mono min-w-0`}
                       title="AI suggestion ✦ - edit and press Enter or click away to save"
                     />
                     <button
@@ -722,7 +722,7 @@ function FlatPreviewTable({
               const igstDisplay = taxLedgerEdits.igst ?? row.igstLedger;
 
               return (
-                <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 transition-colors`}>
+                <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 dark:hover:bg-gray-700/50 transition-colors`}>
                   {/* Checkbox / accepted badge - one per invoice, on the first row only */}
                   <td className="px-2 py-2 w-12 text-center">
                     {row.isFirst && isLocked && (
@@ -731,9 +731,9 @@ function FlatPreviewTable({
                           type="checkbox"
                           checked={selectedLockedInvoices.has(row.invoiceNo)}
                           onChange={() => toggleLockedInvoice(row.invoiceNo)}
-                          className="rounded border-gray-300 text-red-500 focus:ring-red-400"
+                          className="rounded border-gray-300 dark:border-gray-600 text-red-500 focus:ring-red-400"
                         />
-                        <span title="Accepted" className="text-green-600 text-sm font-bold leading-none">✓</span>
+                        <span title="Accepted" className="text-green-600 dark:text-green-400 text-sm font-bold leading-none">✓</span>
                       </label>
                     )}
                     {row.isFirst && !isLocked && isInvSuggestable && (
@@ -741,20 +741,20 @@ function FlatPreviewTable({
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => toggleInvoice(row.invoiceNo)}
-                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                       />
                     )}
                   </td>
                   {/* Date */}
-                  <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600">{row.invoiceDate}</td>
+                  <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600 dark:text-gray-400">{row.invoiceDate}</td>
                   {/* Invoice No */}
-                  <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800">{row.invoiceNo}</td>
+                  <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800 dark:text-gray-200">{row.invoiceNo}</td>
                   {/* Voucher Type */}
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700">{row.voucherType}</span>
+                    <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">{row.voucherType}</span>
                   </td>
                   {/* Vendor Name */}
-                  <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
+                  <td className="px-3 py-2 max-w-[160px] truncate text-gray-700 dark:text-gray-300" title={row.vendorName}>{row.vendorName}</td>
                   {/* Vendor Ledger — always a dropdown before acceptance */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
@@ -767,7 +767,7 @@ function FlatPreviewTable({
                           // Defect 2 fix: update local state only; master write deferred to acceptance.
                           setVendorEdits((p) => ({ ...p, [row.vendorName]: e.target.value }));
                         }}
-                        className={`border rounded px-2 py-1 text-xs w-full ${row.vendorSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                        className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.vendorSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                       >
                         {!suppliers.some((s) => s.tally_ledger_name === (vendorEdits[row.vendorName] ?? row.vendorLedger)) && (
                           <option value={vendorEdits[row.vendorName] ?? row.vendorLedger}>
@@ -782,11 +782,11 @@ function FlatPreviewTable({
                     )}
                   </td>
                   {/* GSTIN */}
-                  <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap text-[11px]">{row.gstin || '-'}</td>
+                  <td className="px-3 py-2 font-mono text-gray-400 dark:text-gray-500 whitespace-nowrap text-[11px]">{row.gstin || '-'}</td>
                   {/* Reg Type */}
                   <td className="px-3 py-2 whitespace-nowrap">
                     {row.gstRegType && (
-                      <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded font-medium ${row.gstRegType === 'Unregistered' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                      <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded font-medium ${row.gstRegType === 'Unregistered' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
                         {row.gstRegType}
                       </span>
                     )}
@@ -802,7 +802,7 @@ function FlatPreviewTable({
                           autoFocus
                           type="text"
                           placeholder="New ledger name…"
-                          className="border border-indigo-300 rounded px-2 py-0.5 text-xs bg-indigo-50 flex-1 font-mono"
+                          className="border border-indigo-300 dark:border-indigo-800 rounded px-2 py-0.5 text-xs bg-indigo-50 dark:bg-indigo-900/30 dark:text-gray-100 flex-1 font-mono"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               const v = e.currentTarget.value.trim();
@@ -837,9 +837,9 @@ function FlatPreviewTable({
                             if (!e.target.value) return;
                             setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }));
                           }}
-                          className={`border rounded px-2 py-1 text-xs w-full ${
+                          className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
                             row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerCase === 1
-                              ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'
+                              ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
                           }`}
                         >
                           {/* No placeholder option — Case 3 always has a suggestion pre-selected */}
@@ -858,7 +858,7 @@ function FlatPreviewTable({
                         </select>
                         {(row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerHistoricalMissing) && (
                           <span
-                            className="shrink-0 text-amber-500 cursor-help text-sm"
+                            className="shrink-0 text-amber-500 dark:text-amber-400 cursor-help text-sm"
                             title={
                               row.purchaseLedgerHistoricalMissing
                                 ? 'The previously used Purchase Ledger for this supplier no longer exists in the master. Showing the most-used company-wide ledger as a fallback. Please verify.'
@@ -875,8 +875,8 @@ function FlatPreviewTable({
                   </td>
                   {/* Item Name + HSN */}
                   <td className="px-3 py-2 max-w-[220px]">
-                    <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '-'}</div>
-                    {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
+                    <div className="truncate text-gray-800 dark:text-gray-200" title={row.itemDesc}>{row.itemDesc || '-'}</div>
+                    {row.hsn && <div className="text-gray-400 dark:text-gray-500 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
                   {/* Stock Item — always dropdown in inventory mode before acceptance */}
                   <td className="px-3 py-2 min-w-[180px]">
@@ -892,7 +892,7 @@ function FlatPreviewTable({
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
                         }}
-                        className={`border rounded px-2 py-1 text-xs w-full ${row.stockItemSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                        className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.stockItemSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                       >
                         {!stockItems.some((s) => s.tally_item_name === (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem)) && (
                           <option value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}>
@@ -915,17 +915,17 @@ function FlatPreviewTable({
                     )}
                   </td>
                   {/* Tax Rate */}
-                  <td className="px-3 py-2 text-right text-gray-600">{row.taxRate != null ? `${row.taxRate}%` : '-'}</td>
+                  <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400">{row.taxRate != null ? `${row.taxRate}%` : '-'}</td>
                   {/* Qty */}
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.qty != null ? row.qty : '-'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">{row.qty != null ? row.qty : '-'}</td>
                   {/* UOM */}
-                  <td className="px-3 py-2 text-gray-500">{row.uom || '-'}</td>
+                  <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{row.uom || '-'}</td>
                   {/* Rate */}
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">{row.rate != null ? row.rate.toFixed(2) : '-'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">{row.rate != null ? row.rate.toFixed(2) : '-'}</td>
                   {/* Disc */}
-                  <td className="px-3 py-2 text-right text-gray-500">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '-'}</td>
+                  <td className="px-3 py-2 text-right text-gray-500 dark:text-gray-400">{row.disc != null && row.disc > 0 ? `${row.disc}%` : '-'}</td>
                   {/* Amount */}
-                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900">
+                  <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900 dark:text-gray-100">
                     {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   {/* Charges - only on first row of invoice */}
@@ -933,7 +933,7 @@ function FlatPreviewTable({
                     const ch = row.isFirst ? row.charges[ci] : undefined;
                     return (
                       <React.Fragment key={`ch${ci}`}>
-                        <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
+                        <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{ch?.desc ?? ''}</td>
                         <td className="px-3 py-2 min-w-[160px]">
                           {ch && (
                             isLocked ? (
@@ -953,7 +953,7 @@ function FlatPreviewTable({
                                   if (!e.target.value) return;
                                   setChargeEdits((p) => ({ ...p, [ch.desc]: e.target.value }));
                                 }}
-                                className={`border rounded px-2 py-1 text-xs w-full ${ch.suggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                                className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${ch.suggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                               >
                                 {!expenseLedgers.some((l) => l.tally_ledger_name === (chargeEdits[ch.desc] ?? ch.ledger)) && (
                                   <option value={chargeEdits[ch.desc] ?? ch.ledger}>
@@ -970,7 +970,7 @@ function FlatPreviewTable({
                             )
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono text-gray-700">
+                        <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                           {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
                         </td>
                       </React.Fragment>
@@ -986,7 +986,7 @@ function FlatPreviewTable({
                         ? <select
                             value={taxLedgerEdits.cgst ?? row.cgstLedger}
                             onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, cgst: e.target.value })); onMapTaxLedger('CGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full ${row.cgstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.cgstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                           >
                             {!cgstOpts.includes(taxLedgerEdits.cgst ?? row.cgstLedger) && (
                               <option value={taxLedgerEdits.cgst ?? row.cgstLedger}>{taxLedgerEdits.cgst ?? row.cgstLedger}{row.cgstSuggested ? ' ✦' : ''}</option>
@@ -997,7 +997,7 @@ function FlatPreviewTable({
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
                     })()}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                  <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'cgst_sgst' && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}
                   </td>
                   {/* SGST */}
@@ -1010,7 +1010,7 @@ function FlatPreviewTable({
                         ? <select
                             value={taxLedgerEdits.sgst ?? row.sgstLedger}
                             onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, sgst: e.target.value })); onMapTaxLedger('SGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full ${row.sgstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.sgstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                           >
                             {!sgstOpts.includes(taxLedgerEdits.sgst ?? row.sgstLedger) && (
                               <option value={taxLedgerEdits.sgst ?? row.sgstLedger}>{taxLedgerEdits.sgst ?? row.sgstLedger}{row.sgstSuggested ? ' ✦' : ''}</option>
@@ -1021,7 +1021,7 @@ function FlatPreviewTable({
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
                     })()}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                  <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'cgst_sgst' && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}
                   </td>
                   {/* IGST */}
@@ -1034,7 +1034,7 @@ function FlatPreviewTable({
                         ? <select
                             value={taxLedgerEdits.igst ?? row.igstLedger}
                             onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, igst: e.target.value })); onMapTaxLedger('IGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full ${row.igstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.igstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                           >
                             {!igstOpts.includes(taxLedgerEdits.igst ?? row.igstLedger) && (
                               <option value={taxLedgerEdits.igst ?? row.igstLedger}>{taxLedgerEdits.igst ?? row.igstLedger}{row.igstSuggested ? ' ✦' : ''}</option>
@@ -1045,7 +1045,7 @@ function FlatPreviewTable({
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
                     })()}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-700">
+                  <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
                   </td>
                   {/* Round Off — dropdown sourced from expense ledgers with keyword 'Round Off' */}
@@ -1053,23 +1053,23 @@ function FlatPreviewTable({
                     {row.isFirst && row.roAmt !== 0 && (() => {
                       const roOpts = expenseLedgers.filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off').map((e) => e.tally_ledger_name);
                       return isLocked
-                        ? <span className="font-mono font-medium text-gray-600">{effectiveRo || '-'}</span>
+                        ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>
                         : roOpts.length > 0
                         ? <select
                             value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
                             onChange={(e) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
-                            className={`border rounded px-2 py-1 text-xs w-full ${row.roSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.roSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
                           >
                             {!roOpts.includes(roLedgerEdits[row.invoiceNo] ?? row.roLedger) && (
                               <option value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}>{roLedgerEdits[row.invoiceNo] ?? row.roLedger}{row.roSuggested ? ' ✦' : ''}</option>
                             )}
                             {roOpts.map((n) => <option key={n} value={n}>{n}</option>)}
                           </select>
-                        : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600"
+                        : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600 dark:text-gray-400"
                             onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />;
                     })()}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-500 dark:text-gray-400">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
                 </tr>
               );
             })}
@@ -1080,12 +1080,12 @@ function FlatPreviewTable({
       {/* Stock item "apply to all" confirm popup */}
       {stockConfirm && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-base font-semibold text-gray-900 mb-2">Apply naming pattern to all?</h3>
-            <p className="text-sm text-gray-600 mb-1">
-              You confirmed stock item: <span className="font-mono font-semibold text-indigo-700">{stockConfirm.chosenName}</span>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply naming pattern to all?</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+              You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
             </p>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
               Would you like to use <span className="font-mono font-semibold">HSN @ Rate%</span> as the naming pattern for all other AI-suggested stock items too?
             </p>
             <div className="flex gap-3">
@@ -1111,7 +1111,7 @@ function FlatPreviewTable({
               </button>
               <button
                 onClick={() => setStockConfirm(null)}
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 No, map individually
               </button>
@@ -1219,18 +1219,18 @@ function SuggestionsPanel({
             return (
               <div key={idx} className="flex items-center gap-2">
                 <input type="checkbox" checked={checked} onChange={() => toggleOne(idx)}
-                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 shrink-0" />
-                <span className="text-gray-500 text-xs w-40 truncate shrink-0" title={invoiceName}>{invoiceName}</span>
-                <span className="text-gray-400 text-xs">→</span>
+                  className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 shrink-0" />
+                <span className="text-gray-500 dark:text-gray-400 text-xs w-40 truncate shrink-0" title={invoiceName}>{invoiceName}</span>
+                <span className="text-gray-400 dark:text-gray-500 text-xs">→</span>
                 <input
                   type="text"
                   defaultValue={defaultName}
                   onChange={(e) => setNames((prev) => ({ ...prev, [idx]: e.target.value }))}
-                  className="flex-1 border border-amber-200 rounded px-2 py-0.5 text-xs font-mono bg-amber-50 focus:ring-1 focus:ring-indigo-400 min-w-0"
+                  className="flex-1 border border-amber-200 dark:border-amber-700 rounded px-2 py-0.5 text-xs font-mono bg-amber-50 dark:bg-amber-900/20 dark:text-gray-100 focus:ring-1 focus:ring-indigo-400 min-w-0"
                   placeholder="Tally name…"
                 />
                 {editedName && editedName !== defaultName && (
-                  <span className="text-[10px] text-amber-600 shrink-0">edited</span>
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">edited</span>
                 )}
               </div>
             );
@@ -1241,20 +1241,20 @@ function SuggestionsPanel({
   };
 
   return (
-    <div className="border border-amber-200 rounded-xl bg-amber-50/50 px-5 py-4 space-y-4">
+    <div className="border border-amber-200 dark:border-amber-700 rounded-xl bg-amber-50/50 dark:bg-amber-900/20 px-5 py-4 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-amber-800">
+          <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
             ✦ {suggestions.length} AI suggestion{suggestions.length !== 1 ? 's' : ''} - review and accept to save to masters
           </span>
           {savedCount > 0 && (
-            <span className="text-xs text-green-700 bg-green-100 border border-green-200 rounded px-2 py-0.5">{savedCount} saved ✓</span>
+            <span className="text-xs text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded px-2 py-0.5">{savedCount} saved ✓</span>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+          <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
             <input type="checkbox" checked={allChecked} onChange={toggleAll}
-              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+              className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500" />
             Select all
           </label>
           <button
@@ -1268,7 +1268,7 @@ function SuggestionsPanel({
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Section title={`Vendor Ledgers (${vendors.length})`}  color="text-purple-700" items={vendors} />
-        <Section title={`Stock Items (${stocks.length})`}      color="text-indigo-700" items={stocks} />
+        <Section title={`Stock Items (${stocks.length})`}      color="text-indigo-700 dark:text-indigo-300" items={stocks} />
         <Section title={`Expense Ledgers (${expenses.length})`} color="text-orange-700" items={expenses} />
       </div>
     </div>
@@ -1593,36 +1593,35 @@ export default function XmlGeneratorPage() {
     : [];
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 p-8" style={{ maxWidth: '100%' }}>
+    <AppLayout>
+      <main className="flex-1 p-8" style={{ maxWidth: '100%' }}>
         <div className="mb-7">
-          <h1 className="text-2xl font-bold text-gray-900">Export to Tally</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Export to Tally</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Analyse ledger assignments and resolve exceptions, then download the XML for import into Tally.
           </p>
         </div>
 
         {/* ── Step 1: Period + Settings ── */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">1</span>
             Select Period &amp; Settings
           </h2>
 
           <div className="flex items-center gap-4 mb-5">
             <div>
-              <label className="block text-xs text-gray-500 mb-1.5">Financial Year</label>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1.5">Financial Year</label>
               <FYPeriodSelector value={selectedFY} onChange={setSelectedFY} />
             </div>
-            <div className="pt-5 text-sm text-gray-500">
+            <div className="pt-5 text-sm text-gray-500 dark:text-gray-400">
               {loadingInvoices ? (
-                <span className="text-gray-400">Loading…</span>
+                <span className="text-gray-400 dark:text-gray-500">Loading…</span>
               ) : loadError ? (
-                <span className="text-red-600">{loadError}</span>
+                <span className="text-red-600 dark:text-red-400">{loadError}</span>
               ) : (
                 <span>
-                  <span className="font-semibold text-gray-800">{invoices.length}</span>{' '}
+                  <span className="font-semibold text-gray-800 dark:text-gray-200">{invoices.length}</span>{' '}
                   accepted invoice{invoices.length !== 1 ? 's' : ''}
                 </span>
               )}
@@ -1630,7 +1629,7 @@ export default function XmlGeneratorPage() {
           </div>
 
           {company && !company.tally_company_name && (
-            <div className="mb-4 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 text-sm text-amber-800">
+            <div className="mb-4 flex items-center gap-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2.5 text-sm text-amber-800 dark:text-amber-300">
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
@@ -1642,16 +1641,16 @@ export default function XmlGeneratorPage() {
           )}
 
           {/* Voucher mode */}
-          <div className="border-t border-gray-100 pt-4 mb-4">
-            <p className="text-xs font-semibold text-gray-600 mb-2">Voucher Mode</p>
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-4 mb-4">
+            <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">Voucher Mode</p>
             <div className="flex gap-3">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="voucherMode" value="accounting_only" checked={voucherMode === 'accounting_only'} onChange={() => { setVoucherMode('accounting_only'); if (company) updateCompany(company.id, { voucher_mode: 'accounting_only' }).catch(() => {}); }} className="accent-indigo-600" />
-                <span className="text-sm text-gray-700">Accounting only <span className="text-xs text-gray-400">(HSN-aggregated, no stock items)</span></span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Accounting only <span className="text-xs text-gray-400 dark:text-gray-500">(HSN-aggregated, no stock items)</span></span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="radio" name="voucherMode" value="inventory" checked={voucherMode === 'inventory'} onChange={() => { setVoucherMode('inventory'); if (company) updateCompany(company.id, { voucher_mode: 'inventory' }).catch(() => {}); }} className="accent-indigo-600" />
-                <span className="text-sm text-gray-700">Inventory <span className="text-xs text-gray-400">(item-level qty, rate, discount)</span></span>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Inventory <span className="text-xs text-gray-400 dark:text-gray-500">(item-level qty, rate, discount)</span></span>
               </label>
             </div>
           </div>
@@ -1659,12 +1658,12 @@ export default function XmlGeneratorPage() {
         </div>
 
         {/* ── Step 2: Preview ── */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-1">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">2</span>
             Preview Ledger Assignments
           </h2>
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
             The system analyses your accepted invoices and shows every ledger entry that will be created in Tally.
             Red rows indicate issues that will cause that invoice to be skipped.
           </p>
@@ -1678,34 +1677,34 @@ export default function XmlGeneratorPage() {
           </button>
 
           {previewError && (
-            <p className="mt-3 text-sm text-red-600">{previewError}</p>
+            <p className="mt-3 text-sm text-red-600 dark:text-red-400">{previewError}</p>
           )}
 
           {previewRows && (
             <div className="mt-5 space-y-4">
               {/* Summary toolbar */}
               <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-2">
-                  <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="flex items-center gap-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-2">
+                  <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
-                  <span className="text-sm font-semibold text-green-800">
+                  <span className="text-sm font-semibold text-green-800 dark:text-green-400">
                     {previewInvoiceCount} invoice{previewInvoiceCount !== 1 ? 's' : ''} ready
                   </span>
                 </div>
                 {previewSuggestedCount > 0 && (
                   <button
                     onClick={() => setShowSuggestionDrillDown((v) => !v)}
-                    className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 hover:bg-amber-100 transition-colors text-left"
+                    className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors text-left"
                   >
-                    <span className="text-sm font-semibold text-amber-800">
+                    <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                       {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''}
                     </span>
                   </button>
                 )}
                 {previewSkippedCount > 0 && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2">
-                    <span className="text-sm font-semibold text-red-800">
+                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-2">
+                    <span className="text-sm font-semibold text-red-800 dark:text-red-400">
                       {previewSkippedCount} invoice{previewSkippedCount !== 1 ? 's' : ''} with errors
                     </span>
                   </div>
@@ -1713,18 +1712,18 @@ export default function XmlGeneratorPage() {
                 {previewWarningCount > 0 && (
                   <button
                     onClick={() => setShowWarningDrillDown((v) => !v)}
-                    className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2 hover:bg-orange-100 transition-colors text-left"
+                    className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg px-4 py-2 hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors text-left"
                   >
-                    <span className="text-sm font-semibold text-orange-700">
+                    <span className="text-sm font-semibold text-orange-700 dark:text-orange-400">
                       {previewWarningCount} warning{previewWarningCount !== 1 ? 's' : ''}
                     </span>
                   </button>
                 )}
                 <button
                   onClick={handleDownloadExcel}
-                  className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
-                  <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
                   Download as Excel
@@ -1733,25 +1732,25 @@ export default function XmlGeneratorPage() {
 
               {/* AI Suggestions drill-down */}
               {showSuggestionDrillDown && suggestionDrillDown.length > 0 && (
-                <div className="border border-amber-200 rounded-lg overflow-hidden">
-                  <div className="bg-amber-50 px-4 py-2.5 flex items-center justify-between">
-                    <span className="text-sm font-semibold text-amber-800">AI Suggestions — fields auto-filled by TallyAI, verify before export</span>
-                    <button onClick={() => setShowSuggestionDrillDown(false)} className="text-amber-500 hover:text-amber-700 text-lg leading-none">×</button>
+                <div className="border border-amber-200 dark:border-amber-700 rounded-lg overflow-hidden">
+                  <div className="bg-amber-50 dark:bg-amber-900/20 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">AI Suggestions — fields auto-filled by TallyAI, verify before export</span>
+                    <button onClick={() => setShowSuggestionDrillDown(false)} className="text-amber-500 dark:text-amber-400 hover:text-amber-700 text-lg leading-none">×</button>
                   </div>
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-amber-100">
+                    <thead className="bg-gray-50 dark:bg-gray-800 border-b border-amber-100 dark:border-amber-800">
                       <tr>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice No</th>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Field</th>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">AI Suggested Value</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Invoice No</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Field</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">AI Suggested Value</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700 bg-white dark:bg-gray-800">
                       {suggestionDrillDown.map((s, i) => (
-                        <tr key={i} className="hover:bg-amber-50/40">
-                          <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{s.invoiceNo}</td>
-                          <td className="px-4 py-2 text-gray-600">{s.field}</td>
-                          <td className="px-4 py-2 text-gray-800 font-mono text-xs">{s.value}</td>
+                        <tr key={i} className="hover:bg-amber-50/40 dark:hover:bg-gray-700/50">
+                          <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-100 whitespace-nowrap">{s.invoiceNo}</td>
+                          <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{s.field}</td>
+                          <td className="px-4 py-2 text-gray-800 dark:text-gray-200 font-mono text-xs">{s.value}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1761,27 +1760,27 @@ export default function XmlGeneratorPage() {
 
               {/* Warnings drill-down */}
               {showWarningDrillDown && warningDrillDown.length > 0 && (
-                <div className="border border-orange-200 rounded-lg overflow-hidden">
-                  <div className="bg-orange-50 px-4 py-2.5 flex items-center justify-between">
-                    <span className="text-sm font-semibold text-orange-800">Warnings — review before downloading XML</span>
-                    <button onClick={() => setShowWarningDrillDown(false)} className="text-orange-400 hover:text-orange-600 text-lg leading-none">×</button>
+                <div className="border border-orange-200 dark:border-orange-800 rounded-lg overflow-hidden">
+                  <div className="bg-orange-50 dark:bg-orange-900/20 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-orange-800 dark:text-orange-400">Warnings — review before downloading XML</span>
+                    <button onClick={() => setShowWarningDrillDown(false)} className="text-orange-400 dark:text-orange-500 hover:text-orange-600 text-lg leading-none">×</button>
                   </div>
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-orange-100">
+                    <thead className="bg-gray-50 dark:bg-gray-800 border-b border-orange-100 dark:border-orange-800">
                       <tr>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Invoice No</th>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Warning</th>
-                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Severity</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Invoice No</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Warning</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Severity</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700 bg-white dark:bg-gray-800">
                       {warningDrillDown.map((w, i) => (
-                        <tr key={i} className="hover:bg-orange-50/40">
-                          <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">{w.invoiceNo}</td>
-                          <td className="px-4 py-2 text-gray-700">{w.warning}</td>
+                        <tr key={i} className="hover:bg-orange-50/40 dark:hover:bg-gray-700/50">
+                          <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-100 whitespace-nowrap">{w.invoiceNo}</td>
+                          <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{w.warning}</td>
                           <td className="px-4 py-2">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                              w.severity === 'Blocking' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                              w.severity === 'Blocking' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300'
                             }`}>
                               {w.severity}
                             </span>
@@ -1965,18 +1964,18 @@ export default function XmlGeneratorPage() {
         </div>
 
         {/* ── Step 3: Generate XML ── */}
-        <div className="bg-white border border-gray-200 rounded-xl p-6 mb-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-1">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">3</span>
             Generate &amp; Download XML
           </h2>
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
             Import masters first (each type separately), then import vouchers. Each button downloads one XML file.
           </p>
 
           {/* Master XML buttons - one per master type */}
           <div className="mb-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Masters (import in order)</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Masters (import in order)</p>
             <div className="flex flex-wrap gap-2">
               {([
                 { type: 'stock_items'      as MasterType, label: 'Stock Items',             color: 'bg-indigo-600 hover:bg-indigo-700' },
@@ -2003,7 +2002,7 @@ export default function XmlGeneratorPage() {
 
           {/* Vouchers button */}
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Vouchers (import after all masters succeed)</p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Vouchers (import after all masters succeed)</p>
             <button
               onClick={handleDownloadVouchersXml}
               disabled={generatingXml || !company || invoices.length === 0}
@@ -2017,23 +2016,23 @@ export default function XmlGeneratorPage() {
           </div>
 
           {xmlBlob && (
-            <p className="mt-3 text-xs text-gray-500">
+            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
               Last downloaded: <span className="font-mono">{xmlFilename}</span>
             </p>
           )}
         </div>
 
         {/* How-to */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-5 py-4 text-sm text-blue-800 dark:text-blue-200">
           <p className="font-semibold mb-2">How to import into Tally</p>
-          <p className="text-xs text-blue-700 mb-2">
+          <p className="text-xs text-blue-700 dark:text-blue-300 mb-2">
             Import each master type separately first, then import vouchers. Safe to re-import - Tally silently skips masters that already exist.
           </p>
-          <ol className="list-decimal list-inside space-y-1.5 text-blue-700 text-xs">
+          <ol className="list-decimal list-inside space-y-1.5 text-blue-700 dark:text-blue-300 text-xs">
             <li>Open Tally → select company <strong>{company?.tally_company_name ?? '-'}</strong></li>
             <li>
               <strong>Import each master:</strong> Gateway of Tally → Import Data → Masters → select the file
-              <span className="block ml-5 mt-0.5 text-blue-600">Order: Stock Items → Purchase Ledgers → Expense Ledgers → Duties &amp; Taxes → Sundry Creditors</span>
+              <span className="block ml-5 mt-0.5 text-blue-600 dark:text-blue-400">Order: Stock Items → Purchase Ledgers → Expense Ledgers → Duties &amp; Taxes → Sundry Creditors</span>
             </li>
             <li>
               <strong>Import Vouchers</strong> only after all masters succeed: Import Data → Vouchers → select <em>…_vouchers.xml</em>
@@ -2041,6 +2040,6 @@ export default function XmlGeneratorPage() {
           </ol>
         </div>
       </main>
-    </div>
+    </AppLayout>
   );
 }

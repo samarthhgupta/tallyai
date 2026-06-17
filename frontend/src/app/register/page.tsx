@@ -9,7 +9,7 @@ import type { RejectedRecord } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR, buildFullTaxSummary, calcLineAmount } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { getFYList, currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
@@ -91,12 +91,12 @@ function ITCBadge({
   };
 
   if (!status || status === 'not_applicable') {
-    return <span className="text-gray-300 text-xs">—</span>;
+    return <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>;
   }
 
   if (status === 'eligible') {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
+      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400 font-medium">
         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
         </svg>
@@ -112,38 +112,38 @@ function ITCBadge({
         <button
           ref={btnRef}
           onClick={handleOpen}
-          className="inline-flex items-center gap-1 text-xs text-indigo-700 font-medium hover:text-indigo-900"
+          className="inline-flex items-center gap-1 text-xs text-indigo-700 dark:text-indigo-300 font-medium hover:text-indigo-900"
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
           </svg>
           Reviewed
-          <svg className="w-3 h-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-3 h-3 text-indigo-400 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <circle cx="12" cy="12" r="9" strokeWidth="2" />
             <path strokeLinecap="round" strokeWidth="2" d="M12 8v4m0 4h.01" />
           </svg>
         </button>
         {open && popoverPos && (
           <div
-            className="fixed z-[200] w-64 bg-white border border-gray-200 rounded-xl shadow-xl p-3"
+            className="fixed z-[200] w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-3"
             style={{ top: popoverPos.top, left: popoverPos.left }}
           >
-            <p className="text-xs font-semibold text-indigo-700 mb-1.5">✓ Reviewed & Approved</p>
+            <p className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-1.5">✓ Reviewed & Approved</p>
             {audit ? (
-              <div className="space-y-1 text-xs text-gray-600">
+              <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
                 {audit.original_remark && (
-                  <p><span className="font-medium text-gray-500">Original risk:</span> {audit.original_remark}</p>
+                  <p><span className="font-medium text-gray-500 dark:text-gray-400">Original risk:</span> {audit.original_remark}</p>
                 )}
                 {audit.review_reason && (
-                  <p><span className="font-medium text-gray-500">Approved because:</span> {audit.review_reason}</p>
+                  <p><span className="font-medium text-gray-500 dark:text-gray-400">Approved because:</span> {audit.review_reason}</p>
                 )}
-                <p className="text-gray-400 mt-1">
+                <p className="text-gray-400 dark:text-gray-500 mt-1">
                   By {audit.reviewed_by}<br />
                   {new Date(audit.reviewed_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
             ) : (
-              <p className="text-xs text-gray-500">ITC claim approved by accountant.</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">ITC claim approved by accountant.</p>
             )}
           </div>
         )}
@@ -159,32 +159,32 @@ function ITCBadge({
       <button
         ref={btnRef}
         onClick={handleOpen}
-        className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium hover:text-amber-900"
+        className="inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400 font-medium hover:text-amber-900"
       >
         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
         </svg>
         At Risk
-        <svg className="w-3 h-3 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-3 h-3 text-amber-400 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <circle cx="12" cy="12" r="9" strokeWidth="2" />
           <path strokeLinecap="round" strokeWidth="2" d="M12 8v4m0 4h.01" />
         </svg>
       </button>
       {open && popoverPos && (
         <div
-          className="fixed z-[200] w-64 bg-white border border-amber-200 rounded-xl shadow-xl p-3"
+          className="fixed z-[200] w-64 bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-700 rounded-xl shadow-xl p-3"
           style={{ top: popoverPos.top, left: popoverPos.left }}
         >
-          <p className="text-xs font-semibold text-amber-700 mb-1.5">⚠ ITC Risk Reason</p>
+          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1.5">⚠ ITC Risk Reason</p>
           {displayRemark ? (
-            <p className="text-xs text-gray-700 mb-2">{displayRemark}</p>
+            <p className="text-xs text-gray-700 dark:text-gray-300 mb-2">{displayRemark}</p>
           ) : (
-            <p className="text-xs text-gray-500 mb-2">Potential ITC eligibility concern. Verify with supplier filing status.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Potential ITC eligibility concern. Verify with supplier filing status.</p>
           )}
           {onMarkEligible && (
             <button
               onClick={() => { setOpen(false); onMarkEligible(); }}
-              className="w-full text-xs font-semibold text-indigo-600 border border-indigo-300 rounded-lg px-2 py-1.5 hover:bg-indigo-50 transition-colors"
+              className="w-full text-xs font-semibold text-indigo-600 dark:text-indigo-400 border border-indigo-300 dark:border-indigo-800 rounded-lg px-2 py-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
             >
               Mark as ITC Eligible →
             </button>
@@ -215,37 +215,37 @@ function ITCReviewModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
         <div className="flex items-start gap-3 mb-4">
-          <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 mt-0.5">
-            <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-9 h-9 rounded-full bg-indigo-100 dark:bg-indigo-800 flex items-center justify-center shrink-0 mt-0.5">
+            <svg className="w-5 h-5 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
           <div className="min-w-0">
-            <h3 className="font-semibold text-gray-900">Override ITC Risk Flag</h3>
-            <p className="text-sm text-gray-500 mt-0.5 truncate">
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100">Override ITC Risk Flag</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 truncate">
               {invoice.invoice_number || '—'} · {invoice.vendor_name}
             </p>
           </div>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 mb-4">
-          <p className="text-xs font-semibold text-amber-700 mb-0.5">Original Risk Reason</p>
-          <p className="text-xs text-amber-800">{originalRemark}</p>
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-3 py-2.5 mb-4">
+          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-0.5">Original Risk Reason</p>
+          <p className="text-xs text-amber-800 dark:text-amber-300">{originalRemark}</p>
         </div>
 
-        <label className="block text-xs font-medium text-gray-600 mb-1">
-          Reason for Approval <span className="text-gray-400 font-normal">(optional)</span>
+        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          Reason for Approval <span className="text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
         </label>
         <textarea
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           rows={3}
           placeholder="e.g. Vendor confirmed filing · GSTIN verified manually · Management approval obtained"
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none mb-1"
+          className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none mb-1"
         />
-        <p className="text-xs text-gray-400 mb-4">This will be stored in the audit trail with your email and timestamp.</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">This will be stored in the audit trail with your email and timestamp.</p>
 
         <div className="flex gap-2">
           <button
@@ -258,7 +258,7 @@ function ITCReviewModal({
           <button
             onClick={onCancel}
             disabled={loading}
-            className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             Cancel
           </button>
@@ -274,26 +274,26 @@ function SummaryCard({ label, value, sub, accent }: {
   label: string; value: string; sub?: string; accent?: 'green' | 'amber' | 'indigo';
 }) {
   const accClasses = accent === 'green'
-    ? 'border-green-200 bg-green-50/40'
+    ? 'border-green-200 dark:border-green-800 bg-green-50/40 dark:bg-green-900/20'
     : accent === 'amber'
-    ? 'border-amber-200 bg-amber-50/40'
+    ? 'border-amber-200 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-900/20'
     : accent === 'indigo'
-    ? 'border-indigo-200 bg-indigo-50/40'
-    : 'border-gray-200 bg-white';
+    ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-900/30'
+    : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800';
 
   const valClasses = accent === 'green'
-    ? 'text-green-700'
+    ? 'text-green-700 dark:text-green-400'
     : accent === 'amber'
-    ? 'text-amber-700'
+    ? 'text-amber-700 dark:text-amber-400'
     : accent === 'indigo'
-    ? 'text-indigo-700'
-    : 'text-gray-900';
+    ? 'text-indigo-700 dark:text-indigo-300'
+    : 'text-gray-900 dark:text-gray-100';
 
   return (
     <div className={`border rounded-xl px-4 py-3.5 ${accClasses}`}>
-      <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{label}</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400 font-medium uppercase tracking-wide">{label}</p>
       <p className={`text-lg font-bold mt-0.5 ${valClasses}`}>{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+      {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -631,8 +631,7 @@ export default function PurchaseRegisterPage() {
   void getFYList;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
+    <AppLayout>
 
       {/* ── Detail Panel ── */}
       {detailInvoice && (
@@ -666,13 +665,13 @@ export default function PurchaseRegisterPage() {
 
       {/* ── Voided Invoices Overlay ── */}
       {showRejected && (
-        <div className="fixed inset-0 z-50 bg-white flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+        <div className="fixed inset-0 z-50 bg-white dark:bg-gray-800 flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Voided Invoices</h2>
-              <p className="text-xs text-gray-500 mt-0.5">{selectedCompany?.name}{selectedFY ? ` · ${selectedFY}` : ''}</p>
+              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Voided Invoices</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{selectedCompany?.name}{selectedFY ? ` · ${selectedFY}` : ''}</p>
             </div>
-            <button onClick={() => setShowRejected(false)} className="text-gray-400 hover:text-gray-600">
+            <button onClick={() => setShowRejected(false)} className="text-gray-400 dark:text-gray-500 hover:text-gray-600">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -683,35 +682,35 @@ export default function PurchaseRegisterPage() {
               <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" /></div>
             ) : rejectedRecords.length === 0 ? (
               <div className="text-center py-16">
-                <p className="text-sm font-medium text-gray-700">No voided invoices found</p>
-                <p className="text-xs text-gray-400 mt-1">Invoices moved to rejected will appear here.</p>
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">No voided invoices found</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Invoices moved to rejected will appear here.</p>
               </div>
             ) : (
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+              <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-200">
+                    <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                       <tr>
                         {['#','Invoice #','Vendor','GSTIN','Date','Period','Total','Reason','Voided On','Voided By',''].map(h => (
-                          <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                          <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                       {rejectedRecords.map((rec, idx) => (
-                        <tr key={rec.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
-                          <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">{rec.invoice_number || '—'}</td>
-                          <td className="px-4 py-3 text-gray-700 max-w-[140px] truncate" title={rec.vendor_name ?? undefined}>{rec.vendor_name || '—'}</td>
-                          <td className="px-4 py-3 font-mono text-gray-500 text-xs whitespace-nowrap">{rec.vendor_gstin || '—'}</td>
-                          <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">{rec.invoice_date || '—'}</td>
-                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{rec.period_label || '—'}</td>
-                          <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap">{rec.total != null ? `₹${formatINR(rec.total)}` : '—'}</td>
-                          <td className="px-4 py-3 text-gray-500 text-xs max-w-[140px] truncate" title={rec.rejection_reason ?? undefined}>{rec.rejection_reason || '—'}</td>
-                          <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">{fmtDateTime(rec.rejected_at)}</td>
-                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{rec.moved_by_email || '—'}</td>
+                        <tr key={rec.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                          <td className="px-4 py-3 text-gray-400 dark:text-gray-500 text-xs">{idx + 1}</td>
+                          <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100 whitespace-nowrap">{rec.invoice_number || '—'}</td>
+                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300 max-w-[140px] truncate" title={rec.vendor_name ?? undefined}>{rec.vendor_name || '—'}</td>
+                          <td className="px-4 py-3 font-mono text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{rec.vendor_gstin || '—'}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{rec.invoice_date || '—'}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{rec.period_label || '—'}</td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap">{rec.total != null ? `₹${formatINR(rec.total)}` : '—'}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs max-w-[140px] truncate" title={rec.rejection_reason ?? undefined}>{rec.rejection_reason || '—'}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmtDateTime(rec.rejected_at)}</td>
+                          <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{rec.moved_by_email || '—'}</td>
                           <td className="px-4 py-3">
-                            <button onClick={() => handleRestoreRejected(rec)} className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
+                            <button onClick={() => handleRestoreRejected(rec)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 hover:underline whitespace-nowrap">
                               Restore
                             </button>
                           </td>
@@ -729,27 +728,27 @@ export default function PurchaseRegisterPage() {
       {/* ── Delete All Modal ── */}
       {showDeleteAll && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
             <div className="flex items-start gap-3 mb-4">
-              <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="w-9 h-9 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
               </div>
               <div>
-                <h3 className="font-semibold text-gray-900">Delete all data for {selectedCompany?.name}?</h3>
-                <p className="text-sm text-gray-500 mt-1">
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100">Delete all data for {selectedCompany?.name}?</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                   Permanently deletes <strong>all {invoices.length} invoices</strong>. Cannot be undone.
                 </p>
               </div>
             </div>
-            <p className="text-sm text-gray-600 mb-2">Type <strong>{selectedCompany?.name}</strong> to confirm:</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">Type <strong>{selectedCompany?.name}</strong> to confirm:</p>
             <input
               type="text"
               value={deleteAllConfirmText}
               onChange={(e) => setDeleteAllConfirmText(e.target.value)}
               placeholder={selectedCompany?.name ?? ''}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300 mb-3"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300 mb-3"
             />
             <div className="flex gap-2">
               <button
@@ -760,7 +759,7 @@ export default function PurchaseRegisterPage() {
                 {deleteAllLoading ? 'Deleting…' : 'Yes, delete all'}
               </button>
               <button onClick={() => { setShowDeleteAll(false); setDeleteAllConfirmText(''); }}
-                className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+                className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
                 Cancel
               </button>
             </div>
@@ -771,16 +770,16 @@ export default function PurchaseRegisterPage() {
       {/* ── Bulk Reject Modal ── */}
       {showBulkRejectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
-            <h3 className="font-semibold text-gray-900 mb-1">Void {selectedIds.size} invoice{selectedIds.size !== 1 ? 's' : ''}?</h3>
-            <p className="text-sm text-gray-500 mb-4">They will be moved to Voided Invoices and removed from the register.</p>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Reason (optional)</label>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Void {selectedIds.size} invoice{selectedIds.size !== 1 ? 's' : ''}?</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">They will be moved to Voided Invoices and removed from the register.</p>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Reason (optional)</label>
             <input
               type="text"
               value={bulkRejectReason}
               onChange={(e) => setBulkRejectReason(e.target.value)}
               placeholder="e.g. Duplicate, wrong vendor, etc."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 mb-4"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 mb-4"
             />
             <div className="flex gap-2">
               <button
@@ -790,7 +789,7 @@ export default function PurchaseRegisterPage() {
               >
                 {bulkActionLoading ? 'Voiding…' : 'Void invoices'}
               </button>
-              <button onClick={() => { setShowBulkRejectModal(false); setBulkRejectReason(''); }} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50">
+              <button onClick={() => { setShowBulkRejectModal(false); setBulkRejectReason(''); }} className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-semibold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
                 Cancel
               </button>
             </div>
@@ -799,19 +798,19 @@ export default function PurchaseRegisterPage() {
       )}
 
       {/* ── Main content ── */}
-      <main className="ml-60 flex-1 px-6 py-8 min-w-0">
+      <main className="flex-1 px-6 py-8 min-w-0">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Purchase Register</h1>
-            <p className="text-sm text-gray-500 mt-0.5">All accepted invoices · source of truth for Tally export and GST returns</p>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Purchase Register</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">All accepted invoices · source of truth for Tally export and GST returns</p>
           </div>
           <div className="flex items-center gap-2">
             {selectedCompanyId && invoices.length > 0 && (
               <button
                 onClick={exportToExcel}
-                className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-lg transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -822,7 +821,7 @@ export default function PurchaseRegisterPage() {
             {selectedCompanyId && invoices.length > 0 && (
               <button
                 onClick={() => { setShowDeleteAll(true); setDeleteAllConfirmText(''); }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 hover:bg-red-50 text-red-600 text-sm font-medium rounded-lg transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -844,12 +843,12 @@ export default function PurchaseRegisterPage() {
 
         {/* Bulk action bar */}
         {selectedIds.size > 0 && (
-          <div className="flex items-center gap-3 mb-4 px-4 py-3 bg-indigo-50 border border-indigo-200 rounded-xl">
-            <span className="text-sm font-medium text-indigo-800">{selectedIds.size} selected</span>
+          <div className="flex items-center gap-3 mb-4 px-4 py-3 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800 rounded-xl">
+            <span className="text-sm font-medium text-indigo-800 dark:text-indigo-300">{selectedIds.size} selected</span>
             <div className="flex items-center gap-2 ml-2">
               <button
                 onClick={handleBulkExport}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -858,7 +857,7 @@ export default function PurchaseRegisterPage() {
               </button>
               <button
                 onClick={() => setShowBulkRejectModal(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-amber-300 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 text-sm font-medium rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1.036 7.255A2 2 0 008.028 17h7.944a2 2 0 001.992-1.745L19 8" />
@@ -868,7 +867,7 @@ export default function PurchaseRegisterPage() {
               <button
                 onClick={handleBulkDelete}
                 disabled={bulkActionLoading}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-300 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -876,24 +875,24 @@ export default function PurchaseRegisterPage() {
                 {bulkActionLoading ? 'Deleting…' : 'Delete'}
               </button>
             </div>
-            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium">
               Clear selection
             </button>
           </div>
         )}
 
         {/* Filters */}
-        <div className="bg-white border border-gray-200 rounded-xl px-5 py-3.5 mb-5 flex flex-wrap items-end gap-4">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-5 py-3.5 mb-5 flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Financial Year</label>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Financial Year</label>
             <FYPeriodSelector value={selectedFY} onChange={setSelectedFY} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">ITC Status</label>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">ITC Status</label>
             <select
               value={selectedITC}
               onChange={(e) => setSelectedITC(e.target.value as ITCStatus | '')}
-              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 text-sm bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="">All</option>
               <option value="eligible">✓ Eligible</option>
@@ -904,10 +903,10 @@ export default function PurchaseRegisterPage() {
           </div>
           {selectedCompanyId && (
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">&nbsp;</label>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">&nbsp;</label>
               <button
                 onClick={handleShowRejected}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 text-sm font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1.036 7.255A2 2 0 008.028 17h7.944a2 2 0 001.992-1.745L19 8" />
@@ -917,7 +916,7 @@ export default function PurchaseRegisterPage() {
             </div>
           )}
           {selectedCompanyId && (
-            <div className="ml-auto text-xs text-gray-400 self-end pb-1.5">
+            <div className="ml-auto text-xs text-gray-400 dark:text-gray-500 self-end pb-1.5">
               {loading ? 'Loading…' : `${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
               {selectedCompany ? ` · ${selectedCompany.name}` : ''}
             </div>
@@ -957,12 +956,12 @@ export default function PurchaseRegisterPage() {
 
         {/* Error */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700 mb-4">{error}</div>
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-sm text-red-700 dark:text-red-400 mb-4">{error}</div>
         )}
 
         {/* No company */}
         {!selectedCompanyId && !loading && (
-          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-400 dark:text-gray-500">
             <p className="text-sm">Select a company above to view the Purchase Register.</p>
           </div>
         )}
@@ -976,17 +975,17 @@ export default function PurchaseRegisterPage() {
 
         {/* Empty state */}
         {!loading && selectedCompanyId && invoices.length === 0 && (
-          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center">
-            <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-              <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center">
+            <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-gray-400 dark:text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </div>
-            <p className="text-sm font-medium text-gray-700">No accepted invoices found</p>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">No accepted invoices found</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
               {selectedITC ? 'Try changing the filters above.' : 'Upload and accept invoices to populate the register.'}
             </p>
-            <button onClick={() => router.push('/upload')} className="mt-4 text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+            <button onClick={() => router.push('/upload')} className="mt-4 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium">
               Go to Upload →
             </button>
           </div>
@@ -994,9 +993,9 @@ export default function PurchaseRegisterPage() {
 
         {/* ── Register table ── */}
         {!loading && invoices.length > 0 && (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                 <tr>
                   <th className="px-3 py-2.5 w-8">
                     <input
@@ -1004,10 +1003,10 @@ export default function PurchaseRegisterPage() {
                       checked={selectedIds.size === sortedInvoices.length && sortedInvoices.length > 0}
                       ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < sortedInvoices.length; }}
                       onChange={toggleSelectAll}
-                      className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer"
+                      className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 cursor-pointer"
                     />
                   </th>
-                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-7">#</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-7">#</th>
                   {([
                     { key: 'invoice_number', label: 'Invoice #', align: 'left' },
                     { key: 'vendor', label: 'Vendor', align: 'left' },
@@ -1025,12 +1024,12 @@ export default function PurchaseRegisterPage() {
                     <th
                       key={label}
                       onClick={key ? () => handleSort(key) : undefined}
-                      className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide ${align === 'right' ? 'text-right' : 'text-left'} ${key ? 'cursor-pointer select-none hover:text-gray-800' : ''}`}
+                      className={`px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide ${align === 'right' ? 'text-right' : 'text-left'} ${key ? 'cursor-pointer select-none hover:text-gray-800 dark:hover:text-gray-200' : ''}`}
                     >
                       <span className="inline-flex items-center gap-1">
                         {label}
                         {key && (
-                          <span className="text-gray-300">
+                          <span className="text-gray-300 dark:text-gray-600">
                             {sortKey === key ? (sortAsc ? '↑' : '↓') : '↕'}
                           </span>
                         )}
@@ -1040,58 +1039,58 @@ export default function PurchaseRegisterPage() {
                   <th className="px-2 py-2.5 w-8" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {sortedInvoices.map((inv, idx) => {
                   const f = financialsById.get(inv.id)!;
 
                   return (
-                    <tr key={inv.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(inv.id) ? 'bg-indigo-50/50' : ''}`}>
+                    <tr key={inv.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${selectedIds.has(inv.id) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : ''}`}>
                       <td className="px-3 py-2.5">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(inv.id)}
                           onChange={() => toggleSelect(inv.id)}
                           onClick={(e) => e.stopPropagation()}
-                          className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 cursor-pointer"
+                          className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 cursor-pointer"
                         />
                       </td>
-                      <td className="px-3 py-2.5 text-gray-400 tabular-nums">{idx + 1}</td>
+                      <td className="px-3 py-2.5 text-gray-400 dark:text-gray-500 tabular-nums">{idx + 1}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         <button
                           onClick={() => setDetailInvoice(inv)}
-                          className="font-semibold text-indigo-600 hover:text-indigo-800 hover:underline text-left text-xs"
+                          className="font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 hover:underline text-left text-xs"
                         >
-                          {inv.invoice_number || <span className="text-gray-400 italic">No #</span>}
+                          {inv.invoice_number || <span className="text-gray-400 dark:text-gray-500 italic">No #</span>}
                         </button>
                       </td>
-                      <td className="px-3 py-2.5 text-gray-700 max-w-[150px] truncate" title={inv.vendor_name}>
+                      <td className="px-3 py-2.5 text-gray-700 dark:text-gray-300 max-w-[150px] truncate" title={inv.vendor_name}>
                         {inv.vendor_name}
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-gray-500 whitespace-nowrap">
-                        {inv.vendor_gstin || <span className="text-gray-300 text-xs">N/A</span>}
+                      <td className="px-3 py-2.5 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        {inv.vendor_gstin || <span className="text-gray-300 dark:text-gray-600 text-xs">N/A</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-gray-600 dark:text-gray-400 whitespace-nowrap">
                         {fmtDate(inv.invoice_date)}
                       </td>
-                      <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                         {inv.period_label || ''}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-800 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-800 dark:text-gray-200 whitespace-nowrap">
                         {formatINR(f.netTaxable)}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {f.cgst > 0 ? formatINR(f.cgst) : <span className="text-gray-300">0.00</span>}
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                        {f.cgst > 0 ? formatINR(f.cgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {f.sgst > 0 ? formatINR(f.sgst) : <span className="text-gray-300">0.00</span>}
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                        {f.sgst > 0 ? formatINR(f.sgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 whitespace-nowrap">
-                        {f.igst > 0 ? formatINR(f.igst) : <span className="text-gray-300">0.00</span>}
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                        {f.igst > 0 ? formatINR(f.igst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 whitespace-nowrap text-xs">
-                        {f.roundOff !== 0 ? (f.roundOff > 0 ? '+' : '') + formatINR(f.roundOff) : <span className="text-gray-200">0.00</span>}
+                      <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
+                        {f.roundOff !== 0 ? (f.roundOff > 0 ? '+' : '') + formatINR(f.roundOff) : <span className="text-gray-200 dark:text-gray-600">0.00</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap">
                         ₹{formatINR(f.total)}
                       </td>
                       <td className="px-3 py-2.5">
@@ -1106,7 +1105,7 @@ export default function PurchaseRegisterPage() {
                           onClick={() => handleDeleteInvoice(inv.id, inv.invoice_number || inv.vendor_name)}
                           disabled={deletingId === inv.id}
                           title="Delete this invoice"
-                          className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-40"
+                          className="text-gray-300 dark:text-gray-600 hover:text-red-500 transition-colors disabled:opacity-40"
                         >
                           {deletingId === inv.id ? (
                             <svg className="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
@@ -1126,25 +1125,25 @@ export default function PurchaseRegisterPage() {
               </tbody>
 
               {/* Totals footer */}
-              <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+              <tfoot className="bg-gray-50 dark:bg-gray-800 border-t-2 border-gray-200 dark:border-gray-700">
                 <tr>
-                  <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
                     Total - {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">{formatINR(totalTaxable)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">{formatINR(totalTaxable)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
                     {totalCGST > 0 ? formatINR(totalCGST) : '0.00'}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
                     {totalSGST > 0 ? formatINR(totalSGST) : '0.00'}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
                     {totalIGST > 0 ? formatINR(totalIGST) : '0.00'}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap text-xs">
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap text-xs">
                     {totalRoundOff !== 0 ? (totalRoundOff > 0 ? '+' : '') + formatINR(totalRoundOff) : '0.00'}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 whitespace-nowrap">₹{formatINR(grandTotal)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">₹{formatINR(grandTotal)}</td>
                   <td className="px-3 py-2.5" />
                   <td className="px-2 py-2.5" />
                 </tr>
@@ -1154,6 +1153,6 @@ export default function PurchaseRegisterPage() {
         )}
 
       </main>
-    </div>
+    </AppLayout>
   );
 }

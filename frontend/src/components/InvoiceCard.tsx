@@ -109,9 +109,9 @@ function saveAuditLog(key: string, entries: AuditEntry[]) {
 
 export function ConfidenceBadge({ score }: { score: number }) {
   const pct = Math.round(score * 100);
-  if (pct >= 80) return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">High {pct}%</span>;
-  if (pct >= 60) return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Medium {pct}%</span>;
-  return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Low {pct}%</span>;
+  if (pct >= 80) return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">High {pct}%</span>;
+  if (pct >= 60) return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">Medium {pct}%</span>;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">Low {pct}%</span>;
 }
 
 // Maps a confidence_reason string to its server-side penalty amount (percentage points).
@@ -136,7 +136,7 @@ function ConfidenceInfoPopover({ score, reasons }: { score: number; reasons: str
       <button
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         title="Why is confidence below 90%? Click to see breakdown."
-        className="ml-1 text-amber-500 hover:text-amber-700 focus:outline-none"
+        className="ml-1 text-amber-500 dark:text-amber-400 hover:text-amber-700 focus:outline-none"
         aria-label="Confidence breakdown"
       >
         <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
@@ -147,31 +147,31 @@ function ConfidenceInfoPopover({ score, reasons }: { score: number; reasons: str
         <>
           {/* backdrop */}
           <span className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <span className="absolute left-0 top-6 z-50 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
-            <p className="font-semibold text-gray-800 mb-2 border-b border-gray-100 pb-1.5">Confidence Breakdown</p>
+          <span className="absolute left-0 top-6 z-50 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3 text-xs">
+            <p className="font-semibold text-gray-800 dark:text-gray-200 mb-2 border-b border-gray-100 dark:border-gray-700 pb-1.5">Confidence Breakdown</p>
             <div className="space-y-1.5">
-              <div className="flex justify-between text-gray-600">
+              <div className="flex justify-between text-gray-600 dark:text-gray-400">
                 <span>AI extraction confidence</span>
                 <span className="font-medium tabular-nums">{basePct}%</span>
               </div>
               {reasons.map((r, i) => {
                 const penalty = penaltyForReason(r);
                 return (
-                  <div key={i} className="flex justify-between text-red-600">
+                  <div key={i} className="flex justify-between text-red-600 dark:text-red-400">
                     <span className="flex-1 pr-2 leading-tight">{r}</span>
                     {penalty > 0 && <span className="font-medium tabular-nums shrink-0">−{penalty}%</span>}
                   </div>
                 );
               })}
               {reasons.length === 0 && (
-                <p className="text-gray-500 italic">No specific penalties recorded. Claude rated this extraction at {pct}% confidence.</p>
+                <p className="text-gray-500 dark:text-gray-400 italic">No specific penalties recorded. Claude rated this extraction at {pct}% confidence.</p>
               )}
-              <div className="flex justify-between font-semibold text-gray-800 border-t border-gray-200 pt-1.5 mt-1">
+              <div className="flex justify-between font-semibold text-gray-800 dark:text-gray-200 border-t border-gray-200 dark:border-gray-700 pt-1.5 mt-1">
                 <span>Final confidence score</span>
                 <span className="tabular-nums">{pct}%</span>
               </div>
             </div>
-            <p className="mt-2 text-gray-400 leading-tight">
+            <p className="mt-2 text-gray-400 dark:text-gray-500 leading-tight">
               Confidence reflects how clearly the invoice could be read and whether all computed totals reconcile.
             </p>
           </span>
@@ -186,18 +186,18 @@ export function ConfidenceBar({ score }: { score: number }) {
   const color = pct >= 80 ? 'bg-green-500' : pct >= 60 ? 'bg-amber-400' : 'bg-red-500';
   return (
     <div className="flex items-center gap-2">
-      <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div className="w-20 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
         <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs text-gray-500">{pct}%</span>
+      <span className="text-xs text-gray-500 dark:text-gray-400">{pct}%</span>
     </div>
   );
 }
 
 function CompanyMatchBadge({ match }: { match: MatchResult }) {
-  if (match === 'gstin_match') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 border border-green-200">✓ GSTIN matched</span>;
-  if (match === 'name_match') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200">~ Name matched</span>;
-  if (match === 'mismatch') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">✗ Company mismatch</span>;
+  if (match === 'gstin_match') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800">✓ GSTIN matched</span>;
+  if (match === 'name_match') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">~ Name matched</span>;
+  if (match === 'mismatch') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800">✗ Company mismatch</span>;
   return null;
 }
 
@@ -205,17 +205,17 @@ export function DuplicateBanner({
   reason, detail, onReject, onKeep,
 }: { reason: 'batch' | 'history'; detail: string; onReject: () => void; onKeep: () => void }) {
   return (
-    <div className="mx-5 mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3">
+    <div className="mx-5 mt-4 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3">
       <div className="flex items-start gap-3">
-        <svg className="w-5 h-5 text-red-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg className="w-5 h-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
         </svg>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-red-800">Possible duplicate invoice</p>
-          <p className="text-sm text-red-700 mt-0.5">{detail}</p>
+          <p className="text-sm font-semibold text-red-800 dark:text-red-300">Possible duplicate invoice</p>
+          <p className="text-sm text-red-700 dark:text-red-400 mt-0.5">{detail}</p>
           <div className="flex gap-3 mt-2">
             <button onClick={onReject} className="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-md hover:bg-red-700 transition-colors">Reject &amp; remove</button>
-            <button onClick={onKeep} className="px-3 py-1.5 border border-red-300 text-red-700 text-xs font-medium rounded-md hover:bg-red-100 transition-colors">Keep anyway</button>
+            <button onClick={onKeep} className="px-3 py-1.5 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 text-xs font-medium rounded-md hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors">Keep anyway</button>
           </div>
         </div>
       </div>
@@ -234,9 +234,9 @@ function HeaderInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`border rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 ${error ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'} ${className}`}
+        className={`border rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:text-gray-100 dark:placeholder-gray-400 ${error ? 'border-red-400 bg-red-50 dark:bg-red-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'} ${className}`}
       />
-      {error && <span className="text-xs text-red-500 mt-0.5">{error}</span>}
+      {error && <span className="text-xs text-red-500 dark:text-red-400 mt-0.5">{error}</span>}
     </span>
   );
 }
@@ -252,7 +252,7 @@ function CellInput({
       max={max}
       step={step}
       onChange={(e) => onChange(e.target.value)}
-      className={`w-full bg-blue-50 border-0 border-b border-blue-300 focus:outline-none focus:border-indigo-500 focus:bg-indigo-50 text-right px-1 py-0.5 text-sm rounded-sm ${className}`}
+      className={`w-full bg-blue-50 dark:bg-blue-900/20 border-0 border-b border-blue-300 dark:border-blue-800 focus:outline-none focus:border-indigo-500 focus:bg-indigo-50 dark:focus:bg-indigo-900/30 text-right px-1 py-0.5 text-sm rounded-sm dark:text-gray-100 ${className}`}
     />
   );
 }
@@ -447,7 +447,7 @@ export function InvoiceCard({
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
-  const borderColor = showDupBanner ? 'border-red-300' : (isMismatched && !editMode) ? 'border-amber-300' : (editMode ? 'border-indigo-400' : 'border-gray-200');
+  const borderColor = showDupBanner ? 'border-red-300 dark:border-red-800' : (isMismatched && !editMode) ? 'border-amber-300 dark:border-amber-700' : (editMode ? 'border-indigo-400 dark:border-indigo-800' : 'border-gray-200 dark:border-gray-700');
 
   // Totals for all rows (goods + charges) used in Tax Summary and Reconciliation
   const allHsnRows = [...hsnRows, ...chargeHsnRows];
@@ -457,10 +457,10 @@ export function InvoiceCard({
   const totalTaxable = allHsnRows.reduce((s, r) => s + r.taxable, 0);
 
   return (
-    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${borderColor} ${editMode ? 'ring-1 ring-indigo-200' : ''}`}>
+    <div className={`bg-white dark:bg-gray-800 rounded-lg border shadow-sm overflow-hidden ${borderColor} ${editMode ? 'ring-1 ring-indigo-200 dark:ring-indigo-800' : ''}`}>
 
       {/* ── Action Bar ── */}
-      <div className={`px-5 py-3 flex items-center justify-between gap-4 flex-wrap ${editMode ? 'bg-indigo-50 border-b border-indigo-100' : 'bg-gray-50 border-b border-gray-100'}`}>
+      <div className={`px-5 py-3 flex items-center justify-between gap-4 flex-wrap ${editMode ? 'bg-indigo-50 dark:bg-indigo-900/30 border-b border-indigo-100 dark:border-indigo-800' : 'bg-gray-50 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700'}`}>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="inline-flex items-center gap-0.5">
             <ConfidenceBadge score={inv.confidence} />
@@ -473,23 +473,23 @@ export function InvoiceCard({
           </span>
           {company && <CompanyMatchBadge match={matchResult} />}
           {matchResult === 'mismatch' && (
-            <span className="text-xs text-red-600">
+            <span className="text-xs text-red-600 dark:text-red-400">
               Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; - not {company?.name}
             </span>
           )}
           {needsReview && !editMode && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700">
               ⚠ Needs Review
             </span>
           )}
           {savedBadge && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 border border-green-200 animate-pulse">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 animate-pulse">
               ✓ Saved
             </span>
           )}
           {sourceUrl && (
             <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 hover:underline">
+              className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 hover:underline">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
@@ -498,7 +498,7 @@ export function InvoiceCard({
           )}
           {!editMode && (
             <button onClick={() => downloadInvoiceExcel(displayInv)}
-              className="inline-flex items-center gap-1 text-xs text-green-700 hover:text-green-900 bg-green-50 hover:bg-green-100 border border-green-200 px-2 py-0.5 rounded transition-colors">
+              className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400 hover:text-green-900 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 border border-green-200 dark:border-green-800 px-2 py-0.5 rounded transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
@@ -510,7 +510,7 @@ export function InvoiceCard({
           {editMode ? (
             <>
               <button onClick={handleCancel}
-                className="px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 transition-colors">
+                className="px-3 py-1.5 text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                 Cancel
               </button>
               <button onClick={handleSave}
@@ -520,7 +520,7 @@ export function InvoiceCard({
             </>
           ) : (
             <button onClick={handleEnterEdit}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-600 rounded-md hover:bg-gray-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
@@ -546,36 +546,36 @@ export function InvoiceCard({
 
       {/* ── Mismatch / Review Banner ── */}
       {(needsReview || (editMode && (isMismatched || mismatchJustResolved))) && (
-        <div className={`mx-5 mt-4 rounded-lg border px-4 py-3 ${mismatchJustResolved ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
+        <div className={`mx-5 mt-4 rounded-lg border px-4 py-3 ${mismatchJustResolved ? 'border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-900/20' : 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'}`}>
           {mismatchJustResolved ? (
-            <div className="flex items-center gap-2 text-green-800">
-              <svg className="w-5 h-5 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="flex items-center gap-2 text-green-800 dark:text-green-300">
+              <svg className="w-5 h-5 text-green-500 dark:text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div>
                 <p className="text-sm font-semibold">✓ Mismatch Resolved</p>
-                <p className="text-xs text-green-700 mt-0.5">
+                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">
                   Computed total ₹{formatINR(computedTotal)} now matches invoice total ₹{formatINR(invoiceTotal)}. Save changes to confirm.
                 </p>
               </div>
             </div>
           ) : (
             <div className="flex items-start gap-3">
-              <svg className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-5 h-5 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-amber-800">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
                   {editMode ? '⚠ Difference Between Computed Value and Invoice Value' : 'Human review required'}
                 </p>
-                <div className="text-sm text-amber-700 mt-0.5">
+                <div className="text-sm text-amber-700 dark:text-amber-400 mt-0.5">
                   {inv.bill_discount_auto_detected && !editMode ? (
                     <p>A bill-level discount of <strong>₹{formatINR(Math.abs(computedTotal - invoiceTotal))}</strong> was <strong>auto-detected</strong> and applied. Please verify against the original invoice.</p>
                   ) : (
                     <div className="flex flex-wrap gap-4 mt-1">
                       <span>Computed: <strong>₹{formatINR(computedTotal)}</strong></span>
                       <span>Invoice: <strong>₹{formatINR(invoiceTotal)}</strong></span>
-                      <span className="text-red-600 font-semibold">
+                      <span className="text-red-600 dark:text-red-400 font-semibold">
                         Difference: {computedTotal > invoiceTotal ? '+' : '−'}₹{formatINR(Math.abs(computedTotal - invoiceTotal))}
                       </span>
                     </div>
@@ -585,11 +585,11 @@ export function InvoiceCard({
                   <div className="flex items-center gap-3 mt-2">
                     {sourceUrl && (
                       <a href={sourceUrl} target="_blank" rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-amber-800 underline hover:text-amber-900">
+                        className="inline-flex items-center gap-1 text-xs font-medium text-amber-800 dark:text-amber-300 underline hover:text-amber-900">
                         Open original →
                       </a>
                     )}
-                    <button onClick={() => setReviewed(true)} className="text-xs font-medium text-amber-700 hover:text-amber-900 underline">
+                    <button onClick={() => setReviewed(true)} className="text-xs font-medium text-amber-700 dark:text-amber-400 hover:text-amber-900 underline">
                       Mark as reviewed ✓
                     </button>
                   </div>
@@ -603,15 +603,15 @@ export function InvoiceCard({
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* Section 1 - Invoice Summary                                          */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      <div className="px-5 py-4 border-t border-gray-100">
-        <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+      <div className="px-5 py-4 border-t border-gray-100 dark:border-gray-700">
+        <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
           1. Invoice Summary
         </h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-2 text-sm">
 
           {/* Invoice No */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Invoice No</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Invoice No</span>
             {editMode
               ? <HeaderInput value={draft.invoice_number} onChange={(v) => setHeader('invoice_number', v)} error={validationErrors['invoice_number']} placeholder="Invoice #" className="flex-1" />
               : <span className="font-medium">{current.invoice_number || ''}</span>}
@@ -619,7 +619,7 @@ export function InvoiceCard({
 
           {/* Invoice Date */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Invoice Date</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Invoice Date</span>
             {editMode
               ? <HeaderInput value={draft.invoice_date} onChange={(v) => setHeader('invoice_date', v)} error={validationErrors['invoice_date']} placeholder="YYYY-MM-DD" className="flex-1" />
               : <span className="font-medium">{current.invoice_date || ''}</span>}
@@ -627,41 +627,41 @@ export function InvoiceCard({
 
           {/* Supplier Name */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Supplier Name</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Supplier Name</span>
             {editMode
               ? <HeaderInput value={draft.vendor_name} onChange={(v) => setHeader('vendor_name', v)} error={validationErrors['vendor_name']} placeholder="Vendor Name" className="flex-1 font-semibold" />
-              : <span className="font-semibold text-gray-900">{current.vendor_name || ''}</span>}
+              : <span className="font-semibold text-gray-900 dark:text-gray-100">{current.vendor_name || ''}</span>}
           </div>
 
           {/* Supplier GSTIN */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Supplier GSTIN</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Supplier GSTIN</span>
             {editMode
               ? <HeaderInput value={draft.vendor_gstin ?? ''} onChange={(v) => setHeader('vendor_gstin', v.toUpperCase())} error={validationErrors['vendor_gstin']} placeholder="GSTIN" className="flex-1 font-mono text-xs" />
-              : <span className="font-mono text-xs">{current.vendor_gstin || ''}{vendorState && vendorState !== 'Unknown' && <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded not-italic font-sans">{vendorState}</span>}</span>}
+              : <span className="font-mono text-xs">{current.vendor_gstin || ''}{vendorState && vendorState !== 'Unknown' && <span className="ml-2 text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded not-italic font-sans">{vendorState}</span>}</span>}
           </div>
 
           {/* Customer Name */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Customer Name</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Customer Name</span>
             <span className="font-medium">{current.buyer_name || ''}</span>
           </div>
 
           {/* Customer GSTIN */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Customer GSTIN</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Customer GSTIN</span>
             <span className="font-mono text-xs">{current.buyer_gstin || ''}</span>
           </div>
 
           {/* Invoice Total */}
           <div className="flex items-baseline gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Invoice Total</span>
-            <span className="font-semibold text-gray-900">₹{formatINR(invoiceTotal)}</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Invoice Total</span>
+            <span className="font-semibold text-gray-900 dark:text-gray-100">₹{formatINR(invoiceTotal)}</span>
           </div>
 
           {/* Confidence Score */}
           <div className="flex items-center gap-2">
-            <span className="text-gray-500 w-36 shrink-0">Confidence</span>
+            <span className="text-gray-500 dark:text-gray-400 w-36 shrink-0">Confidence</span>
             <ConfidenceBar score={inv.confidence} />
           </div>
 
@@ -676,7 +676,7 @@ export function InvoiceCard({
           return visibleReasons.length > 0 ? (
             <ul className="mt-2 space-y-0.5">
               {visibleReasons.map((r, i) => (
-                <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600' : 'text-red-500'}`}>
+                <li key={i} className={`text-xs ${r.includes('✓') ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
                   {r.includes('✓') ? '' : '↓ '}{r}
                 </li>
               ))}
@@ -689,39 +689,39 @@ export function InvoiceCard({
       {/* Section 2 - Goods / Services                                         */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {current.line_items.length > 0 && (
-        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
-          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
             2. Goods / Services
           </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50">
+                <tr className="bg-gray-50 dark:bg-gray-800">
                   {['S.No', 'Description', 'HSN', 'Ledger Name', 'Qty', 'UOM', 'Rate (ex-GST)', 'Disc %', 'Taxable Amount'].map((h) => (
-                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {current.line_items.map((item: LineItem, i: number) => (
-                  <tr key={i} className={`hover:bg-gray-50 ${editMode ? 'bg-blue-50/30' : ''}`}>
+                  <tr key={i} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${editMode ? 'bg-blue-50/30 dark:bg-blue-900/20' : ''}`}>
 
                     {/* S.No */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{i + 1}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 text-center w-10">{i + 1}</td>
 
                     {/* Description */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[160px]">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs min-w-[160px]">
                       {item.description || ''}
                     </td>
 
                     {/* HSN (editable in edit mode - includes GST% inline) */}
-                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs min-w-[140px]">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs min-w-[140px]">
                       {editMode ? (
                         <div className="flex items-center gap-1">
                           <CellInput value={item.hsn.replace(/[\s.]/g, '') || ''} onChange={(v) => setLineItem(i, 'hsn', v)} className="w-20 text-left" />
-                          <span className="text-gray-400 text-xs">@</span>
+                          <span className="text-gray-400 dark:text-gray-500 text-xs">@</span>
                           <CellInput value={item.gst_percent} onChange={(v) => setLineItem(i, 'gst_percent', v)} type="number" min="0" step="0.01" className="w-10" />
-                          <span className="text-gray-400 text-xs">%</span>
+                          <span className="text-gray-400 dark:text-gray-500 text-xs">%</span>
                         </div>
                       ) : (
                         item.hsn.replace(/[\s.]/g, '') || ''
@@ -729,40 +729,40 @@ export function InvoiceCard({
                     </td>
 
                     {/* Ledger Name - display only, auto-derived */}
-                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                       {item.hsn.replace(/[\s.]/g, '') || ''} @ {item.gst_percent}%
                     </td>
 
                     {/* Qty */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">
                       {editMode ? <CellInput value={item.qty} onChange={(v) => setLineItem(i, 'qty', v)} type="number" min="0" step="0.001" className="w-16" /> : item.qty}
                     </td>
 
                     {/* UOM */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs">
                       {editMode ? <CellInput value={item.uom || ''} onChange={(v) => setLineItem(i, 'uom', v)} className="w-14 text-left" /> : (item.uom || '')}
                     </td>
 
                     {/* Rate */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">
                       {editMode ? <CellInput value={item.rate} onChange={(v) => setLineItem(i, 'rate', v)} type="number" min="0" step="0.01" className="w-20" /> : formatINR(item.rate)}
                     </td>
 
                     {/* Disc % */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">
                       {editMode ? <CellInput value={item.disc_percent as number} onChange={(v) => setLineItem(i, 'disc_percent', v)} type="number" min="0" max="100" step="0.01" className="w-14" /> : `${item.disc_percent}%`}
                     </td>
 
                     {/* Taxable Amount (after item discount, before bill discount) */}
-                    <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right font-medium">
                       {formatINR(calcLineAmount(item))}
                     </td>
 
                   </tr>
                 ))}
-                <tr className="bg-gray-50 font-semibold">
-                  <td colSpan={8} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Line Item Taxable Value</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(computedSubtotal)}</td>
+                <tr className="bg-gray-50 dark:bg-gray-800 font-semibold">
+                  <td colSpan={8} className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-right text-gray-600 dark:text-gray-400">Line Item Taxable Value</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right text-sm">{formatINR(computedSubtotal)}</td>
                 </tr>
               </tbody>
             </table>
@@ -774,23 +774,23 @@ export function InvoiceCard({
       {/* Section 3 - Bill Level Adjustments                                   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {(editMode || billDiscount > 0) && (
-        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
-          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
             3. Bill Level Adjustments
           </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50">
+                <tr className="bg-gray-50 dark:bg-gray-800">
                   {['Description', 'Rate', 'Amount'].map((h) => (
-                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                <tr className={editMode ? 'bg-blue-50/30' : ''}>
-                  <td className="px-2 py-1.5 border border-gray-200 text-xs font-medium text-orange-700">Invoice Discount</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right w-32">
+                <tr className={editMode ? 'bg-blue-50/30 dark:bg-blue-900/20' : ''}>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs font-medium text-orange-700 dark:text-orange-400">Invoice Discount</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right w-32">
                     {editMode ? (
                       <div className="flex items-center justify-end gap-1">
                         <input
@@ -798,35 +798,35 @@ export function InvoiceCard({
                           value={draft.bill_discount_percent ?? ''}
                           placeholder="0"
                           onChange={(e) => setDiscountPercent(e.target.value)}
-                          className="w-16 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+                          className="w-16 border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400 dark:text-gray-100"
                         />
-                        <span className="text-xs text-gray-500">%</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">%</span>
                       </div>
                     ) : (
-                      <span className="text-orange-600">
+                      <span className="text-orange-600 dark:text-orange-400">
                         {current.bill_discount_percent != null ? `${current.bill_discount_percent}%` : ''}
                       </span>
                     )}
                   </td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right font-medium w-36">
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right font-medium w-36">
                     {editMode ? (
                       <div className="flex items-center justify-end gap-1">
-                        <span className="text-xs text-gray-400">₹</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500">₹</span>
                         <input
                           type="number" min="0" step="0.01"
                           value={draft.bill_discount_amount ?? 0}
                           onChange={(e) => setDiscountAmount(e.target.value)}
-                          className="w-24 border border-orange-200 bg-orange-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400"
+                          className="w-24 border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-orange-400 dark:text-gray-100"
                         />
                       </div>
                     ) : (
-                      <span className="text-orange-600">−{formatINR(billDiscount)}</span>
+                      <span className="text-orange-600 dark:text-orange-400">−{formatINR(billDiscount)}</span>
                     )}
                   </td>
                 </tr>
-                <tr className="bg-gray-50 font-semibold">
-                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-right text-gray-600">Net Goods Taxable Value</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right text-sm">{formatINR(taxableValue)}</td>
+                <tr className="bg-gray-50 dark:bg-gray-800 font-semibold">
+                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-right text-gray-600 dark:text-gray-400">Net Goods Taxable Value</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right text-sm">{formatINR(taxableValue)}</td>
                 </tr>
               </tbody>
             </table>
@@ -839,14 +839,14 @@ export function InvoiceCard({
       {/* Edit mode: all charges with full fields. View mode: non-GST only.   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {((current.charges ?? []).length > 0 || editMode) && (
-        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
-          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
             4. Additional Charges
           </h4>
 
           {/* Unidentified charge warning banner (view mode) */}
           {!editMode && (current.charges ?? []).some(c => !c.description?.trim()) && (
-            <div className="mb-3 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+            <div className="mb-3 flex items-start gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2 text-xs text-red-700 dark:text-red-400">
               <svg className="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
               </svg>
@@ -857,13 +857,13 @@ export function InvoiceCard({
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50">
+                <tr className="bg-gray-50 dark:bg-gray-800">
                   {editMode
                     ? ['Description', 'SAC', 'GST %', 'Amount', ''].map((h) => (
-                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700 whitespace-nowrap">{h}</th>
                       ))
                     : ['Description', 'SAC', 'Ledger Name', 'Amount'].map((h) => (
-                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                        <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700 whitespace-nowrap">{h}</th>
                       ))
                   }
                 </tr>
@@ -876,10 +876,10 @@ export function InvoiceCard({
                   const knownCharge = CHARGE_TYPE_LIST.find((ct) => ct.label === c.description);
                   const resolvedSac = c.sac || knownCharge?.sac || resolveChargeSac(c.description, null);
                   return (
-                    <tr key={i} className={`hover:bg-gray-50 ${editMode ? (isUnidentified ? 'bg-red-50/60' : 'bg-blue-50/30') : ''}`}>
+                    <tr key={i} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${editMode ? (isUnidentified ? 'bg-red-50/60 dark:bg-red-900/20' : 'bg-blue-50/30 dark:bg-blue-900/20') : ''}`}>
 
                       {/* Description */}
-                      <td className="px-2 py-1.5 border border-gray-200 text-xs min-w-[200px]">
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs min-w-[200px]">
                         {editMode ? (
                           <div>
                             <select
@@ -891,7 +891,7 @@ export function InvoiceCard({
                                 setCharge(i, 'description', val);
                                 if (ct?.sac) setCharge(i, 'sac', ct.sac);
                               }}
-                              className={`w-full border-b focus:outline-none py-0.5 text-sm rounded-sm ${descError ? 'border-red-400 bg-red-50' : 'border-blue-300 bg-blue-50 focus:border-indigo-500 focus:bg-indigo-50'}`}
+                              className={`w-full border-b focus:outline-none py-0.5 text-sm rounded-sm dark:text-gray-100 ${descError ? 'border-red-400 bg-red-50 dark:bg-red-900/20' : 'border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 focus:border-indigo-500 focus:bg-indigo-50 dark:focus:bg-indigo-900/30'}`}
                             >
                               <option value="__custom__">{c.description ? `"${c.description}" (custom)` : '— Select or type below —'}</option>
                               {CHARGE_TYPE_LIST.map((ct) => (
@@ -907,15 +907,15 @@ export function InvoiceCard({
                                 setValidationErrors((prev) => { const n = { ...prev }; delete n[`charge_${i}_description`]; return n; });
                               }}
                               placeholder="Custom charge name"
-                              className={`mt-1 w-full border rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 ${descError ? 'border-red-400 bg-red-50 focus:ring-red-400' : 'border-gray-300 focus:ring-indigo-400'}`}
+                              className={`mt-1 w-full border rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 ${descError ? 'border-red-400 bg-red-50 dark:bg-red-900/20 focus:ring-red-400' : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'}`}
                             />
-                            {descError && <p className="text-red-600 text-xs mt-0.5">{descError}</p>}
+                            {descError && <p className="text-red-600 dark:text-red-400 text-xs mt-0.5">{descError}</p>}
                           </div>
                         ) : c.description}
                       </td>
 
                       {/* SAC */}
-                      <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs">
                         {editMode ? (
                           <div>
                             <input
@@ -926,32 +926,32 @@ export function InvoiceCard({
                                 setValidationErrors((prev) => { const n = { ...prev }; delete n[`charge_${i}_sac`]; return n; });
                               }}
                               placeholder="e.g. 9965"
-                              className={`w-full border rounded px-1.5 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 ${sacError ? 'border-red-400 bg-red-50 focus:ring-red-400' : 'border-gray-300 focus:ring-indigo-400'}`}
+                              className={`w-full border rounded px-1.5 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 ${sacError ? 'border-red-400 bg-red-50 dark:bg-red-900/20 focus:ring-red-400' : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'}`}
                             />
-                            {sacError && <p className="text-red-600 text-xs mt-0.5">{sacError}</p>}
+                            {sacError && <p className="text-red-600 dark:text-red-400 text-xs mt-0.5">{sacError}</p>}
                           </div>
                         ) : (resolvedSac || '')}
                       </td>
 
                       {editMode ? (
                         /* GST % — edit mode */
-                        <td className="px-2 py-1.5 border border-gray-200 w-20">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 w-20">
                           <input
                             type="number" min="0" max="28" step="0.01"
                             value={c.gst_percent}
                             onChange={(e) => setCharge(i, 'gst_percent', e.target.value)}
-                            className="w-full border border-gray-300 rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                            className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
                           />
                         </td>
                       ) : (
                         /* Ledger Name — view mode */
-                        <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs text-gray-500 whitespace-nowrap">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                           {c.description} @ {c.gst_percent}%
                         </td>
                       )}
 
                       {/* Amount */}
-                      <td className="px-2 py-1.5 border border-gray-200 text-right font-medium">
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right font-medium">
                         {editMode ? (
                           <CellInput value={c.amount} onChange={(v) => setCharge(i, 'amount', v)} type="number" min="0" step="0.01" className="w-24" />
                         ) : formatINR(c.amount)}
@@ -959,11 +959,11 @@ export function InvoiceCard({
 
                       {/* Remove (edit mode only) */}
                       {editMode && (
-                        <td className="px-2 py-1.5 border border-gray-200 text-center">
+                        <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-center">
                           <button
                             type="button"
                             onClick={() => setDraft((d) => ({ ...d, charges: (d.charges ?? []).filter((_, j) => j !== i) }))}
-                            className="text-gray-300 hover:text-red-500"
+                            className="text-gray-300 dark:text-gray-600 hover:text-red-500"
                             title="Remove charge"
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -987,7 +987,7 @@ export function InvoiceCard({
                   ...d,
                   charges: [...(d.charges ?? []), { description: '', amount: 0, gst_percent: 0, sac: '' }],
                 }))}
-                className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5"
+                className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 flex items-center gap-1.5"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1003,48 +1003,48 @@ export function InvoiceCard({
       {/* Section 5 - Tax Summary                                              */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {allHsnRows.length > 0 && (
-        <div className="px-5 pb-4 pt-4 border-t border-gray-100">
-          <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+        <div className="px-5 pb-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+          <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
             5. Tax Summary
           </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="bg-gray-50">
+                <tr className="bg-gray-50 dark:bg-gray-800">
                   {['S.No', 'HSN / SAC', 'Taxable Value', 'CGST', 'SGST', 'IGST'].map((h) => (
-                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 font-medium border border-gray-200 whitespace-nowrap">{h}</th>
+                    <th key={h} className="text-left px-2 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {hsnRows.map((row: HsnRow, i: number) => (
-                  <tr key={`goods-${i}`} className="hover:bg-gray-50">
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{i + 1}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">{row.hsn}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
+                  <tr key={`goods-${i}`} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 text-center w-10">{i + 1}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs">{row.hsn}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{formatINR(row.taxable)}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
                   </tr>
                 ))}
                 {chargeHsnRows.map((row: HsnRow, i: number) => (
-                  <tr key={`charge-${i}`} className="hover:bg-gray-50 bg-blue-50/20">
-                    <td className="px-2 py-1.5 border border-gray-200 text-xs text-gray-500 text-center w-10">{hsnRows.length + i + 1}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 font-mono text-xs">
-                      {row.hsn} <span className="text-blue-500 not-italic font-sans">(SAC)</span>
+                  <tr key={`charge-${i}`} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 bg-blue-50/20 dark:bg-blue-900/10">
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 text-center w-10">{hsnRows.length + i + 1}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-mono text-xs">
+                      {row.hsn} <span className="text-blue-500 dark:text-blue-400 not-italic font-sans">(SAC)</span>
                     </td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(row.taxable)}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
-                    <td className="px-2 py-1.5 border border-gray-200 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{formatINR(row.taxable)}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.cgst > 0 ? formatINR(row.cgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.sgst > 0 ? formatINR(row.sgst) : ''}</td>
+                    <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{row.igst > 0 ? formatINR(row.igst) : ''}</td>
                   </tr>
                 ))}
-                <tr className="bg-gray-50 font-semibold text-sm">
-                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 text-xs text-gray-600">TOTAL</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{formatINR(totalTaxable)}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalCGST > 0 ? formatINR(totalCGST) : ''}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalSGST > 0 ? formatINR(totalSGST) : ''}</td>
-                  <td className="px-2 py-1.5 border border-gray-200 text-right">{totalIGST > 0 ? formatINR(totalIGST) : ''}</td>
+                <tr className="bg-gray-50 dark:bg-gray-800 font-semibold text-sm">
+                  <td colSpan={2} className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400">TOTAL</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{formatINR(totalTaxable)}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{totalCGST > 0 ? formatINR(totalCGST) : ''}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{totalSGST > 0 ? formatINR(totalSGST) : ''}</td>
+                  <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-right">{totalIGST > 0 ? formatINR(totalIGST) : ''}</td>
                 </tr>
               </tbody>
             </table>
@@ -1055,8 +1055,8 @@ export function InvoiceCard({
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* Section 6 - Invoice Reconciliation                                   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      <div className="px-5 pb-5 pt-4 border-t border-gray-100">
-        <h4 className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100">
+      <div className="px-5 pb-5 pt-4 border-t border-gray-100 dark:border-gray-700">
+        <h4 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide mb-3 pb-1 border-b border-emerald-100 dark:border-emerald-900">
           6. Invoice Reconciliation
         </h4>
         {/* Reconciliation-only display values: absorb small rounding variance into Round Off
@@ -1072,13 +1072,13 @@ export function InvoiceCard({
           return (
         <div className="max-w-xs text-sm space-y-1.5">
 
-          <div className="flex justify-between text-gray-700">
+          <div className="flex justify-between text-gray-700 dark:text-gray-300">
             <span>Line Item Taxable Value</span>
             <span className="font-medium tabular-nums">{formatINR(computedSubtotal)}</span>
           </div>
 
           {billDiscount > 0 && (
-            <div className="flex justify-between text-orange-600">
+            <div className="flex justify-between text-orange-600 dark:text-orange-400">
               <span>(−) Bill Level Discount</span>
               <span className="font-medium tabular-nums">−{formatINR(billDiscount)}</span>
             </div>
@@ -1086,30 +1086,30 @@ export function InvoiceCard({
 
           {/* GST-applicable charges are part of the taxable base - shown here before Total Taxable */}
           {gstChargesTotal > 0 && (
-            <div className="flex justify-between text-blue-600">
+            <div className="flex justify-between text-blue-600 dark:text-blue-400">
               <span>(+) Taxable Charges</span>
               <span className="font-medium tabular-nums">+{formatINR(gstChargesTotal)}</span>
             </div>
           )}
 
-          <div className="border-t border-gray-300 pt-1.5 flex justify-between font-semibold text-gray-800">
+          <div className="border-t border-gray-300 dark:border-gray-600 pt-1.5 flex justify-between font-semibold text-gray-800 dark:text-gray-200">
             <span>Total Taxable Value</span>
             <span className="tabular-nums">{formatINR(taxableValue + gstChargesTotal)}</span>
           </div>
 
           {current.tax_type === 'cgst_sgst' ? (
             <>
-              <div className="flex justify-between text-gray-600">
+              <div className="flex justify-between text-gray-600 dark:text-gray-400">
                 <span>(+) CGST</span>
                 <span className="tabular-nums">+{formatINR(totalCGST)}</span>
               </div>
-              <div className="flex justify-between text-gray-600">
+              <div className="flex justify-between text-gray-600 dark:text-gray-400">
                 <span>(+) SGST</span>
                 <span className="tabular-nums">+{formatINR(totalSGST)}</span>
               </div>
             </>
           ) : (
-            <div className="flex justify-between text-gray-600">
+            <div className="flex justify-between text-gray-600 dark:text-gray-400">
               <span>(+) IGST</span>
               <span className="tabular-nums">+{formatINR(totalIGST)}</span>
             </div>
@@ -1117,13 +1117,13 @@ export function InvoiceCard({
 
           {/* Non-GST charges are pass-through additions - shown after tax lines */}
           {nonGstChargesTotal > 0 && (
-            <div className="flex justify-between text-gray-600">
+            <div className="flex justify-between text-gray-600 dark:text-gray-400">
               <span>(+) Additional Charges (Non-GST)</span>
               <span className="tabular-nums">+{formatINR(nonGstChargesTotal)}</span>
             </div>
           )}
 
-          <div className="flex justify-between text-gray-600 items-center">
+          <div className="flex justify-between text-gray-600 dark:text-gray-400 items-center">
             <span>(+) Round Off</span>
             {editMode ? (
               <span className="flex items-center gap-1">
@@ -1135,7 +1135,7 @@ export function InvoiceCard({
                     setRoundOffAuto(false);
                     setHeader('round_off', parseFloat(e.target.value) || 0);
                   }}
-                  className="w-20 border border-gray-300 bg-blue-50 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  className="w-20 border border-gray-300 dark:border-gray-600 bg-blue-50 dark:bg-blue-900/20 dark:text-gray-100 rounded px-1.5 py-0.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-indigo-400"
                 />
                 <button
                   onClick={() => {
@@ -1145,8 +1145,8 @@ export function InvoiceCard({
                   title="Auto-calculate round off to nearest ₹1"
                   className={`text-xs px-1.5 py-0.5 rounded border transition-colors whitespace-nowrap ${
                     roundOffAuto
-                      ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
-                      : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-gray-200'
+                      ? 'bg-indigo-100 dark:bg-indigo-800 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border-gray-300 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}
                 >
                   ↺ Auto
@@ -1157,18 +1157,18 @@ export function InvoiceCard({
             )}
           </div>
 
-          <div className={`border-t-2 pt-2 flex justify-between font-bold text-base ${isMismatched ? 'border-amber-400' : 'border-gray-400'}`}>
-            <span className="text-gray-900">Final Invoice Value</span>
-            <span className={`tabular-nums ${isMismatched ? 'text-amber-700' : 'text-gray-900'}`}>
+          <div className={`border-t-2 pt-2 flex justify-between font-bold text-base ${isMismatched ? 'border-amber-400 dark:border-amber-700' : 'border-gray-400 dark:border-gray-600'}`}>
+            <span className="text-gray-900 dark:text-gray-100">Final Invoice Value</span>
+            <span className={`tabular-nums ${isMismatched ? 'text-amber-700 dark:text-amber-400' : 'text-gray-900 dark:text-gray-100'}`}>
               ₹{formatINR(recoFinal)}
             </span>
           </div>
 
           {invoiceTotal > 0 && !isMismatched && !editMode && (
-            <div className="text-xs text-green-600 font-medium text-right">✓ Invoice Value Matched</div>
+            <div className="text-xs text-green-600 dark:text-green-400 font-medium text-right">✓ Invoice Value Matched</div>
           )}
           {invoiceTotal > 0 && isMismatched && !editMode && (
-            <div className="text-xs text-amber-600 text-right">
+            <div className="text-xs text-amber-600 dark:text-amber-400 text-right">
               Invoice shows ₹{formatINR(invoiceTotal)} · Diff: {computedTotal > invoiceTotal ? '+' : '−'}₹{formatINR(Math.abs(computedTotal - invoiceTotal))}
             </div>
           )}
@@ -1180,10 +1180,10 @@ export function InvoiceCard({
 
       {/* ── Audit Log ── */}
       {auditLog.length > 0 && (
-        <div className="px-5 py-3 border-t border-gray-100">
+        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700">
           <button
             onClick={() => setAuditOpen((v) => !v)}
-            className="text-xs text-gray-500 hover:text-gray-700 font-medium flex items-center gap-1"
+            className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 font-medium flex items-center gap-1"
           >
             <svg className={`w-3.5 h-3.5 transition-transform ${auditOpen ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1194,19 +1194,19 @@ export function InvoiceCard({
             <div className="mt-2 overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
-                  <tr className="bg-gray-50">
+                  <tr className="bg-gray-50 dark:bg-gray-800">
                     {['Field', 'Original', 'Updated', 'When'].map((h) => (
-                      <th key={h} className="text-left px-2 py-1.5 text-gray-500 font-medium border border-gray-200">{h}</th>
+                      <th key={h} className="text-left px-2 py-1.5 text-gray-500 dark:text-gray-400 font-medium border border-gray-200 dark:border-gray-700">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {auditLog.map((e, i) => (
-                    <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-2 py-1.5 border border-gray-200 font-medium text-gray-700">{e.field}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-red-600 line-through">{String(e.original)}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-green-700 font-medium">{String(e.updated)}</td>
-                      <td className="px-2 py-1.5 border border-gray-200 text-gray-400">
+                    <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 font-medium text-gray-700 dark:text-gray-300">{e.field}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-red-600 dark:text-red-400 line-through">{String(e.original)}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-green-700 dark:text-green-400 font-medium">{String(e.updated)}</td>
+                      <td className="px-2 py-1.5 border border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-500">
                         {new Date(e.timestamp).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
                       </td>
                     </tr>
