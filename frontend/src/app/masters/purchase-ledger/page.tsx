@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
@@ -24,6 +24,11 @@ export default function PurchaseLedgerPage() {
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
@@ -31,6 +36,8 @@ export default function PurchaseLedgerPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  useEffect(() => { setSelectedNames(new Set()); }, [company?.id]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;
@@ -40,6 +47,45 @@ export default function PurchaseLedgerPage() {
   }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedNames.size > 0 && selectedNames.size < ledgers.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedNames, ledgers.length]);
+
+  const toggleSelect = (name: string) => {
+    setSelectedNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedNames.size === ledgers.length) {
+      setSelectedNames(new Set());
+    } else {
+      setSelectedNames(new Set(ledgers.map((l) => l.tally_ledger_name)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!company?.id) return;
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedNames].map((name) => deletePurchaseLedger(company!.id, name)));
+      setSelectedNames(new Set());
+      setShowBulkConfirm(false);
+      await refresh();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some ledgers.');
+      setShowBulkConfirm(false);
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   const openAdd = () => {
     setEditingName(null);
@@ -79,7 +125,11 @@ export default function PurchaseLedgerPage() {
 
   const handleDelete = async (name: string) => {
     if (!confirm(`Delete purchase ledger "${name}"?`)) return;
-    try { await deletePurchaseLedger(company!.id, name); await refresh(); }
+    try {
+      await deletePurchaseLedger(company!.id, name);
+      setSelectedNames((prev) => { const next = new Set(prev); next.delete(name); return next; });
+      await refresh();
+    }
     catch (err: unknown) { alert(err instanceof Error ? err.message : 'Failed to delete.'); }
   };
 
@@ -130,6 +180,21 @@ export default function PurchaseLedgerPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedNames.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedNames.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedNames.size})
+              </button>
+              <button onClick={() => setSelectedNames(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : ledgers.length === 0 ? (
@@ -142,13 +207,30 @@ export default function PurchaseLedgerPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={selectedNames.size === ledgers.length && ledgers.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Ledger Name</th>
                     <th className="px-4 py-3 w-24" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {ledgers.map((l, i) => (
-                    <tr key={l.tally_ledger_name} className="hover:bg-gray-50 transition-colors">
+                    <tr key={l.tally_ledger_name} className={`hover:bg-gray-50 transition-colors ${selectedNames.has(l.tally_ledger_name) ? 'bg-red-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedNames.has(l.tally_ledger_name)}
+                          onChange={() => toggleSelect(l.tally_ledger_name)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs flex items-center gap-2">
                         {i === 0 && (
                           <span className="bg-blue-100 text-blue-700 text-[10px] font-semibold px-1.5 py-0.5 rounded">DEFAULT</span>
@@ -172,6 +254,26 @@ export default function PurchaseLedgerPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedNames.size} ledger{selectedNames.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

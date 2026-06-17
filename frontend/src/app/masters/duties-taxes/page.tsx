@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import AppSidebar from '@/components/AppSidebar';
 import { getSession } from '@/lib/auth';
@@ -15,23 +15,18 @@ import {
   type TaxComponent,
 } from '@/lib/dutiesTaxes';
 
-// Common rate options - user can also type a custom value
-const COMMON_RATES = [0, 0.1, 0.25, 1, 1.5, 2, 2.5, 5, 6, 7.5, 9, 12, 14, 18, 28];
-
 const EMPTY_FORM = {
   tax_component: 'CGST' as TaxComponent,
-  tax_rate_str: '',        // '' = consolidated (no rate)
+  tax_rate_str: '',
   tally_ledger_name: '',
 };
 
-// Suggested ledger name based on component + rate
 function suggestLedgerName(component: TaxComponent, rateStr: string): string {
   const rate = rateStr === '' ? null : parseFloat(rateStr);
   if (rate == null) return `Input ${component}`;
   return `Input ${component} @ ${rate}%`;
 }
 
-// Group rows by tax_component for display
 function groupByComponent(rows: DutiesTaxesMaster[]): Map<string, DutiesTaxesMaster[]> {
   const map = new Map<string, DutiesTaxesMaster[]>();
   for (const r of rows) {
@@ -53,9 +48,12 @@ export default function DutiesTaxesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
-
-  // Auto-fill ledger name suggestion only when field is still empty or matches previous suggestion
   const [ledgerAutoFilled, setLedgerAutoFilled] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (companyLoading) return;
@@ -64,6 +62,8 @@ export default function DutiesTaxesPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  useEffect(() => { setSelectedIds(new Set()); }, [company?.id]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;
@@ -76,6 +76,44 @@ export default function DutiesTaxesPage() {
   }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedIds.size > 0 && selectedIds.size < records.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedIds, records.length]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === records.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(records.map((r) => r.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map((id) => deleteDutiesTaxes(id)));
+      setSelectedIds(new Set());
+      setShowBulkConfirm(false);
+      await refresh();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some records.');
+      setShowBulkConfirm(false);
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   // ── Form helpers ─────────────────────────────────────────────────────────
   const openAdd = () => {
@@ -98,7 +136,6 @@ export default function DutiesTaxesPage() {
     setShowForm(true);
   };
 
-  // When component or rate changes, update suggestion if user hasn't typed their own name
   const handleComponentChange = (component: TaxComponent) => {
     const next = { ...form, tax_component: component };
     if (ledgerAutoFilled) {
@@ -116,7 +153,7 @@ export default function DutiesTaxesPage() {
   };
 
   const handleLedgerChange = (val: string) => {
-    setLedgerAutoFilled(false); // user typed their own name - stop auto-filling
+    setLedgerAutoFilled(false);
     setForm({ ...form, tally_ledger_name: val });
   };
 
@@ -138,13 +175,13 @@ export default function DutiesTaxesPage() {
         await updateDutiesTaxes(editingId, {
           tax_component: form.tax_component,
           tax_rate: taxRate,
-          tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
+          tally_ledger_name: form.tally_ledger_name,
         });
       } else {
         await addDutiesTaxes(company?.id ?? '', {
           tax_component: form.tax_component,
           tax_rate: taxRate,
-          tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
+          tally_ledger_name: form.tally_ledger_name,
         });
       }
       setShowForm(false);
@@ -161,6 +198,7 @@ export default function DutiesTaxesPage() {
     if (!confirm(`Delete mapping "${label}"?`)) return;
     try {
       await deleteDutiesTaxes(id);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
       await refresh();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to delete.');
@@ -170,7 +208,6 @@ export default function DutiesTaxesPage() {
   const grouped = groupByComponent(records);
   const companyName = company?.name ?? '';
 
-  // Component colour chips
   const componentColour: Record<string, string> = {
     CGST: 'bg-blue-100 text-blue-700',
     SGST: 'bg-indigo-100 text-indigo-700',
@@ -240,7 +277,6 @@ export default function DutiesTaxesPage() {
                       placeholder="e.g. 9 or 2.5"
                     />
                   </div>
-                  {/* Quick-pick rate buttons */}
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     {[2.5, 5, 9, 14, 18, 28].map((r) => (
                       <button key={r} type="button"
@@ -285,6 +321,21 @@ export default function DutiesTaxesPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Records ── */}
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
@@ -294,6 +345,18 @@ export default function DutiesTaxesPage() {
             </div>
           ) : (
             <div className="space-y-3">
+              {/* Select all row */}
+              <div className="flex items-center gap-2 px-1">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={selectedIds.size === records.length && records.length > 0}
+                  onChange={toggleSelectAll}
+                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span className="text-xs text-gray-400">Select all {records.length} mapping{records.length !== 1 ? 's' : ''}</span>
+              </div>
+
               {Array.from(grouped.entries()).map(([component, rows]) => (
                 <div key={component} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                   <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
@@ -305,7 +368,15 @@ export default function DutiesTaxesPage() {
                   <table className="w-full text-sm">
                     <tbody className="divide-y divide-gray-50">
                       {rows.map((r) => (
-                        <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                        <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(r.id) ? 'bg-red-50' : ''}`}>
+                          <td className="px-4 py-3 w-8">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(r.id)}
+                              onChange={() => toggleSelect(r.id)}
+                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </td>
                           <td className="px-4 py-3 w-28">
                             {r.tax_rate != null ? (
                               <span className="text-xs font-mono text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{r.tax_rate}%</span>
@@ -335,6 +406,26 @@ export default function DutiesTaxesPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} mapping{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

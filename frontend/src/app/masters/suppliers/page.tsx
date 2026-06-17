@@ -42,6 +42,11 @@ export default function SupplierMastersPage() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
@@ -49,6 +54,8 @@ export default function SupplierMastersPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  useEffect(() => { setSelectedIds(new Set()); }, [company?.id]);
 
   // When company changes, derive its state from GSTIN
   useEffect(() => {
@@ -71,6 +78,55 @@ export default function SupplierMastersPage() {
   }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const filtered = suppliers.filter((s) => {
+    const q = search.toLowerCase();
+    return (
+      !q ||
+      s.vendor_name.toLowerCase().includes(q) ||
+      s.vendor_gstin.toLowerCase().includes(q) ||
+      s.tally_ledger_name.toLowerCase().includes(q) ||
+      s.state_name.toLowerCase().includes(q)
+    );
+  });
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedIds.size > 0 && selectedIds.size < filtered.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedIds, filtered.length]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((s) => s.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map((id) => deleteSupplier(id)));
+      setSelectedIds(new Set());
+      setShowBulkConfirm(false);
+      await refresh();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some suppliers.');
+      setShowBulkConfirm(false);
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   // ── Manual form ──────────────────────────────────────────────────────────
   const openAdd = () => {
@@ -125,6 +181,7 @@ export default function SupplierMastersPage() {
     if (!confirm(`Delete supplier "${name}"?`)) return;
     try {
       await deleteSupplier(id);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
       await refresh();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to delete.');
@@ -157,7 +214,6 @@ export default function SupplierMastersPage() {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const raw: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-      // Find header row
       let headerIdx = 0;
       for (let i = 0; i < Math.min(5, raw.length); i++) {
         const row = raw[i].map((c) => String(c).toLowerCase());
@@ -184,9 +240,8 @@ export default function SupplierMastersPage() {
       }
 
       const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
-
       const rows = dataRows.map((r) => ({
-        tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed - preserve exactly
+        tally_ledger_name: String(r[ledgerCol] ?? ''),
         vendor_gstin: gstinCol !== -1 ? String(r[gstinCol] ?? '') : '',
       }));
 
@@ -219,23 +274,9 @@ export default function SupplierMastersPage() {
 
   // ── Preview: derived state for current GSTIN input ───────────────────────
   const previewGstin = normaliseGstin(form.vendor_gstin);
-  const previewState = previewGstin
-    ? (deriveStateFromGstin(previewGstin) ?? null)
-    : null;
+  const previewState = previewGstin ? (deriveStateFromGstin(previewGstin) ?? null) : null;
   const previewUnregistered = !previewGstin;
   const previewInvalid = previewGstin && !validateGstin(previewGstin);
-
-  // ── Filtered list ─────────────────────────────────────────────────────────
-  const filtered = suppliers.filter((s) => {
-    const q = search.toLowerCase();
-    return (
-      !q ||
-      s.vendor_name.toLowerCase().includes(q) ||
-      s.vendor_gstin.toLowerCase().includes(q) ||
-      s.tally_ledger_name.toLowerCase().includes(q) ||
-      s.state_name.toLowerCase().includes(q)
-    );
-  });
 
   const companyName = company?.name ?? '';
   const unregCount = filtered.filter(isUnregistered).length;
@@ -373,7 +414,6 @@ export default function SupplierMastersPage() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="27AABCU9603R1ZX" />
                 </div>
-                {/* Auto-derived state - read only */}
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">State <span className="font-normal text-gray-400">(auto-derived)</span></label>
                   <div className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 min-h-[38px] flex items-center">
@@ -405,6 +445,21 @@ export default function SupplierMastersPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Supplier table ── */}
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
@@ -417,6 +472,15 @@ export default function SupplierMastersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Ledger Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">GSTIN</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">State</th>
@@ -426,7 +490,15 @@ export default function SupplierMastersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((s) => (
-                    <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={s.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(s.id) ? 'bg-red-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(s.id)}
+                          onChange={() => toggleSelect(s.id)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_ledger_name}</td>
                       <td className="px-4 py-3 text-xs">
                         {isUnregistered(s) ? (
@@ -474,6 +546,26 @@ export default function SupplierMastersPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} supplier{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

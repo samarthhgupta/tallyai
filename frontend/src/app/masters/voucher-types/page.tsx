@@ -15,7 +15,6 @@ import {
   type PurchaseCategory,
 } from '@/lib/voucherTypes';
 
-// Suggested default Tally voucher type names per category
 const DEFAULT_SUGGESTIONS: Record<PurchaseCategory, string> = {
   gst:     'Purchase GST',
   non_gst: 'Purchase',
@@ -28,7 +27,6 @@ export default function VoucherTypesPage() {
   const [records, setRecords] = useState<VoucherTypeMaster[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Per-category edit state: category → current input value
   const [inputs, setInputs] = useState<Record<PurchaseCategory, string>>({
     gst: '', non_gst: '', default: '',
   });
@@ -42,6 +40,10 @@ export default function VoucherTypesPage() {
     gst: '', non_gst: '', default: '',
   });
 
+  const [selectedCategories, setSelectedCategories] = useState<Set<PurchaseCategory>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
@@ -50,13 +52,14 @@ export default function VoucherTypesPage() {
     });
   }, [company, companyLoading, router]);
 
+  useEffect(() => { setSelectedCategories(new Set()); }, [company?.id]);
+
   const loadData = useCallback(async () => {
     if (!company?.id) return;
     setLoading(true);
     try {
       const data = await loadVoucherTypes(company.id);
       setRecords(data);
-      // Populate inputs from saved records
       const next = { gst: '', non_gst: '', default: '' };
       for (const r of data) {
         next[r.purchase_category] = r.tally_voucher_type_name;
@@ -68,6 +71,36 @@ export default function VoucherTypesPage() {
   }, [company?.id]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const toggleSelectCategory = (category: PurchaseCategory) => {
+    const record = records.find((r) => r.purchase_category === category);
+    if (!record) return;
+    setSelectedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category); else next.add(category);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedCategories].map((cat) => {
+        const record = records.find((r) => r.purchase_category === cat);
+        if (!record) return Promise.resolve();
+        return deleteVoucherType(record.id);
+      }));
+      setSelectedCategories(new Set());
+      setShowBulkConfirm(false);
+      await loadData();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some mappings.');
+      setShowBulkConfirm(false);
+      await loadData();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   const handleSave = async (category: PurchaseCategory) => {
     if (!company?.id) return;
@@ -97,11 +130,14 @@ export default function VoucherTypesPage() {
     try {
       await deleteVoucherType(record.id);
       setInputs((p) => ({ ...p, [category]: '' }));
+      setSelectedCategories((prev) => { const next = new Set(prev); next.delete(category); return next; });
       await loadData();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Delete failed');
     }
   };
+
+  const savedCategories = PURCHASE_CATEGORIES.filter((cat) => records.find((r) => r.purchase_category === cat));
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -129,6 +165,21 @@ export default function VoucherTypesPage() {
           </p>
         </div>
 
+        {/* ── Bulk action bar ── */}
+        {selectedCategories.size > 0 && (
+          <div className="flex items-center gap-3 mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+            <span className="text-sm text-red-700 font-medium">{selectedCategories.size} selected</span>
+            <button onClick={() => setShowBulkConfirm(true)}
+              className="text-sm text-red-600 hover:text-red-800 font-medium">
+              Remove Selected ({selectedCategories.size})
+            </button>
+            <button onClick={() => setSelectedCategories(new Set())}
+              className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+              Cancel
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-16">
             <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
@@ -138,20 +189,31 @@ export default function VoucherTypesPage() {
             {PURCHASE_CATEGORIES.map((category) => {
               const existing = records.find((r) => r.purchase_category === category);
               const isSaved = !!existing;
+              const isSelected = selectedCategories.has(category);
               return (
-                <div key={category} className="bg-white border border-gray-200 rounded-xl p-5">
+                <div key={category} className={`bg-white border rounded-xl p-5 transition-colors ${isSelected ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}>
                   <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">
-                        {PURCHASE_CATEGORY_LABELS[category]}
-                      </p>
-                      {isSaved ? (
-                        <p className="text-xs text-green-600 font-medium mt-0.5">
-                          ✓ Mapped to &ldquo;<span className="font-mono">{existing.tally_voucher_type_name}</span>&rdquo;
-                        </p>
-                      ) : (
-                        <p className="text-xs text-gray-400 mt-0.5">Not configured - falls back to &ldquo;Purchase&rdquo;</p>
+                    <div className="flex items-start gap-3">
+                      {isSaved && (
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelectCategory(category)}
+                          className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
                       )}
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">
+                          {PURCHASE_CATEGORY_LABELS[category]}
+                        </p>
+                        {isSaved ? (
+                          <p className="text-xs text-green-600 font-medium mt-0.5">
+                            ✓ Mapped to &ldquo;<span className="font-mono">{existing.tally_voucher_type_name}</span>&rdquo;
+                          </p>
+                        ) : (
+                          <p className="text-xs text-gray-400 mt-0.5">Not configured - falls back to &ldquo;Purchase&rdquo;</p>
+                        )}
+                      </div>
                     </div>
                     {isSaved && (
                       <button
@@ -189,7 +251,6 @@ export default function VoucherTypesPage() {
                     )}
                   </div>
 
-                  {/* Suggest button if input is empty */}
                   {!inputs[category] && (
                     <button
                       onClick={() => setInputs((p) => ({ ...p, [category]: DEFAULT_SUGGESTIONS[category] }))}
@@ -204,7 +265,12 @@ export default function VoucherTypesPage() {
           </div>
         )}
 
-        {/* Import tip */}
+        {savedCategories.length > 1 && selectedCategories.size === 0 && (
+          <p className="mt-3 text-xs text-gray-400">
+            Select checkboxes on configured mappings to bulk remove them.
+          </p>
+        )}
+
         <div className="mt-6 bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-xs text-gray-600">
           <p className="font-semibold text-gray-700 mb-1">How to find your Voucher Type names in Tally</p>
           <ol className="list-decimal list-inside space-y-1">
@@ -214,6 +280,26 @@ export default function VoucherTypesPage() {
           </ol>
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Remove {selectedCategories.size} mapping{selectedCategories.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">The system will fall back to &ldquo;Purchase&rdquo; for removed categories.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Removing…' : 'Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

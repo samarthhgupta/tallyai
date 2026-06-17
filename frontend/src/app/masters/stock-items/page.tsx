@@ -45,6 +45,11 @@ export default function StockItemsPage() {
   const [importResult, setImportResult] = useState<StockItemImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
@@ -52,6 +57,8 @@ export default function StockItemsPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  useEffect(() => { setSelectedIds(new Set()); }, [company?.id]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;
@@ -64,6 +71,52 @@ export default function StockItemsPage() {
   }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const filtered = items.filter((s) => {
+    const q = search.toLowerCase();
+    return !q ||
+      s.tally_item_name.toLowerCase().includes(q) ||
+      (s.alias_name ?? '').toLowerCase().includes(q) ||
+      (s.hsn_code ?? '').toLowerCase().includes(q);
+  });
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedIds.size > 0 && selectedIds.size < filtered.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedIds, filtered.length]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((s) => s.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map((id) => deleteStockItem(id)));
+      setSelectedIds(new Set());
+      setShowBulkConfirm(false);
+      await refresh();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some items.');
+      setShowBulkConfirm(false);
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   // ── Manual form ──────────────────────────────────────────────────────────
   const openAdd = () => {
@@ -98,7 +151,7 @@ export default function StockItemsPage() {
       const rawUnit = form.unit?.trim() || '';
       const resolvedUnit = rawUnit ? normalizeUom(rawUnit).canonical : 'Nos';
       const params = {
-        tally_item_name: form.tally_item_name, // stored exactly as typed
+        tally_item_name: form.tally_item_name,
         alias_name: form.alias_name || undefined,
         unit: resolvedUnit,
         hsn_code: form.hsn_code || undefined,
@@ -123,6 +176,7 @@ export default function StockItemsPage() {
     if (!confirm(`Delete stock item "${name}"?`)) return;
     try {
       await deleteStockItem(id);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
       await refresh();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to delete.');
@@ -190,7 +244,7 @@ export default function StockItemsPage() {
         const gstPct = rawGst !== undefined && rawGst !== '' ? parseFloat(String(rawGst)) : null;
         const rawUnit = unitCol !== -1 ? String(r[unitCol] ?? '').trim() : '';
         return {
-          tally_item_name: String(r[nameCol] ?? ''), // NOT trimmed
+          tally_item_name: String(r[nameCol] ?? ''),
           alias_name: aliasCol !== -1 ? String(r[aliasCol] ?? '') : '',
           unit: rawUnit ? normalizeUom(rawUnit).canonical : 'Nos',
           hsn_code: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
@@ -224,14 +278,6 @@ export default function StockItemsPage() {
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Items');
     XLSX.writeFile(wb, `StockItems_${company?.name ?? 'export'}.xlsx`);
   };
-
-  const filtered = items.filter((s) => {
-    const q = search.toLowerCase();
-    return !q ||
-      s.tally_item_name.toLowerCase().includes(q) ||
-      (s.alias_name ?? '').toLowerCase().includes(q) ||
-      (s.hsn_code ?? '').toLowerCase().includes(q);
-  });
 
   const companyName = company?.name ?? '';
 
@@ -409,6 +455,21 @@ export default function StockItemsPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Table ── */}
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
@@ -421,6 +482,15 @@ export default function StockItemsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Item Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Alias / Invoice Description</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Unit</th>
@@ -431,7 +501,15 @@ export default function StockItemsPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((s) => (
-                    <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={s.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(s.id) ? 'bg-red-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(s.id)}
+                          onChange={() => toggleSelect(s.id)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_item_name}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">-</span>}</td>
                       <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '-'}</td>
@@ -455,6 +533,26 @@ export default function StockItemsPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

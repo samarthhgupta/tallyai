@@ -55,6 +55,10 @@ export default function LedgerMastersPage() {
   const [importResult, setImportResult] = useState<LedgerImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const list = loadCompanies();
     setCompanies(list);
@@ -65,8 +69,48 @@ export default function LedgerMastersPage() {
     if (selectedCompanyId) {
       setLedgers(loadLedgers(selectedCompanyId));
       setImportResult(null);
+      setSelectedIds(new Set());
     }
   }, [selectedCompanyId]);
+
+  const filtered = ledgers.filter((l) => {
+    const q = search.toLowerCase();
+    return (
+      !q ||
+      l.hsn_sac.toLowerCase().includes(q) ||
+      l.description.toLowerCase().includes(q) ||
+      l.purchase_ledger.toLowerCase().includes(q)
+    );
+  });
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedIds.size > 0 && selectedIds.size < filtered.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedIds, filtered.length]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((l) => l.id)));
+    }
+  };
+
+  const handleBulkDelete = () => {
+    [...selectedIds].forEach((id) => deleteLedger(id));
+    setSelectedIds(new Set());
+    setShowBulkConfirm(false);
+    refresh();
+  };
 
   const refresh = () => {
     if (selectedCompanyId) setLedgers(loadLedgers(selectedCompanyId));
@@ -121,6 +165,7 @@ export default function LedgerMastersPage() {
   const handleDelete = (id: string, hsn: string) => {
     if (!confirm(`Delete ledger mapping for HSN/SAC "${hsn || 'all'}"?`)) return;
     deleteLedger(id);
+    setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
     refresh();
   };
 
@@ -183,10 +228,7 @@ export default function LedgerMastersPage() {
         return;
       }
 
-      const dataRows = raw.slice(headerIdx + 1).filter((r) =>
-        r.some((c) => String(c).trim()),
-      );
-
+      const dataRows = raw.slice(headerIdx + 1).filter((r) => r.some((c) => String(c).trim()));
       const rows = dataRows.map((r) => ({
         hsn_sac: hsnCol !== -1 ? String(r[hsnCol] ?? '') : '',
         gst_percent: gstCol !== -1 ? String(r[gstCol] ?? '0') : '0',
@@ -229,17 +271,6 @@ export default function LedgerMastersPage() {
     const company = companies.find((c) => c.id === selectedCompanyId);
     XLSX.writeFile(wb, `LedgerMaster_${company?.name ?? 'export'}.xlsx`);
   };
-
-  // ── Filtered list ─────────────────────────────────────────────────────────
-  const filtered = ledgers.filter((l) => {
-    const q = search.toLowerCase();
-    return (
-      !q ||
-      l.hsn_sac.toLowerCase().includes(q) ||
-      l.description.toLowerCase().includes(q) ||
-      l.purchase_ledger.toLowerCase().includes(q)
-    );
-  });
 
   const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
 
@@ -356,13 +387,7 @@ export default function LedgerMastersPage() {
                   {importing ? 'Processing…' : 'Click to upload .xlsx / .xls file'}
                 </p>
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                onChange={handleFileChange}
-              />
+              <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileChange} />
 
               {importResult && (
                 <div className="mt-4 space-y-3">
@@ -490,6 +515,21 @@ export default function LedgerMastersPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Ledger table ── */}
           {!selectedCompanyId ? (
             <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
@@ -508,6 +548,15 @@ export default function LedgerMastersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">HSN/SAC</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">GST%</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
@@ -518,7 +567,15 @@ export default function LedgerMastersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((l) => (
-                    <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(l.id) ? 'bg-red-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(l.id)}
+                          onChange={() => toggleSelect(l.id)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-mono text-gray-700">{l.hsn_sac || '-'}</td>
                       <td className="px-4 py-3 text-gray-600">{l.gst_percent}%</td>
                       <td className="px-4 py-3 text-gray-700">{l.description || '-'}</td>
@@ -546,6 +603,26 @@ export default function LedgerMastersPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} mapping{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 transition-colors">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
