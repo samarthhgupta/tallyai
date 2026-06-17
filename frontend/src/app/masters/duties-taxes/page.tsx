@@ -102,7 +102,7 @@ export default function DutiesTaxesPage() {
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedIds].map((id) => deleteDutiesTaxes(id)));
+      await Promise.all(Array.from(selectedIds).map((id) => deleteDutiesTaxes(id)));
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
       await refresh();

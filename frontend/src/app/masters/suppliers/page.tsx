@@ -115,7 +115,7 @@ export default function SupplierMastersPage() {
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedIds].map((id) => deleteSupplier(id)));
+      await Promise.all(Array.from(selectedIds).map((id) => deleteSupplier(id)));
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
       await refresh();
