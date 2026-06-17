@@ -843,10 +843,7 @@ export default function UploadPage() {
                           company={selectedCompany ? { id: selectedCompany.id, name: selectedCompany.name, gstin: selectedCompany.gstin ?? '' } : undefined}
                           historyMatch={historyMatch}
                           isBatchNew={true}
-                          onReject={() => {
-                            setQueue((prev) => prev.filter((q) => q.key !== item.key));
-                            setSelected((prev) => { const n = new Set(prev); n.delete(item.key); return n; });
-                          }}
+                          onReject={() => doReject([item.key], 'Duplicate invoice')}
                           onSave={(updated) => {
                             setInvoiceOverrides((prev) => new Map(prev).set(item.key, updated));
                             // Recompute readiness + FY mismatch with updated invoice
