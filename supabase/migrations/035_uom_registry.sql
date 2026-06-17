@@ -37,7 +37,11 @@ CREATE TABLE IF NOT EXISTS uom_pending_review (
   resolved_at             timestamptz
 );
 
+
 -- ── Seed canonical UOMs ────────────────────────────────────────────
+=======
+-- ── Seed canonical UOMs ────────────────────────────────────────────────────
+>>>>>>> origin/claude/dazzling-volta-phXyz
 INSERT INTO uom_canonical (name, full_name, gst_uom_code, sort_order) VALUES
   ('Pcs',   'Pieces',       'PCS', 1),
   ('Nos',   'Numbers',      'NOS', 2),
@@ -68,7 +72,11 @@ INSERT INTO uom_canonical (name, full_name, gst_uom_code, sort_order) VALUES
   ('Sq Mtr', 'Square Metres', 'SQM', 27)
 ON CONFLICT (name) DO NOTHING;
 
+
 -- ── Seed global aliases (company_id = NULL) ──────────────────────────────────────────
+=======
+-- ── Seed global aliases (company_id = NULL) ────────────────────────────────
+>>>>>>> origin/claude/dazzling-volta-phXyz
 INSERT INTO uom_alias (alias, canonical_id, company_id)
 SELECT a.alias, c.id, NULL
 FROM (VALUES

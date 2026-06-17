@@ -64,7 +64,7 @@ export async function addDutiesTaxes(
         tally_ledger_name: params.tally_ledger_name, // NO trim
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'company_id,tax_component,tax_rate,tally_ledger_name', ignoreDuplicates: true },
+      { onConflict: 'company_id,tax_component,tax_rate', ignoreDuplicates: false },
     )
     .select()
     .single();

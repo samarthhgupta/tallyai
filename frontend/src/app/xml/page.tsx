@@ -8,7 +8,7 @@ import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/expenseLedgers';
-import { loadPurchaseLedgers, addPurchaseLedger } from '@/lib/purchaseLedgers';
+import { loadPurchaseLedgers, addPurchaseLedger, getHistoricalPurchaseLedger, getCompanyWideMostUsedPurchaseLedger } from '@/lib/purchaseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
@@ -47,6 +47,12 @@ function getErrMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === 'object' && e !== null && 'message' in e) return String((e as { message: unknown }).message);
   return 'Unknown error';
+}
+
+// A value is blank if it is empty, whitespace-only, or the UI sentinel '-'.
+// Used to guard acceptance and master writes.
+function isBlank(v?: string | null): boolean {
+  return !v || v.trim().length === 0 || v === '-';
 }
 
 type SuggestionItem =
@@ -99,6 +105,8 @@ interface FlatDisplayRow {
   // item-level
   purchaseLedger: string;
   purchaseLedgerSuggested: boolean;
+  purchaseLedgerCase: 1 | 2 | 3 | 4;
+  purchaseLedgerHistoricalMissing: boolean;
   itemDesc: string;
   hsn: string;
   stockItem: string;
@@ -122,14 +130,20 @@ interface FlatDisplayRow {
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
+  purchaseLedgerMasters, historicalPurchaseLedgers, companyWidePurchaseLedger,
+  dutiesTaxesMasters,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
   suppliers: SupplierMaster[];
-  expenseLedgers: { tally_ledger_name: string }[];
+  expenseLedgers: { tally_ledger_name: string; expense_keyword?: string | null }[];
   stockItems: { tally_item_name: string }[];
   initialLockedInvoices: Record<string, LockedInvoice>;
+  purchaseLedgerMasters: string[];           // tally_ledger_name values from purchase_ledger_config
+  historicalPurchaseLedgers: Record<string, string>; // key: vendor_gstin ?? 'name:'+normalized_name
+  companyWidePurchaseLedger: string | null;  // most-used PL across all company invoices (Case 3 fallback)
+  dutiesTaxesMasters: { tax_component: string; tally_ledger_name: string }[];
   companyId: string;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
@@ -147,6 +161,8 @@ function FlatPreviewTable({
   const [chargeFreetext, setChargeFreetext] = React.useState<Record<string, boolean>>({}); // desc → show freetext input
   const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
   const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
+  const [pendingPurchaseLedgers, setPendingPurchaseLedgers] = React.useState<string[]>([]);
+  const [purchaseLedgerCreating, setPurchaseLedgerCreating] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
 
   // Bulk-select state for inline accept / unaccept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
@@ -187,11 +203,48 @@ function FlatPreviewTable({
     const invoice  = invoices.find((i) => i.invoice_number === invNo);
     const supplier = suppliers.find((s) => s.tally_ledger_name === partyRow?.party_ledger);
 
-    const vendorLedger    = partyRow?.tally_ledger_name ?? '-';
+    // Defect 5 fix: use '' instead of '-' so the isBlank guard catches it at acceptance.
+    // The display cell already renders '-' for empty strings via `effectiveVendorLedger || '-'`.
+    const vendorLedger    = partyRow?.tally_ledger_name ?? '';
     const vendorSuggested = partyRow?.status === 'Suggested';
 
-    // ONE purchase ledger per invoice - accepted value first, then preview suggestion (e.g. 'Purchase')
-    const invPlLedger = invoice?.tally_ledger_acceptance?.purchaseLedger ?? purchRows[0]?.tally_ledger_name ?? '';
+    // ONE purchase ledger per invoice — 4-case logic per approved P2 design
+    // Case 3 hierarchy (multiple masters, no supplier history):
+    //   1. Company-wide most-used PL (companyWidePurchaseLedger) if available
+    //   2. First-configured PL (purchaseLedgerMasters[0]) as final fallback
+    //   Never blank.
+    let invPlLedger: string;
+    let invPlCase: 1 | 2 | 3 | 4;
+    let invPlHistoricalMissing = false;
+    if (invoice?.tally_ledger_acceptance?.purchaseLedger) {
+      // Locked: restore the accepted value
+      invPlLedger = invoice.tally_ledger_acceptance.purchaseLedger;
+      invPlCase = 4;
+    } else {
+      const supplierKey = invoice?.vendor_gstin
+        ? invoice.vendor_gstin
+        : `name:${(invoice?.vendor_name ?? '').toLowerCase().trim()}`;
+      const rawHistorical = historicalPurchaseLedgers[supplierKey] ?? null;
+      // Validate: historical ledger must still exist in current master
+      const validHistorical = rawHistorical && purchaseLedgerMasters.includes(rawHistorical) ? rawHistorical : null;
+      invPlHistoricalMissing = !!rawHistorical && !validHistorical;
+      if (validHistorical) {
+        invPlLedger = validHistorical;
+        invPlCase = 4;
+      } else if (purchaseLedgerMasters.length === 0) {
+        invPlLedger = 'Purchase'; // Case 1: bootstrap default
+        invPlCase = 1;
+      } else if (purchaseLedgerMasters.length === 1) {
+        invPlLedger = purchaseLedgerMasters[0]; // Case 2: unambiguous
+        invPlCase = 2;
+      } else {
+        // Case 3: multiple masters, no supplier history.
+        // Suggest company-wide most-used PL, falling back to first-configured.
+        // Never blank — user can always override via dropdown.
+        invPlLedger = companyWidePurchaseLedger ?? purchaseLedgerMasters[0];
+        invPlCase = 3;
+      }
+    }
     const invPlSuggested = !invoice?.tally_ledger_acceptance?.purchaseLedger;
 
     const charges: FlatDisplayRow['charges'] = chargeRows.map((c) => ({
@@ -242,11 +295,15 @@ function FlatPreviewTable({
       igstSuggested: igst?.is_suggested === true,
     };
 
+    const plBase = {
+      purchaseLedger: invPlLedger, purchaseLedgerSuggested: invPlSuggested,
+      purchaseLedgerCase: invPlCase, purchaseLedgerHistoricalMissing: invPlHistoricalMissing,
+    };
+
     if (isInventoryMode) {
       if (invRows2.length === 0) {
         displayRows.push({
-          ...base, isFirst: true, ...invoiceTail,
-          purchaseLedger: invPlLedger, purchaseLedgerSuggested: invPlSuggested,
+          ...base, isFirst: true, ...invoiceTail, ...plBase,
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
@@ -260,8 +317,7 @@ function FlatPreviewTable({
           ...base,
           isFirst: idx === 0,
           ...(idx === 0 ? invoiceTail : emptyTail),
-          purchaseLedger: invPlLedger,
-          purchaseLedgerSuggested: invPlSuggested,
+          ...plBase,
           itemDesc: row.item_description ?? '',
           hsn: lineItem?.hsn ?? '',
           stockItem: row.tally_ledger_name ?? '',
@@ -281,8 +337,7 @@ function FlatPreviewTable({
       const lineItems = invoice?.line_items ?? [];
       if (lineItems.length === 0) {
         displayRows.push({
-          ...base, isFirst: true, ...invoiceTail,
-          purchaseLedger: invPlLedger, purchaseLedgerSuggested: invPlSuggested,
+          ...base, isFirst: true, ...invoiceTail, ...plBase,
           itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
@@ -297,8 +352,7 @@ function FlatPreviewTable({
           ...base,
           isFirst: idx === 0,
           ...(idx === 0 ? invoiceTail : emptyTail),
-          purchaseLedger: invPlLedger,
-          purchaseLedgerSuggested: invPlSuggested,
+          ...plBase,
           itemDesc: item.description ?? '',
           hsn: item.hsn ?? '',
           stockItem: hsnSuggestion,
@@ -391,6 +445,40 @@ function FlatPreviewTable({
         roLedger,
         taxType: firstRow.taxType,
       });
+    }
+
+    // Defect 4 fix: validate all payloads before any write.
+    // Blank, whitespace-only, and '-' values must never be accepted.
+    const validationErrors: string[] = [];
+    for (const p of payloads) {
+      const errsForInv: string[] = [];
+      if (isBlank(p.vendorLedger))   errsForInv.push('Vendor Ledger is empty');
+      if (isBlank(p.purchaseLedger)) errsForInv.push('Purchase Ledger is empty');
+      for (const si of p.stockItems) {
+        if (isBlank(si.tallyName)) errsForInv.push(`Stock Item "${si.desc}" is empty`);
+      }
+      for (const ch of p.charges) {
+        if (isBlank(ch.tallyName)) errsForInv.push(`Expense Ledger "${ch.keyword}" is empty`);
+      }
+      if (p.taxType === 'cgst_sgst') {
+        if (isBlank(p.cgstLedger)) errsForInv.push('CGST Ledger is empty');
+        if (isBlank(p.sgstLedger)) errsForInv.push('SGST Ledger is empty');
+      }
+      if (p.taxType === 'igst') {
+        if (isBlank(p.igstLedger)) errsForInv.push('IGST Ledger is empty');
+      }
+      const firstRow = displayRows.find((r) => r.invoiceNo === p.invoiceNo && r.isFirst);
+      if (firstRow && Math.abs(firstRow.roAmt) > 0.001 && isBlank(p.roLedger)) {
+        errsForInv.push('Round Off Ledger is empty');
+      }
+      if (errsForInv.length) {
+        validationErrors.push(`Invoice ${p.invoiceNo} could not be accepted because:\n• ${errsForInv.join('\n• ')}`);
+      }
+    }
+    if (validationErrors.length) {
+      alert(validationErrors.join('\n\n'));
+      setBulkSaving(false);
+      return;
     }
 
     try {
@@ -654,26 +742,30 @@ function FlatPreviewTable({
                   </td>
                   {/* Vendor Name */}
                   <td className="px-3 py-2 max-w-[160px] truncate text-gray-700" title={row.vendorName}>{row.vendorName}</td>
-                  {/* Vendor Ledger */}
+                  {/* Vendor Ledger — always a dropdown before acceptance */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
                       <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '-'}</span>
-                    ) : row.vendorSuggested ? (
-                      suppliers.length > 0 ? (
-                        <select value={editedVendor ?? ''} onChange={(e) => {
+                    ) : suppliers.length > 0 ? (
+                      <select
+                        value={vendorEdits[row.vendorName] ?? row.vendorLedger}
+                        onChange={(e) => {
                           if (!e.target.value) return;
+                          // Defect 2 fix: update local state only; master write deferred to acceptance.
                           setVendorEdits((p) => ({ ...p, [row.vendorName]: e.target.value }));
-                          onMapSupplier(row.vendorName, e.target.value);
-                        }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
-                          <option value="">{vendorDisplayVal} (suggested) ✦</option>
-                          {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
-                        </select>
-                      ) : (
-                        <EditableField value={vendorDisplayVal} suggested color="text-purple-800"
-                          onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); onMapSupplier(row.vendorName, v); }} />
-                      )
+                        }}
+                        className={`border rounded px-2 py-1 text-xs w-full ${row.vendorSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                      >
+                        {!suppliers.some((s) => s.tally_ledger_name === (vendorEdits[row.vendorName] ?? row.vendorLedger)) && (
+                          <option value={vendorEdits[row.vendorName] ?? row.vendorLedger}>
+                            {vendorEdits[row.vendorName] ?? row.vendorLedger}{row.vendorSuggested ? ' ✦' : ''}
+                          </option>
+                        )}
+                        {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
+                      </select>
                     ) : (
-                      <span className="font-mono font-medium text-purple-800">{row.vendorLedger}</span>
+                      <EditableField value={vendorDisplayVal} suggested={row.vendorSuggested} color="text-purple-800"
+                        onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); }} />
                     )}
                   </td>
                   {/* GSTIN */}
@@ -686,13 +778,86 @@ function FlatPreviewTable({
                       </span>
                     )}
                   </td>
-                  {/* Purchase Ledger */}
-                  <td className="px-3 py-2 min-w-[180px]">
+                  {/* Purchase Ledger — dropdown with 4-case logic */}
+                  <td className="px-3 py-2 min-w-[200px]">
                     {isLocked ? (
                       <span className="font-mono font-medium text-blue-800">{effectivePurchaseLedger || '-'}</span>
+                    ) : purchaseLedgerCreating[row.invoiceNo] ? (
+                      // Inline create-new input
+                      <div className="flex items-center gap-1">
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="New ledger name…"
+                          className="border border-indigo-300 rounded px-2 py-0.5 text-xs bg-indigo-50 flex-1 font-mono"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const v = e.currentTarget.value.trim();
+                              if (v) {
+                                setPendingPurchaseLedgers((p) => p.includes(v) ? p : [...p, v]);
+                                setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                              }
+                              setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
+                            }
+                            if (e.key === 'Escape') setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
+                          }}
+                          onBlur={(e) => {
+                            const v = e.currentTarget.value.trim();
+                            if (v) {
+                              setPendingPurchaseLedgers((p) => p.includes(v) ? p : [...p, v]);
+                              setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                            }
+                            setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
+                          }}
+                        />
+                      </div>
                     ) : (
-                      <EditableField value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger} suggested={row.purchaseLedgerSuggested} color="text-blue-800"
-                        onSave={(v) => setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
+                      <div className="flex items-center gap-1">
+                        <select
+                          value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
+                          onChange={(e) => {
+                            if (e.target.value === '__new__') {
+                              setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: true }));
+                              return;
+                            }
+                            // Defect 1 fix: never store blank from dropdown (e.g. if browser resets selection)
+                            if (!e.target.value) return;
+                            setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }));
+                          }}
+                          className={`border rounded px-2 py-1 text-xs w-full ${
+                            row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerCase === 1
+                              ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'
+                          }`}
+                        >
+                          {/* No placeholder option — Case 3 always has a suggestion pre-selected */}
+                          {/* Show current value if not in master or pending list */}
+                          {(() => {
+                            const cur = purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger;
+                            const allOpts = [...purchaseLedgerMasters, ...pendingPurchaseLedgers];
+                            if (cur && !allOpts.includes(cur)) {
+                              return <option value={cur}>{cur}{row.purchaseLedgerCase !== 2 ? ' ✦' : ''}</option>;
+                            }
+                            return null;
+                          })()}
+                          {purchaseLedgerMasters.map((name) => <option key={name} value={name}>{name}</option>)}
+                          {pendingPurchaseLedgers.map((name) => <option key={`pending_${name}`} value={name}>{name} (new)</option>)}
+                          <option value="__new__">+ Create new…</option>
+                        </select>
+                        {(row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerHistoricalMissing) && (
+                          <span
+                            className="shrink-0 text-amber-500 cursor-help text-sm"
+                            title={
+                              row.purchaseLedgerHistoricalMissing
+                                ? 'The previously used Purchase Ledger for this supplier no longer exists in the master. Showing the most-used company-wide ledger as a fallback. Please verify.'
+                                : row.purchaseLedgerCase === 3
+                                ? (companyWidePurchaseLedger
+                                    ? 'Multiple Purchase Ledgers are configured. No prior invoices found for this supplier. This suggestion is the most frequently accepted Purchase Ledger across your company\'s invoices. Please verify before accepting.'
+                                    : 'Multiple Purchase Ledgers are configured. No accepted invoice history found to guide a suggestion. Showing the first-configured ledger. Please verify before accepting.')
+                                : 'Selected based on historical mapping for this supplier. Please verify.'
+                            }
+                          >ⓘ</span>
+                        )}
+                      </div>
                     )}
                   </td>
                   {/* Item Name + HSN */}
@@ -700,36 +865,40 @@ function FlatPreviewTable({
                     <div className="truncate text-gray-800" title={row.itemDesc}>{row.itemDesc || '-'}</div>
                     {row.hsn && <div className="text-gray-400 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
-                  {/* Stock Item */}
+                  {/* Stock Item — always dropdown in inventory mode before acceptance */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
                       <span className="font-mono text-indigo-700">{effectiveStockItem || '-'}</span>
-                    ) : row.stockItemSuggested ? (
-                      isInventoryMode && stockItems.length > 0 ? (
-                        <select defaultValue="" onChange={(e) => {
+                    ) : isInventoryMode && stockItems.length > 0 ? (
+                      <select
+                        value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
+                        onChange={(e) => {
                           if (!e.target.value) return;
                           const chosen = e.target.value;
+                          // Defect 3 fix: update local state only; master write deferred to acceptance.
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
-                          onMapStockItem(row.itemDesc, chosen);
-                        }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
-                          <option value="">{stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem} ✦</option>
-                          {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
-                        </select>
-                      ) : (
-                        <EditableField
-                          value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
-                          suggested color="text-indigo-700"
-                          onSave={(v) => {
-                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                            if (isInventoryMode) {
-                              setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
-                              onMapStockItem(row.itemDesc, v);
-                            }
-                          }} />
-                      )
+                        }}
+                        className={`border rounded px-2 py-1 text-xs w-full ${row.stockItemSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                      >
+                        {!stockItems.some((s) => s.tally_item_name === (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem)) && (
+                          <option value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}>
+                            {stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}{row.stockItemSuggested ? ' ✦' : ''}
+                          </option>
+                        )}
+                        {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
+                      </select>
+                    ) : isInventoryMode ? (
+                      <EditableField
+                        value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
+                        suggested={row.stockItemSuggested} color="text-indigo-700"
+                        onSave={(v) => {
+                          // Defect 3 fix: update local state only; master write deferred to acceptance.
+                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                        }} />
                     ) : (
-                      <span className="font-mono text-indigo-700">{row.stockItem || (isInventoryMode ? '-' : '')}</span>
+                      <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
                     )}
                   </td>
                   {/* Tax Rate */}
@@ -754,27 +923,37 @@ function FlatPreviewTable({
                         <td className="px-3 py-2 text-gray-600">{ch?.desc ?? ''}</td>
                         <td className="px-3 py-2 min-w-[160px]">
                           {ch && (
-                            ch.suggested ? (
-                              expenseLedgers.length > 0 && !chargeFreetext[ch.desc] ? (
-                                <select defaultValue="" onChange={(e) => {
+                            isLocked ? (
+                              // C9 fix: read locked value from tally_ledger_acceptance.charges
+                              <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>
+                                {(locked?.charges?.[ch.desc] ?? ch.ledger) || '-'}
+                              </span>
+                            ) : expenseLedgers.length > 0 && !chargeFreetext[ch.desc] ? (
+                              // C6: always show dropdown before acceptance
+                              <select
+                                value={chargeEdits[ch.desc] ?? ch.ledger}
+                                onChange={(e) => {
                                   if (e.target.value === '__new__') {
                                     setChargeFreetext((p) => ({ ...p, [ch.desc]: true }));
                                     return;
                                   }
                                   if (!e.target.value) return;
                                   setChargeEdits((p) => ({ ...p, [ch.desc]: e.target.value }));
-                                  onMapExpense(ch.desc, e.target.value);
-                                }} className="border border-amber-300 rounded px-2 py-1 text-xs bg-amber-50 w-full">
-                                  <option value="">{chargeEdits[ch.desc] ?? ch.ledger} ✦</option>
-                                  {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
-                                  <option value="__new__">+ Create new ledger…</option>
-                                </select>
-                              ) : (
-                                <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested color={ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}
-                                  onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); onMapExpense(ch.desc, v); }} />
-                              )
+                                }}
+                                className={`border rounded px-2 py-1 text-xs w-full ${ch.suggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                              >
+                                {!expenseLedgers.some((l) => l.tally_ledger_name === (chargeEdits[ch.desc] ?? ch.ledger)) && (
+                                  <option value={chargeEdits[ch.desc] ?? ch.ledger}>
+                                    {chargeEdits[ch.desc] ?? ch.ledger}{ch.suggested ? ' ✦' : ''}
+                                  </option>
+                                )}
+                                {expenseLedgers.map((l) => <option key={l.tally_ledger_name} value={l.tally_ledger_name}>{l.tally_ledger_name}</option>)}
+                                <option value="__new__">+ Create new ledger…</option>
+                              </select>
                             ) : (
-                              <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>{ch.ledger}</span>
+                              <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested={ch.suggested}
+                                color={ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}
+                                onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); }} />
                             )
                           )}
                         </td>
@@ -784,50 +963,98 @@ function FlatPreviewTable({
                       </React.Fragment>
                     );
                   })}
-                  {/* CGST */}
+                  {/* CGST — dropdown sourced from dutiesTaxesMasters */}
                   <td className="px-3 py-2 min-w-[160px]">
-                    {row.taxType === 'cgst_sgst' && (
-                      isLocked
+                    {row.taxType === 'cgst_sgst' && (() => {
+                      const cgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'CGST').map((d) => d.tally_ledger_name);
+                      return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
+                        : cgstOpts.length > 0
+                        ? <select
+                            value={taxLedgerEdits.cgst ?? row.cgstLedger}
+                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, cgst: e.target.value })); onMapTaxLedger('CGST', e.target.value); }}
+                            className={`border rounded px-2 py-1 text-xs w-full ${row.cgstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                          >
+                            {!cgstOpts.includes(taxLedgerEdits.cgst ?? row.cgstLedger) && (
+                              <option value={taxLedgerEdits.cgst ?? row.cgstLedger}>{taxLedgerEdits.cgst ?? row.cgstLedger}{row.cgstSuggested ? ' ✦' : ''}</option>
+                            )}
+                            {cgstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />
-                    )}
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {row.taxType === 'cgst_sgst' && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}
                   </td>
                   {/* SGST */}
                   <td className="px-3 py-2 min-w-[160px]">
-                    {row.taxType === 'cgst_sgst' && (
-                      isLocked
+                    {row.taxType === 'cgst_sgst' && (() => {
+                      const sgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'SGST').map((d) => d.tally_ledger_name);
+                      return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '-'}</span>
+                        : sgstOpts.length > 0
+                        ? <select
+                            value={taxLedgerEdits.sgst ?? row.sgstLedger}
+                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, sgst: e.target.value })); onMapTaxLedger('SGST', e.target.value); }}
+                            className={`border rounded px-2 py-1 text-xs w-full ${row.sgstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                          >
+                            {!sgstOpts.includes(taxLedgerEdits.sgst ?? row.sgstLedger) && (
+                              <option value={taxLedgerEdits.sgst ?? row.sgstLedger}>{taxLedgerEdits.sgst ?? row.sgstLedger}{row.sgstSuggested ? ' ✦' : ''}</option>
+                            )}
+                            {sgstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />
-                    )}
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {row.taxType === 'cgst_sgst' && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}
                   </td>
                   {/* IGST */}
                   <td className="px-3 py-2 min-w-[160px]">
-                    {row.taxType === 'igst' && (
-                      isLocked
+                    {row.taxType === 'igst' && (() => {
+                      const igstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'IGST').map((d) => d.tally_ledger_name);
+                      return isLocked
                         ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
+                        : igstOpts.length > 0
+                        ? <select
+                            value={taxLedgerEdits.igst ?? row.igstLedger}
+                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, igst: e.target.value })); onMapTaxLedger('IGST', e.target.value); }}
+                            className={`border rounded px-2 py-1 text-xs w-full ${row.igstSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                          >
+                            {!igstOpts.includes(taxLedgerEdits.igst ?? row.igstLedger) && (
+                              <option value={taxLedgerEdits.igst ?? row.igstLedger}>{taxLedgerEdits.igst ?? row.igstLedger}{row.igstSuggested ? ' ✦' : ''}</option>
+                            )}
+                            {igstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />
-                    )}
+                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700">
                     {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
                   </td>
-                  {/* Round Off - first row only */}
+                  {/* Round Off — dropdown sourced from expense ledgers with keyword 'Round Off' */}
                   <td className="px-3 py-2 min-w-[160px]">
-                    {row.isFirst && row.roAmt !== 0 && (
-                      isLocked
+                    {row.isFirst && row.roAmt !== 0 && (() => {
+                      const roOpts = expenseLedgers.filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off').map((e) => e.tally_ledger_name);
+                      return isLocked
                         ? <span className="font-mono font-medium text-gray-600">{effectiveRo || '-'}</span>
+                        : roOpts.length > 0
+                        ? <select
+                            value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
+                            onChange={(e) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
+                            className={`border rounded px-2 py-1 text-xs w-full ${row.roSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
+                          >
+                            {!roOpts.includes(roLedgerEdits[row.invoiceNo] ?? row.roLedger) && (
+                              <option value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}>{roLedgerEdits[row.invoiceNo] ?? row.roLedger}{row.roSuggested ? ' ✦' : ''}</option>
+                            )}
+                            {roOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
                         : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600"
-                            onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />
-                    )}
+                            onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />;
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-500">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
                 </tr>
@@ -851,7 +1078,8 @@ function FlatPreviewTable({
             <div className="flex gap-3">
               <button
                 onClick={() => {
-                  // Apply HSN @ Rate% format to all suggested stock items across all invoices
+                  // Defect 3 fix: update local state only; no pre-acceptance master write.
+                  // Apply HSN @ Rate% format to all suggested stock items across all invoices.
                   rows
                     .filter((r) => r.ledger_type === 'Inventory' && r.is_suggested)
                     .forEach((r) => {
@@ -859,7 +1087,7 @@ function FlatPreviewTable({
                       const li = inv?.line_items.find((l) => l.description === r.item_description);
                       if (li) {
                         const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-                        onMapStockItem(r.item_description ?? '', name);
+                        setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
                       }
                     });
                   setStockConfirm(null);
@@ -1058,6 +1286,8 @@ export default function XmlGeneratorPage() {
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [cachedMasters, setCachedMasters] = useState<Awaited<ReturnType<typeof loadMasters>> | null>(null);
+  const [cachedHistoricalPL, setCachedHistoricalPL] = useState<Record<string, string> | null>(null);
+  const [cachedCompanyWidePL, setCachedCompanyWidePL] = useState<string | null>(null);
 
 
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
@@ -1143,6 +1373,35 @@ export default function XmlGeneratorPage() {
       const masters = await loadMasters(company!.id);
       setCachedMasters(masters);
       const fresh = await getCompany(company!.id);
+
+      // Build historical purchase ledger map keyed by vendor_gstin or 'name:normalized_name'
+      const supplierKeySet: Record<string, true> = {};
+      for (const inv of invoices) {
+        const k = inv.vendor_gstin ? inv.vendor_gstin : `name:${(inv.vendor_name ?? '').toLowerCase().trim()}`;
+        if (k) supplierKeySet[k] = true;
+      }
+      const uniqueSupplierKeys = Object.keys(supplierKeySet);
+      const historicalEntries = await Promise.all(
+        uniqueSupplierKeys.map(async (key) => {
+          const isGstin = !key.startsWith('name:');
+          const result = await getHistoricalPurchaseLedger(
+            company!.id,
+            isGstin ? key : null,
+            isGstin ? null : key.slice(5),
+          );
+          return [key, result] as [string, string | null];
+        })
+      );
+      const historicalPL: Record<string, string> = {};
+      for (const [key, val] of historicalEntries) { if (val) historicalPL[key] = val; }
+      setCachedHistoricalPL(historicalPL);
+
+      // Fetch company-wide most-used PL for Case 3 suggestion (multiple masters, no supplier history)
+      const plMasterNames = masters.purchaseLedgerMasters.map((l) => l.tally_ledger_name);
+      const companyWidePL = plMasterNames.length > 1
+        ? await getCompanyWideMostUsedPurchaseLedger(company!.id, plMasterNames)
+        : null;
+      setCachedCompanyWidePL(companyWidePL);
 
       const rows = buildTallyPreview({
         invoices, ...masters,
@@ -1528,6 +1787,10 @@ export default function XmlGeneratorPage() {
                 suppliers={cachedMasters?.suppliers ?? []}
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
+                purchaseLedgerMasters={(cachedMasters?.purchaseLedgerMasters ?? []).map((l) => l.tally_ledger_name)}
+                historicalPurchaseLedgers={cachedHistoricalPL ?? {}}
+                companyWidePurchaseLedger={cachedCompanyWidePL}
+                dutiesTaxesMasters={(cachedMasters?.dutiesTaxes ?? []).map((d) => ({ tax_component: d.tax_component, tally_ledger_name: d.tally_ledger_name }))}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
                 onMapExpense={async (description, ledgerName) => {
@@ -1580,19 +1843,19 @@ export default function XmlGeneratorPage() {
 
                   for (const p of payloads) {
                     // 1. Vendor ledger → supplier_masters
-                    if (p.vendorLedger && !seenVendor.has(p.vendorName)) {
+                    if (!isBlank(p.vendorLedger) && !seenVendor.has(p.vendorName)) {
                       seenVendor.add(p.vendorName);
                       try { await addSupplier(company.id, { vendor_name: p.vendorName, vendor_gstin: p.vendorGstin, tally_ledger_name: p.vendorLedger }); }
                       catch (e) { errs.push(`Vendor "${p.vendorName}": ${getErrMsg(e)}`); }
                     }
                     // 1b. Purchase ledger → purchase_ledger_config
-                    if (p.purchaseLedger) {
+                    if (!isBlank(p.purchaseLedger)) {
                       try { await addPurchaseLedger(company.id, p.purchaseLedger); }
                       catch (e) { errs.push(`Purchase ledger: ${getErrMsg(e)}`); }
                     }
                     // 2. Stock items → stock_item_masters
                     for (const si of p.stockItems) {
-                      if (si.tallyName && !seenStock.has(si.desc)) {
+                      if (!isBlank(si.tallyName) && !seenStock.has(si.desc)) {
                         seenStock.add(si.desc);
                         try {
                           await addStockItem(company.id, {
@@ -1610,7 +1873,7 @@ export default function XmlGeneratorPage() {
                     for (const ch of p.charges) {
                       // Key by keyword+rate so Freight@0% and Freight@5% both get saved
                       const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
-                      if (ch.tallyName && !seenExp.has(expKey)) {
+                      if (!isBlank(ch.tallyName) && !seenExp.has(expKey)) {
                         seenExp.add(expKey);
                         // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
@@ -1636,25 +1899,25 @@ export default function XmlGeneratorPage() {
                     }
                     // 4. Tax ledgers → duties_taxes_masters (consolidated, null rate)
                     if (p.taxType === 'cgst_sgst') {
-                      if (p.cgstLedger && !seenCgst) {
+                      if (!isBlank(p.cgstLedger) && !seenCgst) {
                         seenCgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'CGST', tax_rate: null, tally_ledger_name: p.cgstLedger }); }
                         catch (e) { errs.push(`CGST ledger: ${getErrMsg(e)}`); }
                       }
-                      if (p.sgstLedger && !seenSgst) {
+                      if (!isBlank(p.sgstLedger) && !seenSgst) {
                         seenSgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'SGST', tax_rate: null, tally_ledger_name: p.sgstLedger }); }
                         catch (e) { errs.push(`SGST ledger: ${getErrMsg(e)}`); }
                       }
                     } else if (p.taxType === 'igst') {
-                      if (p.igstLedger && !seenIgst) {
+                      if (!isBlank(p.igstLedger) && !seenIgst) {
                         seenIgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'IGST', tax_rate: null, tally_ledger_name: p.igstLedger }); }
                         catch (e) { errs.push(`IGST ledger: ${getErrMsg(e)}`); }
                       }
                     }
                     // 5. Round off ledger → expense_ledger_masters
-                    if (p.roLedger && !seenRo.has(p.roLedger)) {
+                    if (!isBlank(p.roLedger) && !seenRo.has(p.roLedger)) {
                       seenRo.add(p.roLedger);
                       try { await addExpenseLedger(company.id, { tally_ledger_name: p.roLedger, expense_keyword: 'Round Off' }); }
                       catch (e) { errs.push(`Round Off ledger: ${getErrMsg(e)}`); }
