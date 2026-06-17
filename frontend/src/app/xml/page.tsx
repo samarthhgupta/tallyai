@@ -131,14 +131,15 @@ function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
   purchaseLedgerMasters, historicalPurchaseLedgers, companyWidePurchaseLedger,
-  dutiesTaxesMasters,
+  dutiesTaxesMasters, stockItemMode,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
   suppliers: SupplierMaster[];
   expenseLedgers: { tally_ledger_name: string; expense_keyword?: string | null }[];
-  stockItems: { tally_item_name: string }[];
+  stockItems: { tally_item_name: string; hsn_code?: string | null; gst_percent?: number | null }[];
+  stockItemMode?: 'hsn_driven' | null;
   initialLockedInvoices: Record<string, LockedInvoice>;
   purchaseLedgerMasters: string[];           // tally_ledger_name values from purchase_ledger_config
   historicalPurchaseLedgers: Record<string, string>; // key: vendor_gstin ?? 'name:'+normalized_name
@@ -347,6 +348,18 @@ function FlatPreviewTable({
       }
       lineItems.forEach((item, idx) => {
         const hsnSuggestion = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : '';
+        // For HSN-driven companies, resolve stock item from master by HSN+GST rate
+        let resolvedStockItem = hsnSuggestion;
+        let resolvedSuggested = !!hsnSuggestion;
+        if (stockItemMode === 'hsn_driven' && item.hsn) {
+          const cleanHsn = item.hsn.replace(/[\s.]/g, '');
+          const match = stockItems.find((s) =>
+            s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
+          ) ?? stockItems.find((s) =>
+            s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
+          );
+          if (match) { resolvedStockItem = match.tally_item_name; resolvedSuggested = false; }
+        }
         const itemAmt = calcLineAmount(item);
         displayRows.push({
           ...base,
@@ -355,8 +368,8 @@ function FlatPreviewTable({
           ...plBase,
           itemDesc: item.description ?? '',
           hsn: item.hsn ?? '',
-          stockItem: hsnSuggestion,
-          stockItemSuggested: !!hsnSuggestion,
+          stockItem: resolvedStockItem,
+          stockItemSuggested: resolvedSuggested,
           taxRate: item.gst_percent ?? null,
           qty:  item.qty ?? null,
           uom:  normalizeUomDisplay(item.uom),
@@ -1789,6 +1802,7 @@ export default function XmlGeneratorPage() {
                 suppliers={cachedMasters?.suppliers ?? []}
                 expenseLedgers={cachedMasters?.expenseLedgers ?? []}
                 stockItems={cachedMasters?.stockItems ?? []}
+                stockItemMode={company?.stock_item_mode}
                 purchaseLedgerMasters={(cachedMasters?.purchaseLedgerMasters ?? []).map((l) => l.tally_ledger_name)}
                 historicalPurchaseLedgers={cachedHistoricalPL ?? {}}
                 companyWidePurchaseLedger={cachedCompanyWidePL}
