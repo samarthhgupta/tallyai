@@ -44,6 +44,11 @@ export default function ExpenseLedgersPage() {
   const [importResult, setImportResult] = useState<ExpenseLedgerImportResult | null>(null);
   const [importing, setImporting] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (companyLoading) return;
     getSession().then((session) => {
@@ -51,6 +56,8 @@ export default function ExpenseLedgersPage() {
       if (!company) router.replace('/select-company');
     });
   }, [company, companyLoading, router]);
+
+  useEffect(() => { setSelectedIds(new Set()); }, [company?.id]);
 
   const refresh = useCallback(async () => {
     if (!company?.id) return;
@@ -63,6 +70,51 @@ export default function ExpenseLedgersPage() {
   }, [company]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const filtered = ledgers.filter((l) => {
+    const q = search.toLowerCase();
+    return !q ||
+      l.tally_ledger_name.toLowerCase().includes(q) ||
+      (l.expense_keyword ?? '').toLowerCase().includes(q);
+  });
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    const some = selectedIds.size > 0 && selectedIds.size < filtered.length;
+    selectAllRef.current.indeterminate = some;
+  }, [selectedIds, filtered.length]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((l) => l.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    setBulkDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map((id) => deleteExpenseLedger(id)));
+      setSelectedIds(new Set());
+      setShowBulkConfirm(false);
+      await refresh();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Failed to delete some ledgers.');
+      setShowBulkConfirm(false);
+      await refresh();
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   // ── Manual form ──────────────────────────────────────────────────────────
   const openAdd = (prefill?: string) => {
@@ -94,7 +146,7 @@ export default function ExpenseLedgersPage() {
     try {
       const gstPct = form.gst_percent !== '' ? parseFloat(form.gst_percent) : undefined;
       const params = {
-        tally_ledger_name: form.tally_ledger_name, // stored exactly as typed
+        tally_ledger_name: form.tally_ledger_name,
         expense_keyword: form.expense_keyword || undefined,
         sac_code: form.sac_code || undefined,
         gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
@@ -118,6 +170,7 @@ export default function ExpenseLedgersPage() {
     if (!confirm(`Delete expense ledger "${name}"?`)) return;
     try {
       await deleteExpenseLedger(id);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
       await refresh();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to delete.');
@@ -185,7 +238,7 @@ export default function ExpenseLedgersPage() {
         const rawGst = gstCol !== -1 ? r[gstCol] : undefined;
         const gstPct = rawGst !== undefined && rawGst !== '' ? parseFloat(String(rawGst)) : null;
         return {
-          tally_ledger_name: String(r[ledgerCol] ?? ''), // NOT trimmed
+          tally_ledger_name: String(r[ledgerCol] ?? ''),
           expense_keyword: keywordCol !== -1 ? String(r[keywordCol] ?? '') : '',
           sac_code: sacCol !== -1 ? String(r[sacCol] ?? '') : '',
           gst_percent: gstPct && !isNaN(gstPct) ? gstPct : null,
@@ -218,14 +271,6 @@ export default function ExpenseLedgersPage() {
     XLSX.writeFile(wb, `ExpenseLedgers_${company?.name ?? 'export'}.xlsx`);
   };
 
-  const filtered = ledgers.filter((l) => {
-    const q = search.toLowerCase();
-    return !q ||
-      l.tally_ledger_name.toLowerCase().includes(q) ||
-      (l.expense_keyword ?? '').toLowerCase().includes(q);
-  });
-
-  // Which common expenses are not yet added
   const existingNames = new Set(ledgers.map((l) => l.tally_ledger_name.toLowerCase().trim()));
   const suggestedExpenses = COMMON_EXPENSES.filter((e) => !existingNames.has(e.toLowerCase()));
 
@@ -412,6 +457,21 @@ export default function ExpenseLedgersPage() {
             </form>
           )}
 
+          {/* ── Bulk action bar ── */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+              <button onClick={() => setShowBulkConfirm(true)}
+                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                Delete Selected ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Table ── */}
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
@@ -424,6 +484,15 @@ export default function ExpenseLedgersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th className="px-4 py-3 w-8">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={selectedIds.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Ledger Name</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Expense Keyword</th>
                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">SAC</th>
@@ -433,7 +502,15 @@ export default function ExpenseLedgersPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((l) => (
-                    <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(l.id) ? 'bg-red-50' : ''}`}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(l.id)}
+                          onChange={() => toggleSelect(l.id)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </td>
                       <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{l.tally_ledger_name}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">
                         {l.expense_keyword
@@ -461,6 +538,26 @@ export default function ExpenseLedgersPage() {
           )}
         </div>
       </main>
+
+      {/* ── Bulk delete confirmation modal ── */}
+      {showBulkConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} ledger{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                Cancel
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting}
+                className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors">
+                {bulkDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
