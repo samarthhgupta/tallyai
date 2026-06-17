@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { normalizeUom } from '@/lib/uomRegistry';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
 import {
@@ -282,29 +282,28 @@ export default function StockItemsPage() {
   const companyName = company?.name ?? '';
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 px-6 py-8">
+    <AppLayout>
+      <main className="flex-1 px-6 py-8">
         <div className="max-w-5xl">
 
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Stock Item Master</h1>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Stock Item Master</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 Maps invoice item descriptions to exact Tally stock item names.
               </p>
             </div>
             <div className="flex gap-2">
               <button onClick={downloadTemplate}
-                className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors flex items-center gap-1.5">
+                className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
                 Template
               </button>
               <button onClick={() => { setTab('import'); setShowForm(false); }} disabled={!company?.id}
-                className="px-3 py-2 text-sm text-indigo-700 border border-indigo-300 bg-indigo-50 rounded-md hover:bg-indigo-100 disabled:opacity-40 transition-colors flex items-center gap-1.5">
+                className="px-3 py-2 text-sm text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/30 rounded-md hover:bg-indigo-100 dark:hover:bg-indigo-800 disabled:opacity-40 transition-colors flex items-center gap-1.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
                 </svg>
@@ -323,8 +322,8 @@ export default function StockItemsPage() {
               <>
                 <input value={search} onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search items…"
-                  className="ml-auto text-sm border border-gray-300 rounded-md px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                <button onClick={exportToExcel} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                  className="ml-auto text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button onClick={exportToExcel} className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
@@ -336,47 +335,47 @@ export default function StockItemsPage() {
 
           {/* ── Import panel ── */}
           {tab === 'import' && company?.id && (
-            <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Import Stock Items from Excel</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Into: <span className="font-medium text-gray-700">{companyName}</span></p>
+                  <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Import Stock Items from Excel</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Into: <span className="font-medium text-gray-700 dark:text-gray-300">{companyName}</span></p>
                 </div>
-                <button onClick={() => setTab('list')} className="text-sm text-gray-400 hover:text-gray-600">✕ Close</button>
+                <button onClick={() => setTab('list')} className="text-sm text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400">✕ Close</button>
               </div>
 
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-3 text-xs text-amber-800 dark:text-amber-300 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns (from Tally stock item list export):</p>
                 <p>• <strong>Tally Stock Item Name</strong> - exact item name as in Tally (required)</p>
                 <p>• <strong>Alias Name</strong> - how this item appears on invoices (optional)</p>
                 <p>• <strong>Unit</strong> - e.g. NOS, KG, BOX (optional)</p>
                 <p>• <strong>HSN Code</strong> - optional, not required for XML generation</p>
-                <p className="mt-1 text-amber-700">Item names are stored exactly as in your file - no changes are made.</p>
+                <p className="mt-1 text-amber-700 dark:text-amber-400">Item names are stored exactly as in your file - no changes are made.</p>
               </div>
 
-              <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
+              <div className="border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
                 onClick={() => fileInputRef.current?.click()}>
-                <svg className="w-8 h-8 text-gray-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p className="text-sm text-gray-500">{importing ? 'Processing…' : 'Click to upload .xlsx / .xls file'}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{importing ? 'Processing…' : 'Click to upload .xlsx / .xls file'}</p>
               </div>
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFileChange} />
 
               {importResult && (
                 <div className="mt-4 space-y-3">
                   {(importResult.inserted > 0 || importResult.updated > 0) && (
-                    <div className="flex gap-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm">
-                      {importResult.inserted > 0 && <span className="text-green-700 font-medium">✓ {importResult.inserted} new item{importResult.inserted !== 1 ? 's' : ''} added</span>}
-                      {importResult.updated > 0 && <span className="text-blue-700 font-medium">↻ {importResult.updated} existing record{importResult.updated !== 1 ? 's' : ''} updated</span>}
+                    <div className="flex gap-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3 text-sm">
+                      {importResult.inserted > 0 && <span className="text-green-700 dark:text-green-400 font-medium">✓ {importResult.inserted} new item{importResult.inserted !== 1 ? 's' : ''} added</span>}
+                      {importResult.updated > 0 && <span className="text-blue-700 dark:text-blue-300 font-medium">↻ {importResult.updated} existing record{importResult.updated !== 1 ? 's' : ''} updated</span>}
                     </div>
                   )}
                   {importResult.errors.length > 0 && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                      <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
+                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+                      <p className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">Row {e.row}: <span className="font-mono">{e.item}</span> - {e.reason}</p>
+                          <p key={i} className="text-xs text-red-600 dark:text-red-400">Row {e.row}: <span className="font-mono">{e.item}</span> - {e.reason}</p>
                         ))}
                       </div>
                     </div>
@@ -388,83 +387,83 @@ export default function StockItemsPage() {
 
           {/* ── Manual form ── */}
           {showForm && tab === 'list' && (
-            <form onSubmit={handleSubmit} className="mb-6 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-              <h2 className="text-sm font-semibold text-gray-900 mb-4">
+            <form onSubmit={handleSubmit} className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
                 {editingId ? 'Edit Stock Item' : 'Add Stock Item'}
               </h2>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally Stock Item Name *</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Tally Stock Item Name *</label>
                   <input value={form.tally_item_name}
                     onChange={(e) => setForm({ ...form, tally_item_name: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. A4 Copier Paper Ream" />
-                  <p className="text-xs text-gray-400 mt-1">Stored exactly as entered - must match Tally.</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Stored exactly as entered - must match Tally.</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                     Alias Name
-                    <span className="ml-1 text-gray-400 font-normal">(how it appears on invoice)</span>
+                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">(how it appears on invoice)</span>
                   </label>
                   <input value={form.alias_name}
                     onChange={(e) => setForm({ ...form, alias_name: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. A4 Paper" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                     Unit
-                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
                   </label>
                   <input value={form.unit}
                     onChange={(e) => setForm({ ...form, unit: e.target.value.toUpperCase() })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="NOS / KG / MTR / BOX" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                     HSN Code
-                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
                   </label>
                   <input value={form.hsn_code}
                     onChange={(e) => setForm({ ...form, hsn_code: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. 48025590" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                     GST %
-                    <span className="ml-1 text-gray-400 font-normal">(optional)</span>
+                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
                   </label>
                   <input value={form.gst_percent}
                     onChange={(e) => setForm({ ...form, gst_percent: e.target.value })}
                     type="number" min="0" max="100" step="0.01"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. 12" />
                 </div>
               </div>
-              {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
+              {formError && <p className="text-sm text-red-600 dark:text-red-400 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
                 <button type="submit" disabled={saving}
                   className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors">
                   {saving ? 'Saving…' : editingId ? 'Save Changes' : 'Add'}
                 </button>
                 <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">Cancel</button>
               </div>
             </form>
           )}
 
           {/* ── Bulk action bar ── */}
           {selectedIds.size > 0 && (
-            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
-              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <span className="text-sm text-red-700 dark:text-red-400 font-medium">{selectedIds.size} selected</span>
               <button onClick={() => setShowBulkConfirm(true)}
-                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                className="text-sm text-red-600 dark:text-red-400 hover:text-red-800 font-medium">
                 Delete Selected ({selectedIds.size})
               </button>
               <button onClick={() => setSelectedIds(new Set())}
-                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 ml-auto">
                 Cancel
               </button>
             </div>
@@ -553,6 +552,6 @@ export default function StockItemsPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }
