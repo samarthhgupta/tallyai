@@ -1409,6 +1409,7 @@ export default function XmlGeneratorPage() {
         tallyCompanyName: company!.tally_company_name!,
         voucherMode,
         discountLedgerName: fresh.discount_ledger_name,
+        stockItemMode: fresh.stock_item_mode,
       });
       setPreviewRows(rows);
 
@@ -1454,6 +1455,7 @@ export default function XmlGeneratorPage() {
       voucherMode,
       discountLedgerName: fresh.discount_ledger_name,
       companyGstin: fresh.gstin ?? undefined,
+      stockItemMode: fresh.stock_item_mode,
     };
   };
 

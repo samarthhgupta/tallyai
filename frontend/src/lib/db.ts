@@ -22,6 +22,7 @@ export interface Company {
   purchase_ledger_config: { gst_percent: number | null; tally_ledger_name: string }[] | null;
   voucher_mode: 'accounting_only' | 'inventory' | null;
   discount_ledger_name: string | null; // Tally ledger for bill-level discounts (P&L)
+  stock_item_mode: 'hsn_driven' | null;
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ export interface Company {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
-const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name';
+const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name, stock_item_mode';
 
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
