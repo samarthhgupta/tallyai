@@ -22,6 +22,7 @@ export interface Company {
   purchase_ledger_config: { gst_percent: number | null; tally_ledger_name: string }[] | null;
   voucher_mode: 'accounting_only' | 'inventory' | null;
   discount_ledger_name: string | null; // Tally ledger for bill-level discounts (P&L)
+  stock_item_mode: 'hsn_driven' | null;
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ export interface Company {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
-const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name';
+const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name, stock_item_mode';
 
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
@@ -906,6 +907,28 @@ export interface RejectedRecord {
   rejected_at: string | null;
   moved_by_email?: string | null;
   itc_status?: string | null;
+}
+
+// ─── Restore a rejected invoice back to accepted ─────────────────────────────
+// Moves the invoice from rejected back to accepted so it appears in the
+// Purchase Register. The rejection_archive row is removed.
+// The user can move it to rejected again via "Move to Rejected" if needed.
+export async function restoreRejectedInvoice(invoiceId: string): Promise<void> {
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const { error: updateErr } = await db()
+    .from('invoices')
+    .update({
+      status: 'accepted',
+      rejected_at: null,
+      rejected_by: null,
+      rejection_reason: null,
+      accepted_at: new Date().toISOString(),
+      accepted_by: user?.id ?? null,
+    })
+    .eq('id', invoiceId);
+  if (updateErr) throw new Error(`Restore failed: ${updateErr.message}`);
+
+  await db().from('rejection_archive').delete().eq('invoice_id', invoiceId);
 }
 
 export async function getRejectedRegister(

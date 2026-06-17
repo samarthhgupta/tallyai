@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { getSession } from '@/lib/auth';
-import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice, rejectInvoices } from '@/lib/db';
+import { getPurchaseRegister, deleteInvoice, deleteAllCompanyInvoices, getRejectedRegister, updateAcceptedInvoice, rejectInvoices, restoreRejectedInvoice } from '@/lib/db';
 import type { RejectedRecord } from '@/lib/db';
 import type { StoredInvoice, ITCStatus } from '@/types/invoice';
 import { formatINR, buildFullTaxSummary, calcLineAmount } from '@/types/invoice';
@@ -483,6 +483,16 @@ export default function PurchaseRegisterPage() {
 
   const handleShowRejected = () => { setShowRejected(true); fetchRejected(); };
 
+  const handleRestoreRejected = async (rec: RejectedRecord) => {
+    if (!confirm(`Restore "${rec.invoice_number || 'this invoice'}" from ${rec.vendor_name || 'unknown vendor'}?\n\nThis will move it back to the Purchase Register as Accepted. You can move it to Rejected again if needed.`)) return;
+    try {
+      await restoreRejectedInvoice(rec.invoice_id);
+      setRejectedRecords((prev) => prev.filter((r) => r.id !== rec.id));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to restore invoice.');
+    }
+  };
+
   // ── ITC Review handler ──
   const handleConfirmReview = async (reason: string) => {
     if (!reviewTarget) return;
@@ -682,7 +692,7 @@ export default function PurchaseRegisterPage() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        {['#','Invoice #','Vendor','GSTIN','Date','Period','Total','Reason','Voided On','Voided By'].map(h => (
+                        {['#','Invoice #','Vendor','GSTIN','Date','Period','Total','Reason','Voided On','Voided By',''].map(h => (
                           <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -700,6 +710,11 @@ export default function PurchaseRegisterPage() {
                           <td className="px-4 py-3 text-gray-500 text-xs max-w-[140px] truncate" title={rec.rejection_reason ?? undefined}>{rec.rejection_reason || '—'}</td>
                           <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">{fmtDateTime(rec.rejected_at)}</td>
                           <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{rec.moved_by_email || '—'}</td>
+                          <td className="px-4 py-3">
+                            <button onClick={() => handleRestoreRejected(rec)} className="text-xs text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
+                              Restore
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>

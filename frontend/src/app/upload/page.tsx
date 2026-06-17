@@ -789,8 +789,8 @@ export default function UploadPage() {
 
                   return (
                     <div key={item.key} className={`flex gap-3 items-start ${isCritical || isFYMismatch ? 'opacity-80' : ''}`}>
-                      {/* Checkbox column */}
-                      <div className="pt-4 pl-1 shrink-0">
+                      {/* Checkbox / reject column */}
+                      <div className="pt-4 pl-1 shrink-0 flex flex-col items-center gap-1">
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -799,6 +799,15 @@ export default function UploadPage() {
                           title={isFYMismatch ? 'Financial Year mismatch - change FY or correct invoice date' : isCritical ? 'Resolve critical issues before accepting' : undefined}
                           className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
                         />
+                        {(isCritical || isFYMismatch) && (
+                          <button
+                            onClick={() => setRejectPopup([item.key])}
+                            title="Reject this invoice"
+                            className="mt-0.5 text-[10px] font-semibold text-red-500 hover:text-red-700 hover:underline leading-tight"
+                          >
+                            Reject
+                          </button>
+                        )}
                       </div>
 
                       {/* Card + readiness badge */}
@@ -834,10 +843,7 @@ export default function UploadPage() {
                           company={selectedCompany ? { id: selectedCompany.id, name: selectedCompany.name, gstin: selectedCompany.gstin ?? '' } : undefined}
                           historyMatch={historyMatch}
                           isBatchNew={true}
-                          onReject={() => {
-                            setQueue((prev) => prev.filter((q) => q.key !== item.key));
-                            setSelected((prev) => { const n = new Set(prev); n.delete(item.key); return n; });
-                          }}
+                          onReject={() => doReject([item.key], 'Duplicate invoice')}
                           onSave={(updated) => {
                             setInvoiceOverrides((prev) => new Map(prev).set(item.key, updated));
                             // Recompute readiness + FY mismatch with updated invoice

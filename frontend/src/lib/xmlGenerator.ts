@@ -60,6 +60,7 @@ export interface XmlGeneratorInput {
   discountLedgerName?: string | null;       // Tally ledger for bill-level discounts (P&L)
   companyGstin?: string;                    // company's own GSTIN (optional)
   companyState?: string;                    // company's state full name (optional)
+  stockItemMode?: 'hsn_driven' | null;      // matching strategy; null = legacy waterfall
 }
 
 // Maps a GST rate (e.g. 18) to the Tally purchase ledger name for that rate.
@@ -208,7 +209,23 @@ function findStockItem(
   description: string,
   hsn?: string,
   gstRate?: number,
+  mode?: 'hsn_driven' | null,
 ): StockItemMaster | null {
+  // HSN-driven companies identify stock items by HSN+GST rate, not description.
+  // Skip all alias/description matching to prevent wrong-rate collisions.
+  if (mode === 'hsn_driven') {
+    if (!hsn) return null;
+    const cleanHsn = hsn.replace(/[\s.]/g, '');
+    if (gstRate != null) {
+      const byHsn = stockItems.find(
+        (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === gstRate,
+      );
+      if (byHsn) return byHsn;
+    }
+    return stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn) ?? null;
+  }
+
+  // Legacy description-based waterfall (unchanged for all other companies)
   const q = norm(description);
   const byAlias = stockItems.find((s) => s.alias_name && norm(s.alias_name) === q);
   if (byAlias) return byAlias;
@@ -220,17 +237,12 @@ function findStockItem(
   if (partialAlias) return partialAlias;
   const fuzzy = suggestStockItem(stockItems, description);
   if (fuzzy) return fuzzy;
-  // HSN + GST rate match - stock items named "{HSN} @ {RATE}%" are looked up by code+rate
   if (hsn && gstRate != null) {
     const cleanHsn = hsn.replace(/[\s.]/g, '');
     const byHsn = stockItems.find(
-      (s) =>
-        s.hsn_code &&
-        s.hsn_code.replace(/[\s.]/g, '') === cleanHsn &&
-        s.gst_percent === gstRate,
+      (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === gstRate,
     );
     if (byHsn) return byHsn;
-    // Rate-only HSN match (consolidated item without rate distinction)
     const byHsnOnly = stockItems.find(
       (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
     );
@@ -875,7 +887,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
 
   for (const item of inv.line_items) {
     const desc = item.description ?? '';
-    const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
+    const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
     const itemNet = calcLineAmount(item);
     if (!stockItem) {
       warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped - booking to purchase ledger`);
@@ -1808,7 +1820,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
     const invoiceRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       for (const item of inv.line_items) {
-        const stockItem = findStockItem(input.stockItems, item.description ?? '', item.hsn, item.gst_percent);
+        const stockItem = findStockItem(input.stockItems, item.description ?? '', item.hsn, item.gst_percent, input.stockItemMode);
         if (stockItem && !invoiceRateMap.has(stockItem.tally_item_name)) {
           invoiceRateMap.set(stockItem.tally_item_name, item.gst_percent ?? 0);
         }
@@ -2086,7 +2098,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     for (const item of inv.line_items) {
       const desc = item.description ?? '';
-      const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent);
+      const stockItem = findStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
       const itemNet = calcLineAmount(item);
       const uom = resolveUom(stockItem?.unit, item.uom);
       const hsnRate = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : `${desc} @ ${item.gst_percent ?? 0}%`;
