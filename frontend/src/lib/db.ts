@@ -909,6 +909,28 @@ export interface RejectedRecord {
   itc_status?: string | null;
 }
 
+// ─── Restore a rejected invoice back to accepted ─────────────────────────────
+// Moves the invoice from rejected back to accepted so it appears in the
+// Purchase Register. The rejection_archive row is removed.
+// The user can move it to rejected again via "Move to Rejected" if needed.
+export async function restoreRejectedInvoice(invoiceId: string): Promise<void> {
+  const user = (await getSupabase().auth.getUser()).data.user;
+  const { error: updateErr } = await db()
+    .from('invoices')
+    .update({
+      status: 'accepted',
+      rejected_at: null,
+      rejected_by: null,
+      rejection_reason: null,
+      accepted_at: new Date().toISOString(),
+      accepted_by: user?.id ?? null,
+    })
+    .eq('id', invoiceId);
+  if (updateErr) throw new Error(`Restore failed: ${updateErr.message}`);
+
+  await db().from('rejection_archive').delete().eq('invoice_id', invoiceId);
+}
+
 export async function getRejectedRegister(
   companyId: string,
   financialYear?: string,
