@@ -473,13 +473,13 @@ export default function StockItemsPage() {
           {loading ? (
             <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" /></div>
           ) : filtered.length === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-10 text-center text-gray-400 dark:text-gray-500">
               <p className="text-sm">{items.length === 0 ? 'No stock items yet. Import from Excel or add manually.' : 'No items match your search.'}</p>
             </div>
           ) : (
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                   <tr>
                     <th className="px-4 py-3 w-8">
                       <input
@@ -487,46 +487,46 @@ export default function StockItemsPage() {
                         type="checkbox"
                         checked={selectedIds.size === filtered.length && filtered.length > 0}
                         onChange={toggleSelectAll}
-                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                       />
                     </th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tally Item Name</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Alias / Invoice Description</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Unit</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">HSN</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">GST %</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Tally Item Name</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Alias / Invoice Description</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-20">Unit</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-28">HSN</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-20">GST %</th>
                     <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {filtered.map((s) => (
-                    <tr key={s.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(s.id) ? 'bg-red-50' : ''}`}>
+                    <tr key={s.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${selectedIds.has(s.id) ? 'bg-red-50 dark:bg-red-900/20' : ''}`}>
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(s.id)}
                           onChange={() => toggleSelect(s.id)}
-                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                         />
                       </td>
-                      <td className="px-4 py-3 font-medium text-gray-900 font-mono text-xs">{s.tally_item_name}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">{s.alias_name || <span className="italic text-gray-300">-</span>}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.unit || '-'}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.hsn_code || '-'}</td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-500">{s.gst_percent != null ? `${s.gst_percent}%` : '-'}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100 font-mono text-xs">{s.tally_item_name}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">{s.alias_name || <span className="italic text-gray-300 dark:text-gray-600">-</span>}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500 dark:text-gray-400">{s.unit || '-'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500 dark:text-gray-400">{s.hsn_code || '-'}</td>
+                      <td className="px-4 py-3 text-xs font-mono text-gray-500 dark:text-gray-400">{s.gst_percent != null ? `${s.gst_percent}%` : '-'}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
-                          <button onClick={() => openEdit(s)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>
-                          <button onClick={() => handleDelete(s.id, s.tally_item_name)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                          <button onClick={() => openEdit(s)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800">Edit</button>
+                          <button onClick={() => handleDelete(s.id, s.tally_item_name)} className="text-xs text-red-500 dark:text-red-400 hover:text-red-700">Delete</button>
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100 flex justify-between">
+              <div className="px-4 py-2 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-700 flex justify-between">
                 <span>{filtered.length} item{filtered.length !== 1 ? 's' : ''}{search && ` matching "${search}"`}</span>
-                <span className="text-gray-300">Isolated to {companyName}</span>
+                <span className="text-gray-300 dark:text-gray-600">Isolated to {companyName}</span>
               </div>
             </div>
           )}
@@ -536,12 +536,12 @@ export default function StockItemsPage() {
       {/* ── Bulk delete confirmation modal ── */}
       {showBulkConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}?</h2>
-            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">This action cannot be undone.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowBulkConfirm(false)} disabled={bulkDeleting}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
                 Cancel
               </button>
               <button onClick={handleBulkDelete} disabled={bulkDeleting}

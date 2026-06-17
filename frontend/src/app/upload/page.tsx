@@ -10,7 +10,7 @@ import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
 import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import { currentFY, invoiceFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
@@ -53,7 +53,7 @@ function ReadinessBadge({ readiness, flags }: { readiness: QueueItem['readiness'
       {flags.length > 0 && (
         <button
           onClick={(e) => { e.stopPropagation(); setShowFlags((v) => !v); }}
-          className="text-gray-400 hover:text-gray-600"
+          className="text-gray-400 dark:text-gray-500 hover:text-gray-600"
           title="Show details"
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -63,13 +63,13 @@ function ReadinessBadge({ readiness, flags }: { readiness: QueueItem['readiness'
         </button>
       )}
       {showFlags && (
-        <div className="absolute top-full left-0 mt-1 z-30 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3">
-          <p className="text-xs font-semibold text-gray-600 mb-1.5">
+        <div className="absolute top-full left-0 mt-1 z-30 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+          <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1.5">
             {readiness === 'critical' ? 'Must resolve before accepting:' : 'Warnings:'}
           </p>
           <ul className="space-y-1">
             {flags.map((f, i) => (
-              <li key={i} className="text-xs text-gray-700 flex gap-1.5">
+              <li key={i} className="text-xs text-gray-700 dark:text-gray-300 flex gap-1.5">
                 <span className={readiness === 'critical' ? 'text-red-500' : 'text-amber-500'}>•</span>
                 {f}
               </li>
@@ -92,16 +92,16 @@ interface ITCPopupProps {
 function ITCWarningPopup({ items, onProceed, onReview }: ITCPopupProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full mx-4 p-6">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-lg w-full mx-4 p-6">
         <div className="flex items-start gap-3 mb-4">
-          <div className="w-9 h-9 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
-            <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-9 h-9 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0 mt-0.5">
+            <svg className="w-5 h-5 text-amber-600 dark:text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
             </svg>
           </div>
           <div>
-            <h3 className="font-semibold text-gray-900">ITC Eligibility Warning</h3>
-            <p className="text-sm text-gray-500 mt-0.5">
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100">ITC Eligibility Warning</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
               {items.length === 1
                 ? 'This invoice contains GST but may not be eligible for Input Tax Credit.'
                 : `${items.length} invoices contain GST but may not be eligible for Input Tax Credit.`}
@@ -109,20 +109,20 @@ function ITCWarningPopup({ items, onProceed, onReview }: ITCPopupProps) {
           </div>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 space-y-2 max-h-48 overflow-y-auto">
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-5 space-y-2 max-h-48 overflow-y-auto">
           {items.map((item) => (
             <div key={item.key} className="text-xs">
-              <span className="font-medium text-gray-800">{item.inv.invoice_number || '(no number)'}</span>
-              <span className="text-gray-500 mx-1">·</span>
-              <span className="text-gray-600">{item.inv.vendor_name}</span>
-              <div className="text-amber-700 mt-0.5">{item.itcRemark}</div>
+              <span className="font-medium text-gray-800 dark:text-gray-200">{item.inv.invoice_number || '(no number)'}</span>
+              <span className="text-gray-500 dark:text-gray-400 mx-1">·</span>
+              <span className="text-gray-600 dark:text-gray-400">{item.inv.vendor_name}</span>
+              <div className="text-amber-700 dark:text-amber-400 mt-0.5">{item.itcRemark}</div>
             </div>
           ))}
         </div>
 
-        <p className="text-sm text-gray-600 mb-5">
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-5">
           You can still accept and book these invoices. ITC status will be marked as
-          <strong className="text-amber-700"> Potentially Ineligible</strong> in the Purchase Register.
+          <strong className="text-amber-700 dark:text-amber-400"> Potentially Ineligible</strong> in the Purchase Register.
         </p>
 
         <div className="flex flex-col gap-2">
@@ -134,7 +134,7 @@ function ITCWarningPopup({ items, onProceed, onReview }: ITCPopupProps) {
           </button>
           <button
             onClick={onReview}
-            className="w-full px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             Cancel - Review invoices first
           </button>
@@ -156,11 +156,11 @@ function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
   const [reason, setReason] = useState('');
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
-        <h3 className="font-semibold text-gray-900 mb-1">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full mx-4 p-6">
+        <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">
           Reject {count} invoice{count !== 1 ? 's' : ''}?
         </h3>
-        <p className="text-sm text-gray-500 mb-4">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
           Rejected invoices will not enter the Purchase Register. A record will be kept for audit purposes.
         </p>
         <textarea
@@ -168,7 +168,7 @@ function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
           onChange={(e) => setReason(e.target.value)}
           placeholder="Reason for rejection (optional)"
           rows={3}
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none mb-4"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-400 resize-none mb-4"
         />
         <div className="flex gap-2">
           <button
@@ -179,7 +179,7 @@ function RejectPopup({ count, onConfirm, onCancel }: RejectPopupProps) {
           </button>
           <button
             onClick={onCancel}
-            className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             Cancel
           </button>
@@ -578,9 +578,7 @@ export default function UploadPage() {
   // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-
+    <AppLayout>
       {/* ITC Warning Popup */}
       {itcPopup && (
         <ITCWarningPopup
@@ -599,13 +597,13 @@ export default function UploadPage() {
         />
       )}
 
-      <main className="ml-60 flex-1 px-6 py-8">
+      <main className="flex-1 px-6 py-8">
         <div className="max-w-5xl">
 
           {/* ── Upload Card ── */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-8">
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-6 mb-8">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900">Upload Invoices</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Upload Invoices</h2>
               <FYPeriodSelector value={financialYear} onChange={setFinancialYear} />
             </div>
 
@@ -615,33 +613,33 @@ export default function UploadPage() {
               onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${
-                dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
+                dragging ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-600 hover:border-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
             >
               <input ref={fileInputRef} type="file" multiple accept={ACCEPT} onChange={handleFileChange} className="hidden" />
-              <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
-              <p className="text-sm text-gray-600">
-                <span className="text-indigo-600 font-medium">Drop invoices here or click to browse</span>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                <span className="text-indigo-600 dark:text-indigo-400 font-medium">Drop invoices here or click to browse</span>
               </p>
-              <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
-              <p className="text-xs font-medium text-amber-600 mt-1.5">⚠ Max 15 MB per file - split larger PDFs before uploading</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">PDF, JPG, PNG, DOC, DOCX · Multiple files · Multi-invoice files supported</p>
+              <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mt-1.5">⚠ Max 15 MB per file - split larger PDFs before uploading</p>
             </div>
 
             {/* File list */}
             {files.length > 0 && (
               <ul className="mt-3 space-y-1">
                 {files.map((f) => (
-                  <li key={f.name} className="flex items-center justify-between bg-gray-50 rounded-md px-3 py-2">
+                  <li key={f.name} className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 rounded-md px-3 py-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <svg className="w-4 h-4 text-indigo-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
-                      <span className="text-sm text-gray-700 truncate">{f.name}</span>
-                      <span className="text-xs text-gray-400 shrink-0">{formatBytes(f.size)}</span>
+                      <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{f.name}</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">{formatBytes(f.size)}</span>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); removeFile(f.name); }} className="ml-2 text-gray-400 hover:text-red-500 text-lg leading-none shrink-0">×</button>
+                    <button onClick={(e) => { e.stopPropagation(); removeFile(f.name); }} className="ml-2 text-gray-400 dark:text-gray-500 hover:text-red-500 text-lg leading-none shrink-0">×</button>
                   </li>
                 ))}
               </ul>
@@ -649,15 +647,15 @@ export default function UploadPage() {
 
             {extracting && (
               <div className="mt-4">
-                <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
                   <div className="h-full bg-indigo-500 rounded-full animate-pulse w-full" />
                 </div>
-                <p className="text-xs text-gray-500 mt-1 text-center">Sending to Claude AI for extraction…</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center">Sending to Claude AI for extraction…</p>
               </div>
             )}
 
             {extractError && (
-              <div className="mt-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm text-red-700">{extractError}</div>
+              <div className="mt-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md px-3 py-2 text-sm text-red-700 dark:text-red-400">{extractError}</div>
             )}
 
             <div className="mt-4">
@@ -685,15 +683,15 @@ export default function UploadPage() {
           {queue.length > 0 && (
             <div>
               {/* Queue header + action bar */}
-              <div className="sticky top-0 z-10 bg-gray-50 pb-3 pt-1">
-                <div className="bg-white border border-gray-200 rounded-xl shadow-sm px-5 py-4">
+              <div className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-900 pb-3 pt-1">
+                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm px-5 py-4">
                   <div className="flex items-center justify-between flex-wrap gap-3">
                     {/* Left: title + select-all */}
                     <div className="flex items-center gap-4">
                       <div>
-                        <h3 className="text-sm font-semibold text-gray-900">
+                        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                           Upload Queue
-                          <span className="ml-2 text-gray-400 font-normal">
+                          <span className="ml-2 text-gray-400 dark:text-gray-500 font-normal">
                             {queue.length} invoice{queue.length !== 1 ? 's' : ''}
                             {selectedCompany ? ` · ${selectedCompany.name}` : ''}
                             {financialYear ? ` · ${financialYear}` : ''}
@@ -706,16 +704,16 @@ export default function UploadPage() {
                           checked={allSelected}
                           ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
                           onChange={toggleSelectAll}
-                          className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                         />
-                        <span className="text-sm text-gray-600">Select All</span>
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Select All</span>
                       </label>
                     </div>
 
                     {/* Right: action buttons */}
                     <div className="flex items-center gap-2 flex-wrap">
                       {actionError && (
-                        <span className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1 max-w-xs">{actionError}</span>
+                        <span className="text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md px-2 py-1 max-w-xs">{actionError}</span>
                       )}
                       <button
                         onClick={handleAcceptSelected}
@@ -737,7 +735,7 @@ export default function UploadPage() {
                       <button
                         onClick={handleRejectSelected}
                         disabled={selectedRejectCount === 0 || actionLoading}
-                        className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 hover:bg-red-50 disabled:opacity-40 text-red-600 text-sm font-semibold rounded-lg transition-colors"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 border border-red-300 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-40 text-red-600 dark:text-red-400 text-sm font-semibold rounded-lg transition-colors"
                       >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -797,12 +795,12 @@ export default function UploadPage() {
                           disabled={isCritical || isFYMismatch}
                           onChange={() => !isCritical && !isFYMismatch && toggleSelect(item.key)}
                           title={isFYMismatch ? 'Financial Year mismatch - change FY or correct invoice date' : isCritical ? 'Resolve critical issues before accepting' : undefined}
-                          className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                          className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
                         />
                         <button
                           onClick={() => setRejectPopup([item.key])}
                           title="Reject this invoice"
-                          className="mt-0.5 text-[10px] font-semibold text-red-500 hover:text-red-700 hover:underline leading-tight"
+                          className="mt-0.5 text-[10px] font-semibold text-red-500 dark:text-red-400 hover:text-red-700 hover:underline leading-tight"
                         >
                           Reject
                         </button>
@@ -815,7 +813,7 @@ export default function UploadPage() {
                           {isFYMismatch && (() => {
                             const invFY = invoiceFY(inv.invoice_date ?? '');
                             return (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800">
                                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                                 </svg>
@@ -824,7 +822,7 @@ export default function UploadPage() {
                             );
                           })()}
                           {item.itcWarning && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                               </svg>
@@ -832,7 +830,7 @@ export default function UploadPage() {
                             </span>
                           )}
                           {isCritical && !isFYMismatch && (
-                            <span className="text-xs text-red-600 font-medium">Edit required before accepting</span>
+                            <span className="text-xs text-red-600 dark:text-red-400 font-medium">Edit required before accepting</span>
                           )}
                         </div>
                         <InvoiceCard
@@ -871,11 +869,11 @@ export default function UploadPage() {
                     .map((fr) => {
                       const isSkipped = fr.error?.startsWith('Skipped');
                       return (
-                        <div key={fr.filename} className={`rounded-lg px-4 py-3 text-sm flex items-start gap-2 ${isSkipped ? 'bg-gray-50 border border-gray-200 text-gray-600' : 'bg-red-50 border border-red-200 text-red-700'}`}>
+                        <div key={fr.filename} className={`rounded-lg px-4 py-3 text-sm flex items-start gap-2 ${isSkipped ? 'bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400' : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400'}`}>
                           <span className="font-medium shrink-0">{fr.filename}:</span>
                           <span>{fr.error}</span>
                           {isSkipped && fileUrls[fr.filename] && (
-                            <a href={fileUrls[fr.filename]} target="_blank" rel="noopener noreferrer" className="ml-auto text-indigo-600 text-xs hover:underline shrink-0">
+                            <a href={fileUrls[fr.filename]} target="_blank" rel="noopener noreferrer" className="ml-auto text-indigo-600 dark:text-indigo-400 text-xs hover:underline shrink-0">
                               Open →
                             </a>
                           )}
@@ -889,17 +887,17 @@ export default function UploadPage() {
 
           {/* Empty queue (all actioned) */}
           {result && queue.length === 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center">
-              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-10 text-center">
+              <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-3">
+                <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <p className="text-sm font-medium text-gray-900">All invoices have been actioned</p>
-              <p className="text-xs text-gray-400 mt-1">Accepted invoices are now in the Purchase Register.</p>
+              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">All invoices have been actioned</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Accepted invoices are now in the Purchase Register.</p>
               <button
                 onClick={() => router.push('/register')}
-                className="mt-4 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                className="mt-4 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium"
               >
                 View Purchase Register →
               </button>
@@ -908,6 +906,6 @@ export default function UploadPage() {
 
         </div>
       </main>
-    </div>
+    </AppLayout>
   );
 }

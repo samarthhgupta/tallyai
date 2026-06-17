@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 import { loadCompanies, type LocalCompany } from '@/lib/companies';
 import {
   loadLedgers,
@@ -275,23 +275,22 @@ export default function LedgerMastersPage() {
   const companyName = companies.find((c) => c.id === selectedCompanyId)?.name ?? '';
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 px-6 py-8">
+    <AppLayout>
+      <main className="flex-1 px-6 py-8">
         <div className="max-w-5xl">
 
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Ledger Master</h1>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Ledger Master</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 Maps HSN/SAC code + GST rate to Tally purchase and tax ledger names. Company-specific.
               </p>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={downloadTemplate}
-                className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+                className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -301,7 +300,7 @@ export default function LedgerMastersPage() {
               <button
                 onClick={() => { setTab('import'); setShowForm(false); }}
                 disabled={!selectedCompanyId}
-                className="px-3 py-2 text-sm text-indigo-700 border border-indigo-300 bg-indigo-50 rounded-md hover:bg-indigo-100 disabled:opacity-40 transition-colors flex items-center gap-1.5"
+                className="px-3 py-2 text-sm text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/30 rounded-md hover:bg-indigo-100 dark:hover:bg-indigo-800 disabled:opacity-40 transition-colors flex items-center gap-1.5"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
@@ -320,14 +319,14 @@ export default function LedgerMastersPage() {
 
           {/* Company selector */}
           <div className="flex items-center gap-3 mb-5">
-            <label className="text-sm font-medium text-gray-700 shrink-0">Company</label>
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 shrink-0">Company</label>
             {companies.length === 0 ? (
-              <span className="text-sm text-gray-400">No companies found. Add one first.</span>
+              <span className="text-sm text-gray-400 dark:text-gray-500">No companies found. Add one first.</span>
             ) : (
               <select
                 value={selectedCompanyId}
                 onChange={(e) => { setSelectedCompanyId(e.target.value); setTab('list'); setShowForm(false); }}
-                className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
                 <option value="" disabled>Select company…</option>
                 {companies.map((c) => (
@@ -341,11 +340,11 @@ export default function LedgerMastersPage() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search HSN, description…"
-                  className="ml-auto text-sm border border-gray-300 rounded-md px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="ml-auto text-sm border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 w-56 dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <button
                   onClick={exportToExcel}
-                  className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                  className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 flex items-center gap-1"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -358,16 +357,16 @@ export default function LedgerMastersPage() {
 
           {/* ── Import panel ── */}
           {tab === 'import' && selectedCompanyId && (
-            <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-900">Import Ledger Mappings from Excel</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Importing into: <span className="font-medium text-gray-700">{companyName}</span></p>
+                  <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Import Ledger Mappings from Excel</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Importing into: <span className="font-medium text-gray-700 dark:text-gray-300">{companyName}</span></p>
                 </div>
-                <button onClick={() => setTab('list')} className="text-sm text-gray-400 hover:text-gray-600">✕ Close</button>
+                <button onClick={() => setTab('list')} className="text-sm text-gray-400 dark:text-gray-500 hover:text-gray-600">✕ Close</button>
               </div>
 
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800 mb-4 space-y-1">
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-3 text-xs text-amber-800 dark:text-amber-300 mb-4 space-y-1">
                 <p className="font-semibold">Expected columns:</p>
                 <p>• <strong>HSN/SAC Code</strong> - HSN or SAC code (can be blank for rate-only mappings)</p>
                 <p>• <strong>GST %</strong> - GST rate (0, 5, 12, 18, 28)</p>
@@ -377,13 +376,13 @@ export default function LedgerMastersPage() {
               </div>
 
               <div
-                className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
+                className="border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg p-8 text-center hover:border-indigo-300 transition-colors cursor-pointer"
                 onClick={() => fileInputRef.current?.click()}
               >
-                <svg className="w-8 h-8 text-gray-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   {importing ? 'Processing…' : 'Click to upload .xlsx / .xls file'}
                 </p>
               </div>
@@ -392,21 +391,21 @@ export default function LedgerMastersPage() {
               {importResult && (
                 <div className="mt-4 space-y-3">
                   {(importResult.inserted > 0 || importResult.updated > 0) && (
-                    <div className="flex gap-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm">
+                    <div className="flex gap-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-3 text-sm">
                       {importResult.inserted > 0 && (
-                        <span className="text-green-700 font-medium">✓ {importResult.inserted} new mapping{importResult.inserted !== 1 ? 's' : ''} added</span>
+                        <span className="text-green-700 dark:text-green-400 font-medium">✓ {importResult.inserted} new mapping{importResult.inserted !== 1 ? 's' : ''} added</span>
                       )}
                       {importResult.updated > 0 && (
-                        <span className="text-blue-700 font-medium">↻ {importResult.updated} existing record{importResult.updated !== 1 ? 's' : ''} updated</span>
+                        <span className="text-blue-700 dark:text-blue-300 font-medium">↻ {importResult.updated} existing record{importResult.updated !== 1 ? 's' : ''} updated</span>
                       )}
                     </div>
                   )}
                   {importResult.errors.length > 0 && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                      <p className="text-sm font-medium text-red-700 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
+                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3">
+                      <p className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">{importResult.errors.length} row{importResult.errors.length !== 1 ? 's' : ''} skipped:</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
                         {importResult.errors.map((e, i) => (
-                          <p key={i} className="text-xs text-red-600">
+                          <p key={i} className="text-xs text-red-600 dark:text-red-400">
                             Row {e.row}: <span className="font-mono">{e.hsn}</span> - {e.reason}
                           </p>
                         ))}
@@ -422,27 +421,27 @@ export default function LedgerMastersPage() {
           {showForm && tab === 'list' && (
             <form
               onSubmit={handleSubmit}
-              className="mb-6 bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4"
+              className="mb-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 shadow-sm space-y-4"
             >
-              <h2 className="text-sm font-semibold text-gray-900">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                 {editingId ? 'Edit Ledger Mapping' : 'Add Ledger Mapping'}
               </h2>
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">HSN / SAC Code</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">HSN / SAC Code</label>
                   <input
                     value={form.hsn_sac}
                     onChange={(e) => setForm({ ...form, hsn_sac: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. 8536 or 998314"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">GST Rate %</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">GST Rate %</label>
                   <select
                     value={form.gst_percent}
                     onChange={(e) => handleGSTChange(Number(e.target.value))}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     {GST_RATES.map((r) => (
                       <option key={r} value={r}>{r}%</option>
@@ -450,65 +449,65 @@ export default function LedgerMastersPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Description / Category</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Description / Category</label>
                   <input
                     value={form.description}
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. Electrical Goods"
                   />
                 </div>
               </div>
 
-              <div className="border-t border-gray-100 pt-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Tally Ledger Names</p>
+              <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Tally Ledger Names</p>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Purchase Ledger *</label>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Purchase Ledger *</label>
                     <input
                       value={form.purchase_ledger}
                       onChange={(e) => setForm({ ...form, purchase_ledger: e.target.value })}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       placeholder={`Purchase @${form.gst_percent}%`}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">IGST Ledger</label>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">IGST Ledger</label>
                     <input
                       value={form.igst_ledger}
                       onChange={(e) => setForm({ ...form, igst_ledger: e.target.value })}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       placeholder={`IGST @${form.gst_percent}%`}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">CGST Ledger</label>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">CGST Ledger</label>
                     <input
                       value={form.cgst_ledger}
                       onChange={(e) => setForm({ ...form, cgst_ledger: e.target.value })}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       placeholder={`CGST @${form.gst_percent / 2}%`}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">SGST Ledger</label>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">SGST Ledger</label>
                     <input
                       value={form.sgst_ledger}
                       onChange={(e) => setForm({ ...form, sgst_ledger: e.target.value })}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       placeholder={`SGST @${form.gst_percent / 2}%`}
                     />
                   </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-2">Names must match exactly as they appear in Tally - case and spaces matter.</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Names must match exactly as they appear in Tally - case and spaces matter.</p>
               </div>
 
-              {formError && <p className="text-sm text-red-600">{formError}</p>}
+              {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
               <div className="flex gap-2">
                 <button type="submit" className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors">
                   {editingId ? 'Save Changes' : 'Add Mapping'}
                 </button>
-                <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900">
                   Cancel
                 </button>
               </div>
@@ -517,14 +516,14 @@ export default function LedgerMastersPage() {
 
           {/* ── Bulk action bar ── */}
           {selectedIds.size > 0 && (
-            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
-              <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+            <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <span className="text-sm text-red-700 dark:text-red-400 font-medium">{selectedIds.size} selected</span>
               <button onClick={() => setShowBulkConfirm(true)}
-                className="text-sm text-red-600 hover:text-red-800 font-medium">
+                className="text-sm text-red-600 dark:text-red-400 hover:text-red-800 font-medium">
                 Delete Selected ({selectedIds.size})
               </button>
               <button onClick={() => setSelectedIds(new Set())}
-                className="text-sm text-gray-500 hover:text-gray-700 ml-auto">
+                className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 ml-auto">
                 Cancel
               </button>
             </div>
@@ -532,11 +531,11 @@ export default function LedgerMastersPage() {
 
           {/* ── Ledger table ── */}
           {!selectedCompanyId ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-10 text-center text-gray-400 dark:text-gray-500">
               <p className="text-sm">Select a company to view its ledger master.</p>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-10 text-center text-gray-400 dark:text-gray-500">
               <p className="text-sm">
                 {ledgers.length === 0
                   ? 'No mappings yet. Import from Excel or add manually.'
@@ -544,9 +543,9 @@ export default function LedgerMastersPage() {
               </p>
             </div>
           ) : (
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                   <tr>
                     <th className="px-4 py-3 w-8">
                       <input
@@ -554,50 +553,50 @@ export default function LedgerMastersPage() {
                         type="checkbox"
                         checked={selectedIds.size === filtered.length && filtered.length > 0}
                         onChange={toggleSelectAll}
-                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                       />
                     </th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">HSN/SAC</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">GST%</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Purchase Ledger</th>
-                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">CGST / SGST / IGST</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">HSN/SAC</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-16">GST%</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Description</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Purchase Ledger</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">CGST / SGST / IGST</th>
                     <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {filtered.map((l) => (
-                    <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(l.id) ? 'bg-red-50' : ''}`}>
+                    <tr key={l.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${selectedIds.has(l.id) ? 'bg-red-50 dark:bg-red-900/20' : ''}`}>
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(l.id)}
                           onChange={() => toggleSelect(l.id)}
-                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
                         />
                       </td>
-                      <td className="px-4 py-3 font-mono text-gray-700">{l.hsn_sac || '-'}</td>
-                      <td className="px-4 py-3 text-gray-600">{l.gst_percent}%</td>
-                      <td className="px-4 py-3 text-gray-700">{l.description || '-'}</td>
-                      <td className="px-4 py-3 text-gray-900 font-medium">{l.purchase_ledger}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs leading-5">
+                      <td className="px-4 py-3 font-mono text-gray-700 dark:text-gray-300">{l.hsn_sac || '-'}</td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{l.gst_percent}%</td>
+                      <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{l.description || '-'}</td>
+                      <td className="px-4 py-3 text-gray-900 dark:text-gray-100 font-medium">{l.purchase_ledger}</td>
+                      <td className="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs leading-5">
                         {l.cgst_ledger && <div>{l.cgst_ledger}</div>}
                         {l.sgst_ledger && <div>{l.sgst_ledger}</div>}
                         {l.igst_ledger && <div>{l.igst_ledger}</div>}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2 justify-end">
-                          <button onClick={() => openEdit(l)} className="text-xs text-indigo-600 hover:text-indigo-800">Edit</button>
-                          <button onClick={() => handleDelete(l.id, l.hsn_sac)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                          <button onClick={() => openEdit(l)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800">Edit</button>
+                          <button onClick={() => handleDelete(l.id, l.hsn_sac)} className="text-xs text-red-500 dark:text-red-400 hover:text-red-700">Delete</button>
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100 flex items-center justify-between">
+              <div className="px-4 py-2 text-xs text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
                 <span>{filtered.length} mapping{filtered.length !== 1 ? 's' : ''}{search && ` matching "${search}"`}</span>
-                <span className="text-gray-300">Data is strictly isolated to {companyName}</span>
+                <span className="text-gray-300 dark:text-gray-600">Data is strictly isolated to {companyName}</span>
               </div>
             </div>
           )}
@@ -607,12 +606,12 @@ export default function LedgerMastersPage() {
       {/* ── Bulk delete confirmation modal ── */}
       {showBulkConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-2">Delete {selectedIds.size} mapping{selectedIds.size !== 1 ? 's' : ''}?</h2>
-            <p className="text-sm text-gray-500 mb-5">This action cannot be undone.</p>
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete {selectedIds.size} mapping{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">This action cannot be undone.</p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowBulkConfirm(false)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900">
                 Cancel
               </button>
               <button onClick={handleBulkDelete}
@@ -623,6 +622,6 @@ export default function LedgerMastersPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }

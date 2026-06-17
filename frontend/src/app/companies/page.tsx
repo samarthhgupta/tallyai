@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getMyCompanies, createCompany, updateCompany, type Company } from '@/lib/db';
 import { validateGstin, deriveStateFromGstin } from '@/lib/suppliers';
-import AppSidebar from '@/components/AppSidebar';
+import AppLayout from '@/components/AppLayout';
 
 const EMPTY_FORM = {
   name: '',
@@ -99,14 +99,13 @@ export default function CompaniesPage() {
   const gstinValid = gstin.length === 15 ? validateGstin(gstin) : null;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <AppSidebar />
-      <main className="ml-60 flex-1 px-6 py-8">
+    <AppLayout>
+      <main className="flex-1 px-6 py-8">
         <div className="max-w-3xl">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">Companies</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Each company's data is fully isolated.</p>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Companies</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Each company's data is fully isolated.</p>
             </div>
             <button onClick={openAdd}
               className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 transition-colors">
@@ -115,83 +114,83 @@ export default function CompaniesPage() {
           </div>
 
           {showForm && (
-            <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-xl p-5 mb-6 shadow-sm">
-              <h2 className="text-sm font-semibold text-gray-900 mb-4">
+            <form onSubmit={handleSubmit} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 mb-6 shadow-sm">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
                 {editingId ? 'Edit Company' : 'New Company'}
               </h2>
               <div className="grid grid-cols-2 gap-4">
 
                 {/* Company Name */}
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Company Name *</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Company Name *</label>
                   <input value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="e.g. Sahar Stationers" />
                 </div>
 
                 {/* GSTIN */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Company GSTIN *</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Company GSTIN *</label>
                   <input value={form.gstin}
                     onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
                     maxLength={15}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="27AABCS1234C1ZX" />
                   {gstinValid === false && (
-                    <p className="text-xs text-red-500 mt-1">Invalid GSTIN format</p>
+                    <p className="text-xs text-red-500 dark:text-red-400 mt-1">Invalid GSTIN format</p>
                   )}
                 </div>
 
                 {/* State - auto-derived, read only */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">State <span className="font-normal text-gray-400">(auto-derived)</span></label>
-                  <div className="w-full border border-gray-200 bg-gray-50 rounded-md px-3 py-2 text-sm min-h-[38px] flex items-center">
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">State <span className="font-normal text-gray-400 dark:text-gray-500">(auto-derived)</span></label>
+                  <div className="w-full border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-md px-3 py-2 text-sm min-h-[38px] flex items-center">
                     {derivedState
-                      ? <span className="text-green-700 font-medium">{derivedState}</span>
-                      : <span className="text-gray-400">Enter GSTIN to derive</span>
+                      ? <span className="text-green-700 dark:text-green-400 font-medium">{derivedState}</span>
+                      : <span className="text-gray-400 dark:text-gray-500">Enter GSTIN to derive</span>
                     }
                   </div>
                 </div>
 
                 {/* Tally Company Name */}
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally Company Name *</label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Tally Company Name *</label>
                   <input value={form.tally_company_name}
                     onChange={(e) => setForm({ ...form, tally_company_name: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="Exact company name as in Tally" />
-                  <p className="text-xs text-gray-400 mt-1">Must match exactly as configured in Tally - used in XML generation header.</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Must match exactly as configured in Tally - used in XML generation header.</p>
                 </div>
 
                 {/* Tally URL */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally URL / IP <span className="font-normal text-gray-400">(optional)</span></label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Tally URL / IP <span className="font-normal text-gray-400 dark:text-gray-500">(optional)</span></label>
                   <input value={form.tally_url}
                     onChange={(e) => setForm({ ...form, tally_url: e.target.value })}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="http://192.168.1.10" />
                 </div>
 
                 {/* Tally Port */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Tally Port <span className="font-normal text-gray-400">(optional)</span></label>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Tally Port <span className="font-normal text-gray-400 dark:text-gray-500">(optional)</span></label>
                   <input value={form.tally_port}
                     onChange={(e) => setForm({ ...form, tally_port: e.target.value })}
                     type="number"
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-sm dark:bg-gray-700 dark:text-gray-100 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="9000" />
                 </div>
 
               </div>
-              {formError && <p className="text-sm text-red-600 mt-3">{formError}</p>}
+              {formError && <p className="text-sm text-red-600 dark:text-red-400 mt-3">{formError}</p>}
               <div className="flex gap-2 mt-4">
                 <button type="submit" disabled={saving}
                   className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors">
                   {saving ? 'Saving…' : editingId ? 'Save Changes' : 'Save'}
                 </button>
                 <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }}
-                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900">
                   Cancel
                 </button>
               </div>
@@ -203,43 +202,43 @@ export default function CompaniesPage() {
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600" />
             </div>
           ) : companies.length === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-10 text-center text-gray-400">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-10 text-center text-gray-400 dark:text-gray-500">
               <p className="text-sm">No companies yet. Add your first company to get started.</p>
             </div>
           ) : (
             <div className="space-y-2">
               {companies.map((c) => (
-                <div key={c.id} className="bg-white border border-gray-200 rounded-lg px-5 py-4">
+                <div key={c.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-5 py-4">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-semibold text-gray-900 text-sm">{c.name}</p>
+                      <p className="font-semibold text-gray-900 dark:text-gray-100 text-sm">{c.name}</p>
                       {c.tally_company_name && c.tally_company_name !== c.name && (
-                        <p className="text-xs text-gray-400 mt-0.5">Tally: <span className="font-mono">{c.tally_company_name}</span></p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Tally: <span className="font-mono">{c.tally_company_name}</span></p>
                       )}
-                      <div className="flex flex-wrap gap-3 mt-1.5 text-xs text-gray-500">
+                      <div className="flex flex-wrap gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                         {c.gstin && (
-                          <span>GSTIN: <span className="font-mono text-gray-700">{c.gstin}</span></span>
+                          <span>GSTIN: <span className="font-mono text-gray-700 dark:text-gray-300">{c.gstin}</span></span>
                         )}
                         {c.state_name && (
-                          <span className="text-gray-500">{c.state_name}</span>
+                          <span className="text-gray-500 dark:text-gray-400">{c.state_name}</span>
                         )}
                         {c.tally_url && (
                           <span>Tally: {c.tally_url}:{c.tally_port}</span>
                         )}
                       </div>
                       {!c.gstin && (
-                        <p className="text-xs text-amber-600 mt-1">⚠ GSTIN not set - required for XML generation and state derivation</p>
+                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">⚠ GSTIN not set - required for XML generation and state derivation</p>
                       )}
                       {!c.tally_company_name && (
-                        <p className="text-xs text-amber-600 mt-1">⚠ Tally Company Name not set - required for XML generation</p>
+                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">⚠ Tally Company Name not set - required for XML generation</p>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-4">
                       <button onClick={() => openEdit(c)}
-                        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                        className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium">
                         Edit
                       </button>
-                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Active</span>
+                      <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full font-medium">Active</span>
                     </div>
                   </div>
                 </div>
@@ -248,6 +247,6 @@ export default function CompaniesPage() {
           )}
         </div>
       </main>
-    </div>
+    </AppLayout>
   );
 }

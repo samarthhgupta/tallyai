@@ -565,6 +565,6 @@ export default function SupplierMastersPage() {
           </div>
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }
