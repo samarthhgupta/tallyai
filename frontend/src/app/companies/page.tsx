@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getMyCompanies, createCompany, updateCompany, type Company } from '@/lib/db';
+import { getMyCompanies, createCompany, updateCompany, cloneCompany, type Company } from '@/lib/db';
 import { validateGstin, deriveStateFromGstin } from '@/lib/suppliers';
 import AppSidebar from '@/components/AppSidebar';
 
@@ -24,6 +24,12 @@ export default function CompaniesPage() {
   const [formError, setFormError] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
+
+  // Duplicate modal state
+  const [duplicateSource, setDuplicateSource] = useState<Company | null>(null);
+  const [duplicateName, setDuplicateName] = useState('');
+  const [duplicateError, setDuplicateError] = useState('');
+  const [duplicating, setDuplicating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,6 +96,36 @@ export default function CompaniesPage() {
       setFormError(err instanceof Error ? err.message : 'Failed to save company');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openDuplicate = (c: Company) => {
+    setDuplicateSource(c);
+    setDuplicateName('');
+    setDuplicateError('');
+  };
+
+  const handleDuplicate = async () => {
+    if (!duplicateSource) return;
+    const trimmed = duplicateName.trim();
+    if (!trimmed) { setDuplicateError('Company name cannot be blank.'); return; }
+    if (trimmed.toLowerCase() === duplicateSource.name.toLowerCase()) {
+      setDuplicateError('New company name must be different from the source company name.');
+      return;
+    }
+    const nameExists = companies.some((c) => c.name.toLowerCase() === trimmed.toLowerCase());
+    if (nameExists) { setDuplicateError(`A company named "${trimmed}" already exists.`); return; }
+
+    setDuplicating(true);
+    setDuplicateError('');
+    try {
+      await cloneCompany(duplicateSource.id, trimmed);
+      setDuplicateSource(null);
+      await load();
+    } catch (err: unknown) {
+      setDuplicateError(err instanceof Error ? err.message : 'Failed to duplicate company.');
+    } finally {
+      setDuplicating(false);
     }
   };
 
@@ -239,6 +275,10 @@ export default function CompaniesPage() {
                         className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
                         Edit
                       </button>
+                      <button onClick={() => openDuplicate(c)}
+                        className="text-xs text-gray-500 hover:text-gray-800 font-medium">
+                        Duplicate
+                      </button>
                       <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Active</span>
                     </div>
                   </div>
@@ -248,6 +288,58 @@ export default function CompaniesPage() {
           )}
         </div>
       </main>
+
+      {/* ── Duplicate Company Modal ── */}
+      {duplicateSource && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-1">Duplicate Company</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              Creates a complete snapshot of all invoices, masters, mappings, and settings.
+              The duplicate will be fully independent after creation.
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Source Company</label>
+              <div className="w-full border border-gray-200 bg-gray-50 rounded-md px-3 py-2 text-sm text-gray-700">
+                {duplicateSource.name}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-600 mb-1">New Company Name</label>
+              <input
+                autoFocus
+                value={duplicateName}
+                onChange={(e) => { setDuplicateName(e.target.value); setDuplicateError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleDuplicate(); if (e.key === 'Escape') setDuplicateSource(null); }}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="e.g. Kapda Kothi Emporium [TEST]"
+              />
+              {duplicateError && (
+                <p className="text-xs text-red-600 mt-1">{duplicateError}</p>
+              )}
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setDuplicateSource(null)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+                disabled={duplicating}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDuplicate}
+                disabled={duplicating || !duplicateName.trim()}
+                className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {duplicating ? 'Creating duplicate…' : 'Create Duplicate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

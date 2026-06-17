@@ -23,6 +23,11 @@ export interface Company {
   voucher_mode: 'accounting_only' | 'inventory' | null;
   discount_ledger_name: string | null; // Tally ledger for bill-level discounts (P&L)
   stock_item_mode: 'hsn_driven' | null;
+  // Clone audit metadata — no effect on business logic or XML
+  is_test_company: boolean | null;
+  cloned_from_company_id: string | null;
+  cloned_from_company_name: string | null;
+  cloned_at: string | null;
 }
 
 // ─── Companies ────────────────────────────────────────────────────────────────
@@ -30,7 +35,7 @@ export interface Company {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
-const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name, stock_item_mode';
+const COMPANY_SELECT = 'id, name, gstin, tally_company_name, state_name, tally_url, tally_port, state_code, purchase_ledger_config, voucher_mode, discount_ledger_name, stock_item_mode, is_test_company, cloned_from_company_id, cloned_from_company_name, cloned_at';
 
 export async function getMyCompanies(): Promise<Company[]> {
   const { data, error } = await db()
@@ -123,6 +128,15 @@ export async function updateCompany(
   }
   const { error } = await db().from('companies').update(updates).eq('id', id);
   if (error) throw error;
+}
+
+export async function cloneCompany(sourceId: string, newName: string): Promise<string> {
+  const { data, error } = await db().rpc('clone_company', {
+    source_id: sourceId,
+    new_name: newName.trim(),
+  });
+  if (error) throw error;
+  return data as string;
 }
 
 // ─── Save extraction results ──────────────────────────────────────────────────
