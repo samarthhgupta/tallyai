@@ -62,6 +62,44 @@ export async function updatePurchaseLedger(companyId: string, oldName: string, n
   if (error) throw error;
 }
 
+// Returns the most frequently accepted Purchase Ledger across ALL invoices for this company.
+// Used as Case 3 fallback when no supplier-specific history exists.
+// Tie-break: most recently accepted. Only considers genuinely accepted invoices.
+// Validates result against currentMasters — returns null if the winning ledger no longer exists.
+export async function getCompanyWideMostUsedPurchaseLedger(
+  companyId: string,
+  currentMasters: string[],
+): Promise<string | null> {
+  const { data, error } = await db()
+    .from('invoices')
+    .select('tally_ledger_acceptance, accepted_at')
+    .eq('company_id', companyId)
+    .not('accepted_at', 'is', null)
+    .not('tally_ledger_acceptance', 'is', null);
+  if (error || !data || data.length === 0) return null;
+
+  const freq: Record<string, { count: number; latest: string }> = {};
+  for (const row of data) {
+    const pl = row.tally_ledger_acceptance?.purchaseLedger;
+    if (!pl || typeof pl !== 'string' || pl.trim().length === 0) continue;
+    if (!freq[pl]) freq[pl] = { count: 0, latest: '' };
+    freq[pl].count++;
+    if (!freq[pl].latest || row.accepted_at > freq[pl].latest) freq[pl].latest = row.accepted_at;
+  }
+
+  const entries = Object.entries(freq);
+  if (entries.length === 0) return null;
+  entries.sort((a, b) =>
+    b[1].count !== a[1].count ? b[1].count - a[1].count : b[1].latest.localeCompare(a[1].latest),
+  );
+
+  // Return the winner only if it still exists in the current master
+  for (const [pl] of entries) {
+    if (currentMasters.includes(pl)) return pl;
+  }
+  return null;
+}
+
 // Returns the most frequently accepted Purchase Ledger for a supplier in this company.
 // Tie-break: most recently accepted. Only considers genuinely accepted invoices
 // (accepted_at IS NOT NULL). Returns null if no history found.

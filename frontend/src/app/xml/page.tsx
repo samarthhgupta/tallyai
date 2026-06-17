@@ -8,7 +8,7 @@ import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/expenseLedgers';
-import { loadPurchaseLedgers, addPurchaseLedger, getHistoricalPurchaseLedger } from '@/lib/purchaseLedgers';
+import { loadPurchaseLedgers, addPurchaseLedger, getHistoricalPurchaseLedger, getCompanyWideMostUsedPurchaseLedger } from '@/lib/purchaseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
 import type { StoredInvoice } from '@/types/invoice';
@@ -47,6 +47,12 @@ function getErrMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === 'object' && e !== null && 'message' in e) return String((e as { message: unknown }).message);
   return 'Unknown error';
+}
+
+// A value is blank if it is empty, whitespace-only, or the UI sentinel '-'.
+// Used to guard acceptance and master writes.
+function isBlank(v?: string | null): boolean {
+  return !v || v.trim().length === 0 || v === '-';
 }
 
 type SuggestionItem =
@@ -124,7 +130,7 @@ interface FlatDisplayRow {
 function FlatPreviewTable({
   rows, invoices, suppliers, expenseLedgers, stockItems,
   initialLockedInvoices,
-  purchaseLedgerMasters, historicalPurchaseLedgers,
+  purchaseLedgerMasters, historicalPurchaseLedgers, companyWidePurchaseLedger,
   dutiesTaxesMasters,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
 }: {
@@ -136,6 +142,7 @@ function FlatPreviewTable({
   initialLockedInvoices: Record<string, LockedInvoice>;
   purchaseLedgerMasters: string[];           // tally_ledger_name values from purchase_ledger_config
   historicalPurchaseLedgers: Record<string, string>; // key: vendor_gstin ?? 'name:'+normalized_name
+  companyWidePurchaseLedger: string | null;  // most-used PL across all company invoices (Case 3 fallback)
   dutiesTaxesMasters: { tax_component: string; tally_ledger_name: string }[];
   companyId: string;
   onMapExpense: (description: string, ledgerName: string) => void;
@@ -196,10 +203,16 @@ function FlatPreviewTable({
     const invoice  = invoices.find((i) => i.invoice_number === invNo);
     const supplier = suppliers.find((s) => s.tally_ledger_name === partyRow?.party_ledger);
 
-    const vendorLedger    = partyRow?.tally_ledger_name ?? '-';
+    // Defect 5 fix: use '' instead of '-' so the isBlank guard catches it at acceptance.
+    // The display cell already renders '-' for empty strings via `effectiveVendorLedger || '-'`.
+    const vendorLedger    = partyRow?.tally_ledger_name ?? '';
     const vendorSuggested = partyRow?.status === 'Suggested';
 
     // ONE purchase ledger per invoice — 4-case logic per approved P2 design
+    // Case 3 hierarchy (multiple masters, no supplier history):
+    //   1. Company-wide most-used PL (companyWidePurchaseLedger) if available
+    //   2. First-configured PL (purchaseLedgerMasters[0]) as final fallback
+    //   Never blank.
     let invPlLedger: string;
     let invPlCase: 1 | 2 | 3 | 4;
     let invPlHistoricalMissing = false;
@@ -225,7 +238,10 @@ function FlatPreviewTable({
         invPlLedger = purchaseLedgerMasters[0]; // Case 2: unambiguous
         invPlCase = 2;
       } else {
-        invPlLedger = ''; // Case 3: ambiguous, require user choice
+        // Case 3: multiple masters, no supplier history.
+        // Suggest company-wide most-used PL, falling back to first-configured.
+        // Never blank — user can always override via dropdown.
+        invPlLedger = companyWidePurchaseLedger ?? purchaseLedgerMasters[0];
         invPlCase = 3;
       }
     }
@@ -429,6 +445,40 @@ function FlatPreviewTable({
         roLedger,
         taxType: firstRow.taxType,
       });
+    }
+
+    // Defect 4 fix: validate all payloads before any write.
+    // Blank, whitespace-only, and '-' values must never be accepted.
+    const validationErrors: string[] = [];
+    for (const p of payloads) {
+      const errsForInv: string[] = [];
+      if (isBlank(p.vendorLedger))   errsForInv.push('Vendor Ledger is empty');
+      if (isBlank(p.purchaseLedger)) errsForInv.push('Purchase Ledger is empty');
+      for (const si of p.stockItems) {
+        if (isBlank(si.tallyName)) errsForInv.push(`Stock Item "${si.desc}" is empty`);
+      }
+      for (const ch of p.charges) {
+        if (isBlank(ch.tallyName)) errsForInv.push(`Expense Ledger "${ch.keyword}" is empty`);
+      }
+      if (p.taxType === 'cgst_sgst') {
+        if (isBlank(p.cgstLedger)) errsForInv.push('CGST Ledger is empty');
+        if (isBlank(p.sgstLedger)) errsForInv.push('SGST Ledger is empty');
+      }
+      if (p.taxType === 'igst') {
+        if (isBlank(p.igstLedger)) errsForInv.push('IGST Ledger is empty');
+      }
+      const firstRow = displayRows.find((r) => r.invoiceNo === p.invoiceNo && r.isFirst);
+      if (firstRow && Math.abs(firstRow.roAmt) > 0.001 && isBlank(p.roLedger)) {
+        errsForInv.push('Round Off Ledger is empty');
+      }
+      if (errsForInv.length) {
+        validationErrors.push(`Invoice ${p.invoiceNo} could not be accepted because:\n• ${errsForInv.join('\n• ')}`);
+      }
+    }
+    if (validationErrors.length) {
+      alert(validationErrors.join('\n\n'));
+      setBulkSaving(false);
+      return;
     }
 
     try {
@@ -701,8 +751,8 @@ function FlatPreviewTable({
                         value={vendorEdits[row.vendorName] ?? row.vendorLedger}
                         onChange={(e) => {
                           if (!e.target.value) return;
+                          // Defect 2 fix: update local state only; master write deferred to acceptance.
                           setVendorEdits((p) => ({ ...p, [row.vendorName]: e.target.value }));
-                          onMapSupplier(row.vendorName, e.target.value);
                         }}
                         className={`border rounded px-2 py-1 text-xs w-full ${row.vendorSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
                       >
@@ -715,7 +765,7 @@ function FlatPreviewTable({
                       </select>
                     ) : (
                       <EditableField value={vendorDisplayVal} suggested={row.vendorSuggested} color="text-purple-800"
-                        onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); onMapSupplier(row.vendorName, v); }} />
+                        onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); }} />
                     )}
                   </td>
                   {/* GSTIN */}
@@ -770,6 +820,8 @@ function FlatPreviewTable({
                               setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: true }));
                               return;
                             }
+                            // Defect 1 fix: never store blank from dropdown (e.g. if browser resets selection)
+                            if (!e.target.value) return;
                             setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }));
                           }}
                           className={`border rounded px-2 py-1 text-xs w-full ${
@@ -777,9 +829,7 @@ function FlatPreviewTable({
                               ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'
                           }`}
                         >
-                          {row.purchaseLedgerCase === 3 && !(purchaseLedgerEdits[row.invoiceNo]) && (
-                            <option value="">— Select Purchase Ledger —</option>
-                          )}
+                          {/* No placeholder option — Case 3 always has a suggestion pre-selected */}
                           {/* Show current value if not in master or pending list */}
                           {(() => {
                             const cur = purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger;
@@ -798,9 +848,11 @@ function FlatPreviewTable({
                             className="shrink-0 text-amber-500 cursor-help text-sm"
                             title={
                               row.purchaseLedgerHistoricalMissing
-                                ? 'The previously used Purchase Ledger for this supplier no longer exists in the master. Please select a new one.'
+                                ? 'The previously used Purchase Ledger for this supplier no longer exists in the master. Showing the most-used company-wide ledger as a fallback. Please verify.'
                                 : row.purchaseLedgerCase === 3
-                                ? 'Multiple Purchase Ledgers are configured. Please select the correct ledger for this invoice.'
+                                ? (companyWidePurchaseLedger
+                                    ? 'Multiple Purchase Ledgers are configured. No prior invoices found for this supplier. This suggestion is the most frequently accepted Purchase Ledger across your company\'s invoices. Please verify before accepting.'
+                                    : 'Multiple Purchase Ledgers are configured. No accepted invoice history found to guide a suggestion. Showing the first-configured ledger. Please verify before accepting.')
                                 : 'Selected based on historical mapping for this supplier. Please verify.'
                             }
                           >ⓘ</span>
@@ -823,9 +875,9 @@ function FlatPreviewTable({
                         onChange={(e) => {
                           if (!e.target.value) return;
                           const chosen = e.target.value;
+                          // Defect 3 fix: update local state only; master write deferred to acceptance.
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
-                          onMapStockItem(row.itemDesc, chosen);
                         }}
                         className={`border rounded px-2 py-1 text-xs w-full ${row.stockItemSuggested ? 'border-amber-300 bg-amber-50' : 'border-gray-300 bg-white'}`}
                       >
@@ -841,9 +893,9 @@ function FlatPreviewTable({
                         value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
+                          // Defect 3 fix: update local state only; master write deferred to acceptance.
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
-                          onMapStockItem(row.itemDesc, v);
                         }} />
                     ) : (
                       <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
@@ -1026,7 +1078,8 @@ function FlatPreviewTable({
             <div className="flex gap-3">
               <button
                 onClick={() => {
-                  // Apply HSN @ Rate% format to all suggested stock items across all invoices
+                  // Defect 3 fix: update local state only; no pre-acceptance master write.
+                  // Apply HSN @ Rate% format to all suggested stock items across all invoices.
                   rows
                     .filter((r) => r.ledger_type === 'Inventory' && r.is_suggested)
                     .forEach((r) => {
@@ -1034,7 +1087,7 @@ function FlatPreviewTable({
                       const li = inv?.line_items.find((l) => l.description === r.item_description);
                       if (li) {
                         const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-                        onMapStockItem(r.item_description ?? '', name);
+                        setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
                       }
                     });
                   setStockConfirm(null);
@@ -1234,6 +1287,7 @@ export default function XmlGeneratorPage() {
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [cachedMasters, setCachedMasters] = useState<Awaited<ReturnType<typeof loadMasters>> | null>(null);
   const [cachedHistoricalPL, setCachedHistoricalPL] = useState<Record<string, string> | null>(null);
+  const [cachedCompanyWidePL, setCachedCompanyWidePL] = useState<string | null>(null);
 
 
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
@@ -1341,6 +1395,13 @@ export default function XmlGeneratorPage() {
       const historicalPL: Record<string, string> = {};
       for (const [key, val] of historicalEntries) { if (val) historicalPL[key] = val; }
       setCachedHistoricalPL(historicalPL);
+
+      // Fetch company-wide most-used PL for Case 3 suggestion (multiple masters, no supplier history)
+      const plMasterNames = masters.purchaseLedgerMasters.map((l) => l.tally_ledger_name);
+      const companyWidePL = plMasterNames.length > 1
+        ? await getCompanyWideMostUsedPurchaseLedger(company!.id, plMasterNames)
+        : null;
+      setCachedCompanyWidePL(companyWidePL);
 
       const rows = buildTallyPreview({
         invoices, ...masters,
@@ -1728,6 +1789,7 @@ export default function XmlGeneratorPage() {
                 stockItems={cachedMasters?.stockItems ?? []}
                 purchaseLedgerMasters={(cachedMasters?.purchaseLedgerMasters ?? []).map((l) => l.tally_ledger_name)}
                 historicalPurchaseLedgers={cachedHistoricalPL ?? {}}
+                companyWidePurchaseLedger={cachedCompanyWidePL}
                 dutiesTaxesMasters={(cachedMasters?.dutiesTaxes ?? []).map((d) => ({ tax_component: d.tax_component, tally_ledger_name: d.tally_ledger_name }))}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
@@ -1781,19 +1843,19 @@ export default function XmlGeneratorPage() {
 
                   for (const p of payloads) {
                     // 1. Vendor ledger → supplier_masters
-                    if (p.vendorLedger && !seenVendor.has(p.vendorName)) {
+                    if (!isBlank(p.vendorLedger) && !seenVendor.has(p.vendorName)) {
                       seenVendor.add(p.vendorName);
                       try { await addSupplier(company.id, { vendor_name: p.vendorName, vendor_gstin: p.vendorGstin, tally_ledger_name: p.vendorLedger }); }
                       catch (e) { errs.push(`Vendor "${p.vendorName}": ${getErrMsg(e)}`); }
                     }
                     // 1b. Purchase ledger → purchase_ledger_config
-                    if (p.purchaseLedger) {
+                    if (!isBlank(p.purchaseLedger)) {
                       try { await addPurchaseLedger(company.id, p.purchaseLedger); }
                       catch (e) { errs.push(`Purchase ledger: ${getErrMsg(e)}`); }
                     }
                     // 2. Stock items → stock_item_masters
                     for (const si of p.stockItems) {
-                      if (si.tallyName && !seenStock.has(si.desc)) {
+                      if (!isBlank(si.tallyName) && !seenStock.has(si.desc)) {
                         seenStock.add(si.desc);
                         try {
                           await addStockItem(company.id, {
@@ -1811,7 +1873,7 @@ export default function XmlGeneratorPage() {
                     for (const ch of p.charges) {
                       // Key by keyword+rate so Freight@0% and Freight@5% both get saved
                       const expKey = `${ch.keyword}__${ch.gst_percent ?? 'null'}`;
-                      if (ch.tallyName && !seenExp.has(expKey)) {
+                      if (!isBlank(ch.tallyName) && !seenExp.has(expKey)) {
                         seenExp.add(expKey);
                         // Use extracted GST/SAC from invoice; fall back to built-in lookup
                         const defaults = getExpenseDefaults(ch.keyword);
@@ -1837,25 +1899,25 @@ export default function XmlGeneratorPage() {
                     }
                     // 4. Tax ledgers → duties_taxes_masters (consolidated, null rate)
                     if (p.taxType === 'cgst_sgst') {
-                      if (p.cgstLedger && !seenCgst) {
+                      if (!isBlank(p.cgstLedger) && !seenCgst) {
                         seenCgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'CGST', tax_rate: null, tally_ledger_name: p.cgstLedger }); }
                         catch (e) { errs.push(`CGST ledger: ${getErrMsg(e)}`); }
                       }
-                      if (p.sgstLedger && !seenSgst) {
+                      if (!isBlank(p.sgstLedger) && !seenSgst) {
                         seenSgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'SGST', tax_rate: null, tally_ledger_name: p.sgstLedger }); }
                         catch (e) { errs.push(`SGST ledger: ${getErrMsg(e)}`); }
                       }
                     } else if (p.taxType === 'igst') {
-                      if (p.igstLedger && !seenIgst) {
+                      if (!isBlank(p.igstLedger) && !seenIgst) {
                         seenIgst = true;
                         try { await addDutiesTaxes(company.id, { tax_component: 'IGST', tax_rate: null, tally_ledger_name: p.igstLedger }); }
                         catch (e) { errs.push(`IGST ledger: ${getErrMsg(e)}`); }
                       }
                     }
                     // 5. Round off ledger → expense_ledger_masters
-                    if (p.roLedger && !seenRo.has(p.roLedger)) {
+                    if (!isBlank(p.roLedger) && !seenRo.has(p.roLedger)) {
                       seenRo.add(p.roLedger);
                       try { await addExpenseLedger(company.id, { tally_ledger_name: p.roLedger, expense_keyword: 'Round Off' }); }
                       catch (e) { errs.push(`Round Off ledger: ${getErrMsg(e)}`); }
