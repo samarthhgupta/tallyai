@@ -123,7 +123,10 @@ export default function CompaniesPage() {
       setDuplicateSource(null);
       await load();
     } catch (err: unknown) {
-      setDuplicateError(err instanceof Error ? err.message : 'Failed to duplicate company.');
+      const msg = err instanceof Error
+        ? err.message
+        : (err as { message?: string })?.message ?? JSON.stringify(err);
+      setDuplicateError(msg || 'Failed to duplicate company.');
     } finally {
       setDuplicating(false);
     }
