@@ -1184,6 +1184,8 @@ def _call_claude_extract(
     import time as _time
 
     last_exc: Optional[Exception] = None
+    _t_claude_start = time.monotonic()
+    logger.info("[VERIFY] CLAUDE_API_STARTED%s images=%d", chunk_label, sum(1 for p in content_parts if p.get("type") == "image"))
 
     for attempt in range(3):
         try:
@@ -1209,6 +1211,11 @@ def _call_claude_extract(
                 timeout=180.0,  # increased from 120s — long scanned PDFs can take 2+ min
             )
             raw_text = response.content[0].text.strip()
+            _claude_elapsed = time.monotonic() - _t_claude_start
+            logger.info(
+                "[VERIFY] CLAUDE_API_COMPLETED%s elapsed=%.1fs stop_reason=%s output_chars=%d",
+                chunk_label, _claude_elapsed, response.stop_reason, len(raw_text),
+            )
 
             if response.stop_reason == "max_tokens":
                 logger.warning(
@@ -1373,6 +1380,7 @@ async def _extract_invoices_from_file(
                             "invoices_recovered": len(processed),
                         })
 
+                    logger.info("[VERIFY] DB_WRITE_STARTED batch=%s chunk=%d/%d invoices=%d", batch_id, i+1, len(chunks), len(processed))
                     log_extraction(
                         batch_id=batch_id,
                         file_name=f"{filename or 'unknown'}__chunk_{i + 1}",
@@ -1381,8 +1389,8 @@ async def _extract_invoices_from_file(
                         error="TRUNCATED" if is_truncated else None,
                     )
                     logger.info(
-                        "Chunk %d/%d persisted: %d invoices (pages %s)",
-                        i + 1, len(chunks), len(processed), chunk_page_range,
+                        "[VERIFY] DB_WRITE_COMPLETED batch=%s chunk=%d/%d invoices=%d pages=%s elapsed=%.1fs",
+                        batch_id, i + 1, len(chunks), len(processed), chunk_page_range, time.monotonic() - t0,
                     )
 
             # Final summary log for the whole file
@@ -1460,6 +1468,7 @@ async def _extract_invoices_from_file(
 
     processing_ms = int((time.monotonic() - t0) * 1000)
     # Use __chunk_1 suffix so tryRecoverBatch can find this row for non-chunked files.
+    logger.info("[VERIFY] DB_WRITE_STARTED batch=%s file=%s invoices=%d", batch_id, filename, len(processed))
     log_extraction(
         batch_id=batch_id,
         file_name=f"{filename or 'unknown'}__chunk_1",
@@ -1467,6 +1476,7 @@ async def _extract_invoices_from_file(
         processing_ms=processing_ms,
         error="TRUNCATED" if is_truncated else None,
     )
+    logger.info("[VERIFY] DB_WRITE_COMPLETED batch=%s file=%s processing_ms=%d", batch_id, filename, processing_ms)
     return processed, None, warnings
 
 
@@ -1576,6 +1586,13 @@ async def upload_invoices(
     if not batch_id:
         batch_id = str(uuid.uuid4())
 
+    t_request_received = time.monotonic()
+    file_names = [f.filename or "unknown" for f in files]
+    logger.info(
+        "[VERIFY] REQUEST_RECEIVED batch=%s files=%s",
+        batch_id, file_names,
+    )
+
     # Pre-read all UploadFile streams — they must be consumed in the handler
     # before StreamingResponse takes over the response stream.
     file_snapshots: list[tuple[str, str, bytes]] = []
@@ -1584,6 +1601,7 @@ async def upload_invoices(
         file_snapshots.append((upload.filename or "unknown", upload.content_type or "", data))
 
     async def _run_extraction() -> dict:
+        logger.info("[VERIFY] EXTRACTION_STARTED batch=%s", batch_id)
         file_results = []
         for fname, ctype, fbytes in file_snapshots:
             invoices, error, warnings = await _extract_invoices_from_file(
@@ -1606,6 +1624,11 @@ async def upload_invoices(
             })
         file_results = _merge_cross_file_invoices(file_results)
         total_invoices = sum(len(fr["invoices"]) for fr in file_results)
+        elapsed = time.monotonic() - t_request_received
+        logger.info(
+            "[VERIFY] EXTRACTION_COMPLETE batch=%s invoices=%d elapsed=%.1fs",
+            batch_id, total_invoices, elapsed,
+        )
         return {
             "batch_id": batch_id,
             "file_results": file_results,
@@ -1618,11 +1641,18 @@ async def upload_invoices(
         # from dropping the HTTP connection while Claude processes large scanned PDFs.
         # The frontend's fetch() accumulates all bytes; res.json() parses the last line.
         task = asyncio.ensure_future(_run_extraction())
+        keepalive_count = 0
         try:
             while not task.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(task), timeout=8.0)
                 except asyncio.TimeoutError:
+                    keepalive_count += 1
+                    elapsed = time.monotonic() - t_request_received
+                    logger.info(
+                        "[VERIFY] KEEPALIVE_SENT batch=%s count=%d elapsed=%.1fs",
+                        batch_id, keepalive_count, elapsed,
+                    )
                     yield b" "  # keepalive — resets Railway proxy idle timer
         except Exception:
             pass  # task exception handled below
@@ -1634,6 +1664,11 @@ async def upload_invoices(
             return
 
         result = task.result()
+        elapsed = time.monotonic() - t_request_received
+        logger.info(
+            "[VERIFY] RESPONSE_SENT batch=%s keepalives=%d total_elapsed=%.1fs",
+            batch_id, keepalive_count, elapsed,
+        )
         yield b"\n" + json.dumps(result).encode()
 
     return StreamingResponse(generate(), media_type="application/json")

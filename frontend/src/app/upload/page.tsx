@@ -600,8 +600,12 @@ export default function UploadPage() {
 
     } catch (err: unknown) {
       // HTTP request failed — attempt Supabase recovery before showing error
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[VERIFY] CATCH_BLOCK_ENTERED', { batchId: newBatchId, error: msg, t: new Date().toISOString() });
+
       const recovered = await tryRecoverBatch(newBatchId).catch(() => null);
       if (recovered && recovered.total_invoices > 0) {
+        console.log('[VERIFY] IMMEDIATE_RECOVERY_SUCCESS', { batchId: newBatchId, invoices: recovered.total_invoices });
         setQueue(buildQueueItems(recovered));
         setResult(recovered);
         setExtractionWarning({
@@ -611,7 +615,7 @@ export default function UploadPage() {
         });
         if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
       } else {
-        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[VERIFY] CONNECTION_LOST_MESSAGE_SET — categoriseError will return:', { msg: msg.slice(0, 100) });
         setExtractError(categoriseError(msg));
 
         // On network failures the backend keeps running after the client disconnects.
@@ -619,21 +623,28 @@ export default function UploadPage() {
         // for up to 2 minutes — if data appears, surface it automatically.
         const isNetworkFailure = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network');
         if (isNetworkFailure) {
+          console.log('[VERIFY] RECOVERY_POLLING_STARTED', { batchId: newBatchId, maxAttempts: 6, intervalMs: 20000 });
           const batchToRecover = newBatchId;
           const storageKey = queueStorageKey;
           let pollsRemaining = 6; // 6 × 20s = 2 minutes
           const poll = () => {
-            if (pollsRemaining <= 0) return;
+            if (pollsRemaining <= 0) {
+              console.log('[VERIFY] RECOVERY_POLLING_EXHAUSTED', { batchId: batchToRecover });
+              return;
+            }
             pollsRemaining--;
             recoveryPollRef.current = setTimeout(async () => {
+              console.log('[VERIFY] RECOVERY_POLL_ATTEMPT', { batchId: batchToRecover, pollsRemaining });
               const recheck = await tryRecoverBatch(batchToRecover).catch(() => null);
               if (recheck && recheck.total_invoices > 0) {
+                console.log('[VERIFY] RECOVERY_POLLING_SUCCESS', { batchId: batchToRecover, invoices: recheck.total_invoices });
                 setQueue(buildQueueItems(recheck));
                 setResult(recheck);
                 setExtractionWarning({ type: 'recovered', successCount: recheck.total_invoices, failureDetails: [] });
                 setExtractError('');
                 if (storageKey) localStorage.removeItem(`${storageKey}_pending_batch`);
               } else {
+                console.log('[VERIFY] RECOVERY_POLL_EMPTY', { batchId: batchToRecover, pollsRemaining });
                 poll();
               }
             }, 20_000);

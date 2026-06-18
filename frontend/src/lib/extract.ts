@@ -69,17 +69,40 @@ export async function extractInvoices(
   form.append('company_id', 'demo');
   form.append('batch_id', batchId);
 
-  const res = await fetch(`${backendUrl}/invoices/upload`, {
-    method: 'POST',
-    body: form,
-  });
+  const t0 = performance.now();
+  console.log('[VERIFY] FETCH_STARTED', { batchId, files: files.map(f => ({ name: f.name, size: f.size })), t: new Date().toISOString() });
+
+  let res: Response;
+  try {
+    res = await fetch(`${backendUrl}/invoices/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    console.log('[VERIFY] FETCH_COMPLETED', { batchId, status: res.status, elapsed: `${elapsed}s`, t: new Date().toISOString() });
+  } catch (fetchErr) {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+    console.error('[VERIFY] FETCH_FAILED — this is what triggers Connection Lost message', { batchId, elapsed: `${elapsed}s`, error: msg, t: new Date().toISOString() });
+    throw fetchErr;
+  }
 
   if (!res.ok) {
     const err = await res.text();
+    console.error('[VERIFY] FETCH_NOT_OK', { batchId, status: res.status, body: err.slice(0, 200) });
     throw new Error(`Server error ${res.status}: ${err.slice(0, 300)}`);
   }
 
-  const data: ExtractionResponse = await res.json();
+  let data: ExtractionResponse;
+  try {
+    data = await res.json();
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    console.log('[VERIFY] RESPONSE_PARSED', { batchId, totalInvoices: data.total_invoices, elapsed: `${elapsed}s`, t: new Date().toISOString() });
+  } catch (parseErr) {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    console.error('[VERIFY] RESPONSE_PARSE_FAILED', { batchId, elapsed: `${elapsed}s`, error: String(parseErr) });
+    throw parseErr;
+  }
 
   // Re-apply client-side confidence scoring on top of server scores
   for (const fileResult of data.file_results) {
