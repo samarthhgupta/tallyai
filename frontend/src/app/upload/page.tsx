@@ -328,6 +328,8 @@ export default function UploadPage() {
   const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
+  // Ref to background recovery polling timeout — cancelled when a new extraction starts
+  const recoveryPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [result, setResult] = useState<ExtractionResponse | null>(null);
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -467,7 +469,7 @@ export default function UploadPage() {
   // ── Extraction helpers ──
   const categoriseError = useCallback((msg: string): string => {
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
-      return 'Connection lost during extraction. Claude may have already processed part of your document — try re-uploading to recover.';
+      return 'Connection lost during extraction. Checking for any invoices already extracted — if found they will appear automatically. Otherwise refresh this page in 1–2 minutes to recover results.';
     }
     if (msg.includes('504') || msg.includes('Gateway Timeout') || msg.includes('timeout')) {
       return 'Server timeout. The document took too long to process. Split the PDF into smaller parts (recommended: under 20 pages per file) and try again.';
@@ -509,6 +511,12 @@ export default function UploadPage() {
   // ── Extraction ──
   const handleExtract = async () => {
     if (!files.length) return;
+
+    // Cancel any background recovery poll from a previous failed attempt
+    if (recoveryPollRef.current) {
+      clearTimeout(recoveryPollRef.current);
+      recoveryPollRef.current = null;
+    }
 
     const oversized = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
     if (oversized.length > 0) {
@@ -585,6 +593,33 @@ export default function UploadPage() {
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         setExtractError(categoriseError(msg));
+
+        // On network failures the backend keeps running after the client disconnects.
+        // log_extraction may be called 30–90s after the fetch threw. Poll every 20s
+        // for up to 2 minutes — if data appears, surface it automatically.
+        const isNetworkFailure = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network');
+        if (isNetworkFailure) {
+          const batchToRecover = newBatchId;
+          const storageKey = queueStorageKey;
+          let pollsRemaining = 6; // 6 × 20s = 2 minutes
+          const poll = () => {
+            if (pollsRemaining <= 0) return;
+            pollsRemaining--;
+            recoveryPollRef.current = setTimeout(async () => {
+              const recheck = await tryRecoverBatch(batchToRecover).catch(() => null);
+              if (recheck && recheck.total_invoices > 0) {
+                setQueue(buildQueueItems(recheck));
+                setResult(recheck);
+                setExtractionWarning({ type: 'recovered', successCount: recheck.total_invoices, failureDetails: [] });
+                setExtractError('');
+                if (storageKey) localStorage.removeItem(`${storageKey}_pending_batch`);
+              } else {
+                poll();
+              }
+            }, 20_000);
+          };
+          poll();
+        }
       }
     } finally {
       setExtracting(false);
