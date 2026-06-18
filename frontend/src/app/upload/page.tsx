@@ -346,6 +346,8 @@ export default function UploadPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [invoiceOverrides, setInvoiceOverrides] = useState<Map<string, ExtractedInvoice>>(new Map());
   const [batchId, setBatchId] = useState<string | null>(null);
+  // Separate from extraction batchId — this tracks the invoice_batches row for acceptance.
+  const [acceptBatchId, setAcceptBatchId] = useState<string | null>(null);
   const [queueRestored, setQueueRestored] = useState(false);
 
   // Action state
@@ -545,6 +547,7 @@ export default function UploadPage() {
     // if the response never arrives (Railway timeout, network drop, browser crash).
     const newBatchId = crypto.randomUUID();
     setBatchId(newBatchId);
+    setAcceptBatchId(null); // reset so acceptance creates a fresh invoice_batches row
     if (queueStorageKey) {
       localStorage.setItem(`${queueStorageKey}_pending_batch`, newBatchId);
     }
@@ -735,11 +738,12 @@ export default function UploadPage() {
     }
 
     try {
-      // Create batch now if not yet created
-      let activeBatchId = batchId;
+      // acceptBatchId tracks the invoice_batches row (separate from extraction batchId,
+      // which is only used for recovery in extraction_logs and has no invoice_batches row).
+      let activeBatchId = acceptBatchId;
       if (!activeBatchId) {
         activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
-        setBatchId(activeBatchId);
+        setAcceptBatchId(activeBatchId);
       }
 
       const items: InvoiceToSave[] = keys
@@ -815,10 +819,10 @@ export default function UploadPage() {
     setActionLoading(true);
     setActionError('');
     try {
-      let activeBatchId = batchId;
+      let activeBatchId = acceptBatchId;
       if (!activeBatchId) {
         activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
-        setBatchId(activeBatchId);
+        setAcceptBatchId(activeBatchId);
       }
 
       const items: InvoiceToSave[] = keys
