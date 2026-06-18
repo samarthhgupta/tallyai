@@ -106,7 +106,7 @@ export default function LedgerMastersPage() {
   };
 
   const handleBulkDelete = () => {
-    [...selectedIds].forEach((id) => deleteLedger(id));
+    Array.from(selectedIds).forEach((id) => deleteLedger(id));
     setSelectedIds(new Set());
     setShowBulkConfirm(false);
     refresh();

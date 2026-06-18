@@ -74,7 +74,7 @@ export default function PurchaseLedgerPage() {
     if (!company?.id) return;
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedNames].map((name) => deletePurchaseLedger(company!.id, name)));
+      await Promise.all(Array.from(selectedNames).map((name) => deletePurchaseLedger(company!.id, name)));
       setSelectedNames(new Set());
       setShowBulkConfirm(false);
       await refresh();

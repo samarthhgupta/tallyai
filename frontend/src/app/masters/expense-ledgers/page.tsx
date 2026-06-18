@@ -103,7 +103,7 @@ export default function ExpenseLedgersPage() {
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedIds].map((id) => deleteExpenseLedger(id)));
+      await Promise.all(Array.from(selectedIds).map((id) => deleteExpenseLedger(id)));
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
       await refresh();

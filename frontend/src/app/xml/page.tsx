@@ -55,6 +55,109 @@ function isBlank(v?: string | null): boolean {
   return !v || v.trim().length === 0 || v === '-';
 }
 
+// ─── LedgerWarning — generic structured tooltip for yellow-without-✦ states ──
+
+interface LedgerWarning {
+  reason: string;
+  meaning: string;
+  action: string;
+}
+
+// ⓘ icon rendered beside a dropdown when the mapping is amber but not ✦
+// (ledger exists in master but could not be auto-confirmed)
+function InfoIcon({ warning }: { warning: LedgerWarning }) {
+  const tip = `Reason: ${warning.reason}\n\nMeaning: ${warning.meaning}\n\nAction Required: ${warning.action}`;
+  return (
+    <span
+      className="shrink-0 text-amber-500 dark:text-amber-400 cursor-help text-sm select-none"
+      title={tip}
+    >ⓘ</span>
+  );
+}
+
+// Inline text input shown when user selects "+ Create new…" in a ledger dropdown
+function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
+  placeholder: string;
+  onConfirm: (value: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      autoFocus
+      type="text"
+      placeholder={placeholder}
+      className="border border-indigo-300 dark:border-indigo-800 rounded px-2 py-0.5 text-xs bg-indigo-50 dark:bg-indigo-900/30 dark:text-gray-100 w-full font-mono"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }
+        if (e.key === 'Escape') onCancel();
+      }}
+      onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }}
+    />
+  );
+}
+
+// Reusable dropdown with "+ Create new…" inline creation, ghost-option support,
+// and optional ⓘ warning for amber-but-confirmed states.
+// freetext state is lifted to parent so it survives across re-renders.
+function CreatableLedgerDropdown({
+  value, options, pendingOptions, suggested, warning,
+  freetext, createLabel,
+  onSelect, onStartCreate, onConfirmCreate, onCancelCreate,
+}: {
+  value: string;
+  options: string[];
+  pendingOptions: string[];
+  suggested: boolean;
+  warning?: LedgerWarning;
+  freetext: boolean;
+  createLabel: string;
+  onSelect: (v: string) => void;
+  onStartCreate: () => void;
+  onConfirmCreate: (v: string) => void;
+  onCancelCreate: () => void;
+}) {
+  const allOpts = [...options, ...pendingOptions];
+  const isGhost = value !== '' && !allOpts.includes(value);
+  const cls = `border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
+    suggested
+      ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+      : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
+  }`;
+
+  if (freetext) {
+    return (
+      <InlineCreateInput
+        placeholder={createLabel}
+        onConfirm={onConfirmCreate}
+        onCancel={onCancelCreate}
+      />
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={value}
+        onChange={(e) => {
+          if (e.target.value === '__new__') { onStartCreate(); return; }
+          if (!e.target.value) return;
+          onSelect(e.target.value);
+        }}
+        className={cls}
+      >
+        {isGhost && (
+          <option value={value}>{value}{suggested && !warning ? ' ✦' : ''}</option>
+        )}
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        {pendingOptions.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
+        <option value="__new__">+ Create new…</option>
+      </select>
+      {/* ⓘ only when amber + value exists in master (no ghost) = unconfirmed mapping */}
+      {warning && suggested && !isGhost && <InfoIcon warning={warning} />}
+    </div>
+  );
+}
+
 type SuggestionItem =
   | { kind: 'vendor';  vendorName: string; gstin: string;  ledger: string }
   | { kind: 'stock';   desc: string;       hsn: string;    tallyName: string }
@@ -95,6 +198,7 @@ interface FlatDisplayRow {
   vendorName: string;
   vendorLedger: string;
   vendorSuggested: boolean;
+  vendorWarning?: LedgerWarning;
   gstin: string;
   gstRegType: string;
   // invoice-level tax ledgers (same for all rows in this invoice)
@@ -164,6 +268,19 @@ function FlatPreviewTable({
   const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
   const [pendingPurchaseLedgers, setPendingPurchaseLedgers] = React.useState<string[]>([]);
   const [purchaseLedgerCreating, setPurchaseLedgerCreating] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
+  // Create-new state for ledger types that previously lacked inline creation
+  const [supplierFreetext, setSupplierFreetext] = React.useState<Record<string, boolean>>({}); // keyed by vendorName
+  const [pendingSuppliers, setPendingSuppliers] = React.useState<string[]>([]);
+  const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({}); // keyed by `${invoiceNo}_${itemDesc}`
+  const [pendingStockItems, setPendingStockItems] = React.useState<string[]>([]);
+  const [cgstFreetext, setCgstFreetext] = React.useState(false);
+  const [sgstFreetext, setSgstFreetext] = React.useState(false);
+  const [igstFreetext, setIgstFreetext] = React.useState(false);
+  const [pendingCgst, setPendingCgst] = React.useState<string[]>([]);
+  const [pendingSgst, setPendingSgst] = React.useState<string[]>([]);
+  const [pendingIgst, setPendingIgst] = React.useState<string[]>([]);
+  const [roFreetext, setRoFreetext] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
+  const [pendingRo, setPendingRo] = React.useState<string[]>([]);
 
   // Bulk-select state for inline accept / unaccept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
@@ -208,6 +325,20 @@ function FlatPreviewTable({
     // The display cell already renders '-' for empty strings via `effectiveVendorLedger || '-'`.
     const vendorLedger    = partyRow?.tally_ledger_name ?? '';
     const vendorSuggested = partyRow?.status === 'Suggested';
+    // Yellow-without-✦ warning: supplier name exists in master but GSTIN on invoice didn't match.
+    // findSupplier returns null (suggested=true) and falls back to inv.vendor_name as ledger.
+    // If that name happens to be in the master under a different/no GSTIN, the value IS in the
+    // dropdown list so no ✦ ghost option renders — user needs an ⓘ explanation instead.
+    const vendorExistsInMaster = vendorSuggested && suppliers.some((s) => s.tally_ledger_name === vendorLedger);
+    const vendorWarning: LedgerWarning | undefined = vendorExistsInMaster ? {
+      reason: invoice?.vendor_gstin
+        ? `A supplier ledger "${vendorLedger}" exists in the master, but the GSTIN on this invoice (${invoice.vendor_gstin}) does not match the GSTIN stored against that supplier.`
+        : `A supplier ledger "${vendorLedger}" exists in the master, but the system could not automatically confirm this is the correct mapping.`,
+      meaning: 'The system cannot automatically verify this is the correct supplier ledger, so the mapping is flagged for manual review.',
+      action: invoice?.vendor_gstin
+        ? `Update this supplier's GSTIN in the Suppliers master to "${invoice.vendor_gstin}", or manually confirm the selected ledger is correct before accepting.`
+        : 'Manually confirm the selected ledger is the correct Tally supplier ledger for this vendor before accepting.',
+    } : undefined;
 
     // ONE purchase ledger per invoice — 4-case logic per approved P2 design
     // Case 3 hierarchy (multiple masters, no supplier history):
@@ -285,6 +416,7 @@ function FlatPreviewTable({
       vendorName: partyRow?.vendor_name ?? (invoice?.vendor_name ?? ''),
       vendorLedger,
       vendorSuggested,
+      vendorWarning,
       gstin: invoice?.vendor_gstin ?? '',
       gstRegType: supplier ? (supplier.is_unregistered ? 'Unregistered' : 'Regular') : '',
       taxType: invTaxType,
@@ -755,27 +887,28 @@ function FlatPreviewTable({
                   </td>
                   {/* Vendor Name */}
                   <td className="px-3 py-2 max-w-[160px] truncate text-gray-700 dark:text-gray-300" title={row.vendorName}>{row.vendorName}</td>
-                  {/* Vendor Ledger — always a dropdown before acceptance */}
+                  {/* Vendor Ledger — dropdown with create-new + ⓘ warning */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
                       <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '-'}</span>
-                    ) : suppliers.length > 0 ? (
-                      <select
+                    ) : suppliers.length > 0 || pendingSuppliers.length > 0 ? (
+                      <CreatableLedgerDropdown
                         value={vendorEdits[row.vendorName] ?? row.vendorLedger}
-                        onChange={(e) => {
-                          if (!e.target.value) return;
-                          // Defect 2 fix: update local state only; master write deferred to acceptance.
-                          setVendorEdits((p) => ({ ...p, [row.vendorName]: e.target.value }));
+                        options={suppliers.map((s) => s.tally_ledger_name)}
+                        pendingOptions={pendingSuppliers}
+                        suggested={row.vendorSuggested}
+                        warning={row.vendorWarning}
+                        freetext={supplierFreetext[row.vendorName] ?? false}
+                        createLabel="New supplier ledger name…"
+                        onSelect={(v) => setVendorEdits((p) => ({ ...p, [row.vendorName]: v }))}
+                        onStartCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: true }))}
+                        onConfirmCreate={(v) => {
+                          setPendingSuppliers((p) => p.includes(v) ? p : [...p, v]);
+                          setVendorEdits((p) => ({ ...p, [row.vendorName]: v }));
+                          setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false }));
                         }}
-                        className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.vendorSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                      >
-                        {!suppliers.some((s) => s.tally_ledger_name === (vendorEdits[row.vendorName] ?? row.vendorLedger)) && (
-                          <option value={vendorEdits[row.vendorName] ?? row.vendorLedger}>
-                            {vendorEdits[row.vendorName] ?? row.vendorLedger}{row.vendorSuggested ? ' ✦' : ''}
-                          </option>
-                        )}
-                        {suppliers.map((s) => <option key={s.tally_ledger_name} value={s.tally_ledger_name}>{s.tally_ledger_name}</option>)}
-                      </select>
+                        onCancelCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false }))}
+                      />
                     ) : (
                       <EditableField value={vendorDisplayVal} suggested={row.vendorSuggested} color="text-purple-800"
                         onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); }} />
@@ -878,35 +1011,36 @@ function FlatPreviewTable({
                     <div className="truncate text-gray-800 dark:text-gray-200" title={row.itemDesc}>{row.itemDesc || '-'}</div>
                     {row.hsn && <div className="text-gray-400 dark:text-gray-500 font-mono text-[10px]">HSN: {row.hsn}</div>}
                   </td>
-                  {/* Stock Item — always dropdown in inventory mode before acceptance */}
+                  {/* Stock Item — dropdown with create-new in inventory mode */}
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
                       <span className="font-mono text-indigo-700">{effectiveStockItem || '-'}</span>
-                    ) : isInventoryMode && stockItems.length > 0 ? (
-                      <select
+                    ) : isInventoryMode && (stockItems.length > 0 || pendingStockItems.length > 0) ? (
+                      <CreatableLedgerDropdown
                         value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
-                        onChange={(e) => {
-                          if (!e.target.value) return;
-                          const chosen = e.target.value;
-                          // Defect 3 fix: update local state only; master write deferred to acceptance.
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: chosen }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: chosen });
+                        options={stockItems.map((s) => s.tally_item_name)}
+                        pendingOptions={pendingStockItems}
+                        suggested={row.stockItemSuggested}
+                        freetext={stockItemFreetext[`${row.invoiceNo}_${row.itemDesc}`] ?? false}
+                        createLabel="New Tally stock item name…"
+                        onSelect={(v) => {
+                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }}
-                        className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.stockItemSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                      >
-                        {!stockItems.some((s) => s.tally_item_name === (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem)) && (
-                          <option value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}>
-                            {stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}{row.stockItemSuggested ? ' ✦' : ''}
-                          </option>
-                        )}
-                        {stockItems.map((s) => <option key={s.tally_item_name} value={s.tally_item_name}>{s.tally_item_name}</option>)}
-                      </select>
+                        onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
+                        onConfirmCreate={(v) => {
+                          setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
+                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
+                        }}
+                        onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
+                      />
                     ) : isInventoryMode ? (
                       <EditableField
                         value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
-                          // Defect 3 fix: update local state only; master write deferred to acceptance.
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
                           setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }} />
@@ -976,23 +1110,30 @@ function FlatPreviewTable({
                       </React.Fragment>
                     );
                   })}
-                  {/* CGST — dropdown sourced from dutiesTaxesMasters */}
+                  {/* CGST — dropdown with create-new */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (() => {
                       const cgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'CGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
-                        : cgstOpts.length > 0
-                        ? <select
+                        : cgstOpts.length > 0 || pendingCgst.length > 0
+                        ? <CreatableLedgerDropdown
                             value={taxLedgerEdits.cgst ?? row.cgstLedger}
-                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, cgst: e.target.value })); onMapTaxLedger('CGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.cgstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                          >
-                            {!cgstOpts.includes(taxLedgerEdits.cgst ?? row.cgstLedger) && (
-                              <option value={taxLedgerEdits.cgst ?? row.cgstLedger}>{taxLedgerEdits.cgst ?? row.cgstLedger}{row.cgstSuggested ? ' ✦' : ''}</option>
-                            )}
-                            {cgstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                          </select>
+                            options={cgstOpts}
+                            pendingOptions={pendingCgst}
+                            suggested={row.cgstSuggested}
+                            freetext={cgstFreetext}
+                            createLabel="New CGST ledger name…"
+                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }}
+                            onStartCreate={() => setCgstFreetext(true)}
+                            onConfirmCreate={(v) => {
+                              setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
+                              setTaxLedgerEdits((p) => ({ ...p, cgst: v }));
+                              onMapTaxLedger('CGST', v);
+                              setCgstFreetext(false);
+                            }}
+                            onCancelCreate={() => setCgstFreetext(false)}
+                          />
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
                     })()}
@@ -1000,23 +1141,30 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'cgst_sgst' && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}
                   </td>
-                  {/* SGST */}
+                  {/* SGST — dropdown with create-new */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (() => {
                       const sgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'SGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '-'}</span>
-                        : sgstOpts.length > 0
-                        ? <select
+                        : sgstOpts.length > 0 || pendingSgst.length > 0
+                        ? <CreatableLedgerDropdown
                             value={taxLedgerEdits.sgst ?? row.sgstLedger}
-                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, sgst: e.target.value })); onMapTaxLedger('SGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.sgstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                          >
-                            {!sgstOpts.includes(taxLedgerEdits.sgst ?? row.sgstLedger) && (
-                              <option value={taxLedgerEdits.sgst ?? row.sgstLedger}>{taxLedgerEdits.sgst ?? row.sgstLedger}{row.sgstSuggested ? ' ✦' : ''}</option>
-                            )}
-                            {sgstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                          </select>
+                            options={sgstOpts}
+                            pendingOptions={pendingSgst}
+                            suggested={row.sgstSuggested}
+                            freetext={sgstFreetext}
+                            createLabel="New SGST ledger name…"
+                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }}
+                            onStartCreate={() => setSgstFreetext(true)}
+                            onConfirmCreate={(v) => {
+                              setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
+                              setTaxLedgerEdits((p) => ({ ...p, sgst: v }));
+                              onMapTaxLedger('SGST', v);
+                              setSgstFreetext(false);
+                            }}
+                            onCancelCreate={() => setSgstFreetext(false)}
+                          />
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
                     })()}
@@ -1024,23 +1172,30 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'cgst_sgst' && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}
                   </td>
-                  {/* IGST */}
+                  {/* IGST — dropdown with create-new */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'igst' && (() => {
                       const igstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'IGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
-                        : igstOpts.length > 0
-                        ? <select
+                        : igstOpts.length > 0 || pendingIgst.length > 0
+                        ? <CreatableLedgerDropdown
                             value={taxLedgerEdits.igst ?? row.igstLedger}
-                            onChange={(e) => { setTaxLedgerEdits((p) => ({ ...p, igst: e.target.value })); onMapTaxLedger('IGST', e.target.value); }}
-                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.igstSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                          >
-                            {!igstOpts.includes(taxLedgerEdits.igst ?? row.igstLedger) && (
-                              <option value={taxLedgerEdits.igst ?? row.igstLedger}>{taxLedgerEdits.igst ?? row.igstLedger}{row.igstSuggested ? ' ✦' : ''}</option>
-                            )}
-                            {igstOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                          </select>
+                            options={igstOpts}
+                            pendingOptions={pendingIgst}
+                            suggested={row.igstSuggested}
+                            freetext={igstFreetext}
+                            createLabel="New IGST ledger name…"
+                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }}
+                            onStartCreate={() => setIgstFreetext(true)}
+                            onConfirmCreate={(v) => {
+                              setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
+                              setTaxLedgerEdits((p) => ({ ...p, igst: v }));
+                              onMapTaxLedger('IGST', v);
+                              setIgstFreetext(false);
+                            }}
+                            onCancelCreate={() => setIgstFreetext(false)}
+                          />
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
                     })()}
@@ -1048,23 +1203,29 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
                     {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
                   </td>
-                  {/* Round Off — dropdown sourced from expense ledgers with keyword 'Round Off' */}
+                  {/* Round Off — dropdown with create-new */}
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.isFirst && row.roAmt !== 0 && (() => {
                       const roOpts = expenseLedgers.filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off').map((e) => e.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>
-                        : roOpts.length > 0
-                        ? <select
+                        : roOpts.length > 0 || pendingRo.length > 0
+                        ? <CreatableLedgerDropdown
                             value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
-                            onChange={(e) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }))}
-                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${row.roSuggested ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'}`}
-                          >
-                            {!roOpts.includes(roLedgerEdits[row.invoiceNo] ?? row.roLedger) && (
-                              <option value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}>{roLedgerEdits[row.invoiceNo] ?? row.roLedger}{row.roSuggested ? ' ✦' : ''}</option>
-                            )}
-                            {roOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                          </select>
+                            options={roOpts}
+                            pendingOptions={pendingRo}
+                            suggested={row.roSuggested}
+                            freetext={roFreetext[row.invoiceNo] ?? false}
+                            createLabel="New round off ledger name…"
+                            onSelect={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))}
+                            onStartCreate={() => setRoFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
+                            onConfirmCreate={(v) => {
+                              setPendingRo((p) => p.includes(v) ? p : [...p, v]);
+                              setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                              setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
+                            }}
+                            onCancelCreate={() => setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
+                          />
                         : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600 dark:text-gray-400"
                             onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />;
                     })()}

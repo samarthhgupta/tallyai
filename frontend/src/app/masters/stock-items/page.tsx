@@ -105,7 +105,7 @@ export default function StockItemsPage() {
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedIds].map((id) => deleteStockItem(id)));
+      await Promise.all(Array.from(selectedIds).map((id) => deleteStockItem(id)));
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
       await refresh();

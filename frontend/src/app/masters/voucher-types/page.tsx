@@ -85,7 +85,7 @@ export default function VoucherTypesPage() {
   const handleBulkDelete = async () => {
     setBulkDeleting(true);
     try {
-      await Promise.all([...selectedCategories].map((cat) => {
+      await Promise.all(Array.from(selectedCategories).map((cat) => {
         const record = records.find((r) => r.purchase_category === cat);
         if (!record) return Promise.resolve();
         return deleteVoucherType(record.id);

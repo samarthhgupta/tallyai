@@ -1098,7 +1098,7 @@ export default function InvoiceDetailPanel({
 
           {showDeleteConfirm && (
             <div className="mb-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-3">
-              <p className="text-sm font-semibold text-red-800 mb-0.5">Delete invoice {invoice.invoice_number}?</p>
+              <p className="text-sm font-semibold text-red-800 dark:text-red-300 mb-0.5">Delete invoice {invoice.invoice_number}?</p>
               <p className="text-xs text-red-600 dark:text-red-400 mb-2">Permanent - cannot be undone.</p>
               <div className="flex gap-2">
                 <button onClick={handleDelete} disabled={deleting} className="px-4 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg">
