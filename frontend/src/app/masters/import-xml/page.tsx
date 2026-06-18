@@ -8,7 +8,7 @@ import { useCompany } from '@/lib/companyContext';
 import { bulkUpsertStockItems, type StockItemImportRow } from '@/lib/stockItems';
 import { bulkUpsertSuppliers, type ImportRow as SupplierRow } from '@/lib/suppliers';
 import { addPurchaseLedger } from '@/lib/purchaseLedgers';
-import { bulkUpsertExpenseLedgers } from '@/lib/expenseLedgers';
+import { bulkUpsertExpenseLedgers, type ExpenseLedgerImportRow } from '@/lib/expenseLedgers';
 import { addDutiesTaxes, TAX_COMPONENTS, type TaxComponent } from '@/lib/dutiesTaxes';
 import { upsertVoucherType, type PurchaseCategory } from '@/lib/voucherTypes';
 
@@ -29,7 +29,7 @@ interface ParsedData {
   stockItems: StockItemImportRow[];
   suppliers: SupplierRow[];
   purchaseLedgers: string[];
-  expenseLedgers: Array<{ tally_ledger_name: string }>;
+  expenseLedgers: ExpenseLedgerImportRow[];
   dutiesTaxes: DutyRow[];
   voucherTypes: VoucherTypeRow[];
   skipped: number;
@@ -107,12 +107,29 @@ function parseTallyXml(rawContent: string, fileName: string): ParsedData {
     const parentLower = parent.toLowerCase();
 
     if (parent === 'Sundry Creditors') {
-      const gstin = getText(el, 'GSTREGISTRATIONNUMBER');
+      // PARTYGSTIN is the party-level field in most Tally versions.
+      // GSTIN is a fallback used in some Tally ERP 9 / Prime exports.
+      // GSTREGISTRATIONNUMBER does not appear in practice.
+      const gstin = getText(el, 'PARTYGSTIN') || getText(el, 'GSTIN') || '';
       result.suppliers.push({ tally_ledger_name: name, vendor_gstin: gstin });
     } else if (parent === 'Purchase Accounts' || parent === 'Purchase') {
       if (!result.purchaseLedgers.includes(name)) result.purchaseLedgers.push(name);
     } else if (parentLower.includes('expense') || parentLower.includes('expenditure')) {
-      result.expenseLedgers.push({ tally_ledger_name: name });
+      // HSN/SAC: inside <HSNDETAILS.LIST><HSNCODE>. Empty when SRCOFHSNDETAILS is
+      // "As per Company/Group" — those have no ledger-level code; import blank.
+      const sacCode = getText(el, 'HSNCODE').replace(/Not Applicable/i, '').trim() || undefined;
+      // GSTDETAILS.LIST contains one entry per duty head: CGST first, then SGST,
+      // then IGST. getElementsByTagName returns the CGST component rate (e.g. 9
+      // for 18% GST, 2.5 for 5% GST) — double it to get the total rate, same
+      // logic as the stock item parser.
+      const gstRateRaw = getText(el, 'GSTRATE');
+      const halfRate = gstRateRaw ? parseFloat(gstRateRaw) : NaN;
+      const gstPercent = !isNaN(halfRate) && halfRate > 0 ? halfRate * 2 : null;
+      result.expenseLedgers.push({
+        tally_ledger_name: name,
+        sac_code: sacCode,
+        gst_percent: gstPercent,
+      });
     } else if (parent === 'Duties & Taxes') {
       const parsed = parseDutyLedger(name);
       if (parsed) result.dutiesTaxes.push({ ...parsed, ledgerName: name });
