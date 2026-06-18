@@ -162,10 +162,12 @@ function ExtractionWarningBanner({
 
 function RecoveryOfferBanner({
   offer,
+  hasExistingQueue,
   onRecover,
   onDiscard,
 }: {
   offer: ExtractionResponse;
+  hasExistingQueue: boolean;
   onRecover: () => void;
   onDiscard: () => void;
 }) {
@@ -181,6 +183,11 @@ function RecoveryOfferBanner({
           <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
             {offer.total_invoices} invoice{offer.total_invoices !== 1 ? 's' : ''} were extracted
             in a previous session that did not complete. You can recover them now.
+            {hasExistingQueue && (
+              <span className="block mt-1 text-amber-700 dark:text-amber-400">
+                Note: recovering will replace your current queue.
+              </span>
+            )}
           </p>
           <p className="text-xs text-blue-500 dark:text-blue-400 mt-1 truncate" title={fileNames}>
             {fileNames}
@@ -196,7 +203,7 @@ function RecoveryOfferBanner({
               className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/30"
               onClick={onDiscard}
             >
-              Discard and start fresh
+              Discard
             </button>
           </div>
         </div>
@@ -411,7 +418,8 @@ export default function UploadPage() {
   // Check for an interrupted batch from a previous session (crash / Railway timeout)
   useEffect(() => {
     if (!isAuthed || !queueStorageKey || !queueRestored) return;
-    if (queue.length > 0) return; // queue already restored — no recovery needed
+    // Do NOT skip when queue.length > 0: a pending_batch may exist from a different
+    // interrupted session than the one currently in the queue. We always check.
 
     const pendingBatch = localStorage.getItem(`${queueStorageKey}_pending_batch`);
     if (!pendingBatch) return;
@@ -945,9 +953,10 @@ export default function UploadPage() {
           </div>
 
           {/* ── Recovery Offer ── */}
-          {recoveryOffer && !queue.length && (
+          {recoveryOffer && (
             <RecoveryOfferBanner
               offer={recoveryOffer}
+              hasExistingQueue={queue.length > 0}
               onRecover={() => {
                 setQueue(buildQueueItems(recoveryOffer));
                 setResult(recoveryOffer);
