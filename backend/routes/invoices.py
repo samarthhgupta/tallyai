@@ -1302,82 +1302,77 @@ async def _extract_invoices_from_file(
                     loop.run_in_executor(pool, call_chunk, (i, chunk))
                     for i, chunk in enumerate(chunks)
                 ]
-                results = await asyncio.gather(*futures)
+                # as_completed: persist each chunk the moment it finishes so that
+                # a Railway timeout mid-batch doesn't discard completed chunk data.
+                for fut in asyncio.as_completed(futures):
+                    i, (invs, err) = await fut
+                    page_start = i * MAX_PAGES_PER_CHUNK + 1
+                    page_end = min((i + 1) * MAX_PAGES_PER_CHUNK, total_pages)
+                    chunk_page_range = f"{page_start}–{page_end}"
+                    is_truncated = (err == "TRUNCATED")
 
-            # Process each chunk result immediately — persist as soon as available.
-            # This guarantees that if Railway kills the process before all chunks
-            # finish, completed chunks are already in Supabase and recoverable.
-            for i, (invs, err) in sorted(results, key=lambda x: x[0]):
-                page_start = i * MAX_PAGES_PER_CHUNK + 1
-                page_end = min((i + 1) * MAX_PAGES_PER_CHUNK, total_pages)
-                chunk_page_range = f"{page_start}–{page_end}"
-                is_truncated = (err == "TRUNCATED")
+                    if err and not invs and not is_truncated:
+                        logger.warning(
+                            "Chunk %d/%d failed (pages %s): %s",
+                            i + 1, len(chunks), chunk_page_range, err,
+                        )
+                        chunk_warnings.append({
+                            "chunk": i + 1,
+                            "pages": chunk_page_range,
+                            "reason": _classify_chunk_error(err),
+                            "invoices_recovered": 0,
+                        })
+                        log_extraction(
+                            batch_id=batch_id,
+                            file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
+                            invoices=[],
+                            processing_ms=int((time.monotonic() - t0) * 1000),
+                            error=err,
+                        )
+                        continue
 
-                if err and not invs and not is_truncated:
-                    logger.warning(
-                        "Chunk %d/%d failed (pages %s): %s",
-                        i + 1, len(chunks), chunk_page_range, err,
-                    )
-                    chunk_warnings.append({
-                        "chunk": i + 1,
-                        "pages": chunk_page_range,
-                        "reason": _classify_chunk_error(err),
-                        "invoices_recovered": 0,
-                    })
-                    # Persist failure row immediately so the batch_id exists in Supabase
+                    # Per-invoice try/except ensures one bad invoice cannot discard the rest.
+                    processed: list[dict] = []
+                    for inv in invs:
+                        try:
+                            inv = normalize_hsn_codes(inv)
+                            inv = normalize_uoms(inv)
+                            inv = correct_line_item_rates(inv)
+                            inv = detect_bill_discount_from_total(inv)
+                            inv["confidence"] = compute_confidence(inv)
+                        except Exception as pp_exc:
+                            logger.warning(
+                                "Post-processing error for invoice in chunk %d: %s",
+                                i + 1, pp_exc,
+                            )
+                            inv.setdefault("confidence", 0.0)
+                            inv.setdefault(
+                                "confidence_reasons",
+                                ["Post-processing error — data may be incomplete"],
+                            )
+                        processed.append(inv)
+
+                    all_invoices.extend(processed)
+
+                    if is_truncated:
+                        chunk_warnings.append({
+                            "chunk": i + 1,
+                            "pages": chunk_page_range,
+                            "reason": "max_tokens: Claude output limit reached — last invoice in this section may be incomplete",
+                            "invoices_recovered": len(processed),
+                        })
+
                     log_extraction(
                         batch_id=batch_id,
                         file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
-                        invoices=[],
+                        invoices=processed,
                         processing_ms=int((time.monotonic() - t0) * 1000),
-                        error=err,
+                        error="TRUNCATED" if is_truncated else None,
                     )
-                    continue
-
-                # Post-process this chunk immediately (not after all chunks finish).
-                # Per-invoice try/except ensures one bad invoice cannot discard the rest.
-                processed: list[dict] = []
-                for inv in invs:
-                    try:
-                        inv = normalize_hsn_codes(inv)
-                        inv = normalize_uoms(inv)
-                        inv = correct_line_item_rates(inv)
-                        inv = detect_bill_discount_from_total(inv)
-                        inv["confidence"] = compute_confidence(inv)
-                    except Exception as pp_exc:
-                        logger.warning(
-                            "Post-processing error for invoice in chunk %d: %s",
-                            i + 1, pp_exc,
-                        )
-                        inv.setdefault("confidence", 0.0)
-                        inv.setdefault(
-                            "confidence_reasons",
-                            ["Post-processing error — data may be incomplete"],
-                        )
-                    processed.append(inv)
-
-                all_invoices.extend(processed)
-
-                if is_truncated:
-                    chunk_warnings.append({
-                        "chunk": i + 1,
-                        "pages": chunk_page_range,
-                        "reason": "max_tokens: Claude output limit reached — last invoice in this section may be incomplete",
-                        "invoices_recovered": len(processed),
-                    })
-
-                # PERSIST IMMEDIATELY — do not batch at end of file.
-                log_extraction(
-                    batch_id=batch_id,
-                    file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
-                    invoices=processed,
-                    processing_ms=int((time.monotonic() - t0) * 1000),
-                    error="TRUNCATED" if is_truncated else None,
-                )
-                logger.info(
-                    "Chunk %d/%d persisted: %d invoices (pages %s)",
-                    i + 1, len(chunks), len(processed), chunk_page_range,
-                )
+                    logger.info(
+                        "Chunk %d/%d persisted: %d invoices (pages %s)",
+                        i + 1, len(chunks), len(processed), chunk_page_range,
+                    )
 
             # Final summary log for the whole file
             processing_ms = int((time.monotonic() - t0) * 1000)
@@ -1453,9 +1448,10 @@ async def _extract_invoices_from_file(
         processed.append(inv)
 
     processing_ms = int((time.monotonic() - t0) * 1000)
+    # Use __chunk_1 suffix so tryRecoverBatch can find this row for non-chunked files.
     log_extraction(
         batch_id=batch_id,
-        file_name=upload.filename or "unknown",
+        file_name=f"{upload.filename or 'unknown'}__chunk_1",
         invoices=processed,
         processing_ms=processing_ms,
         error="TRUNCATED" if is_truncated else None,
