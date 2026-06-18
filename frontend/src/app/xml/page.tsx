@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
+import { detectDuplicates } from '@/lib/duplicateDetection';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
@@ -1467,6 +1468,7 @@ export default function XmlGeneratorPage() {
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
   const [showSuggestionDrillDown, setShowSuggestionDrillDown] = useState(false);
   const [showWarningDrillDown, setShowWarningDrillDown] = useState(false);
+  const [showDupDrillDown, setShowDupDrillDown] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
   const [previewRows, setPreviewRows] = useState<PreviewRow[] | null>(null);
@@ -1753,6 +1755,8 @@ export default function XmlGeneratorPage() {
       })()
     : [];
 
+  const exportDupGroups = detectDuplicates(invoices);
+
   return (
     <AppLayout>
       <main className="flex-1 p-8" style={{ maxWidth: '100%' }}>
@@ -1870,6 +1874,16 @@ export default function XmlGeneratorPage() {
                     </span>
                   </div>
                 )}
+                {exportDupGroups.length > 0 && (
+                  <button
+                    onClick={() => setShowDupDrillDown((v) => !v)}
+                    className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg px-4 py-2 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors text-left"
+                  >
+                    <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                      ⚠ {exportDupGroups.length} duplicate invoice group{exportDupGroups.length !== 1 ? 's' : ''} in export batch
+                    </span>
+                  </button>
+                )}
                 {previewWarningCount > 0 && (
                   <button
                     onClick={() => setShowWarningDrillDown((v) => !v)}
@@ -1916,6 +1930,45 @@ export default function XmlGeneratorPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {/* Duplicate invoices drill-down */}
+              {showDupDrillDown && exportDupGroups.length > 0 && (
+                <div className="border border-amber-200 dark:border-amber-700 rounded-lg overflow-hidden">
+                  <div className="bg-amber-50 dark:bg-amber-900/20 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">Duplicate invoices in export batch — both copies will be exported</span>
+                    <button onClick={() => setShowDupDrillDown(false)} className="text-amber-500 dark:text-amber-400 hover:text-amber-700 text-lg leading-none">×</button>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 dark:bg-gray-800 border-b border-amber-100 dark:border-amber-800">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Supplier</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">GSTIN</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Invoice No</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Invoice Dates</th>
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Count</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                      {exportDupGroups.map((g, i) => (
+                        <tr key={i} className="hover:bg-amber-50/40 dark:hover:bg-gray-700/50">
+                          <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-100">{g.vendorName}</td>
+                          <td className="px-4 py-2 font-mono text-xs text-gray-500 dark:text-gray-400">{g.vendorGstin ?? '—'}</td>
+                          <td className="px-4 py-2 text-gray-800 dark:text-gray-200">{g.invoiceNumber}</td>
+                          <td className="px-4 py-2 text-gray-600 dark:text-gray-400 text-xs">{g.invoices.map((inv) => inv.invoice_date ?? '—').join(', ')}</td>
+                          <td className="px-4 py-2">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+                              {g.invoices.length}×
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="px-4 py-2.5 bg-gray-50 dark:bg-gray-700/40 border-t border-amber-100 dark:border-amber-800 text-xs text-gray-500 dark:text-gray-400">
+                    To remove a duplicate, go to Purchase Register and delete the unwanted copy before generating XML.
+                  </div>
                 </div>
               )}
 
