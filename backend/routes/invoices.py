@@ -1088,60 +1088,175 @@ def _prescreen_text(text: str) -> None:
 
 
 def _parse_claude_json(raw_text: str) -> tuple[list[dict], Optional[str]]:
-    """Parse Claude's response into a list of invoice dicts. Returns (invoices, error)."""
+    """Parse Claude's response into a list of invoice dicts. Returns (invoices, error).
+
+    Handles three cases:
+    1. Clean JSON array → parse directly.
+    2. Array wrapped in prose/markdown → extract by outermost brackets.
+    3. Truncated array (max_tokens hit mid-response) → recover all complete top-level
+       objects by walking balanced braces. Returns error="TRUNCATED" so callers can
+       surface a partial-success warning instead of a hard failure.
+    """
     import json
 
+    # Attempt 1: clean parse
     try:
-        invoices = json.loads(raw_text)
-        if not isinstance(invoices, list):
-            invoices = [invoices]
-        return invoices, None
+        result = json.loads(raw_text)
+        return (result if isinstance(result, list) else [result]), None
     except json.JSONDecodeError:
-        start = raw_text.find("[")
-        end = raw_text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                invoices = json.loads(raw_text[start : end + 1])
-                if not isinstance(invoices, list):
-                    invoices = [invoices]
-                return invoices, None
-            except json.JSONDecodeError:
-                pass
-        return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
+        pass
 
+    # Attempt 2: extract outermost array
+    start = raw_text.find("[")
+    if start == -1:
+        return [], f"No JSON array found in response: {raw_text[:200]}"
 
-def _call_claude_extract(client: anthropic.Anthropic, content_parts: list[dict], system_prompt: str, chunk_label: str = "") -> tuple[list[dict], Optional[str]]:
-    """Send content_parts to Claude and return parsed invoices."""
-    try:
-        response = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": content_parts
-                    + [{"type": "text", "text": "Extract all invoices from this document."}],
-                }
-            ],
+    end = raw_text.rfind("]")
+    if end > start:
+        try:
+            result = json.loads(raw_text[start:end + 1])
+            return (result if isinstance(result, list) else [result]), None
+        except json.JSONDecodeError:
+            pass
+
+    # Attempt 3: response was truncated (max_tokens hit mid-array).
+    # Walk from the opening "[" and collect every syntactically complete top-level
+    # {...} object. This recovers all invoices Claude fully serialised before cutoff.
+    objects: list[dict] = []
+    depth = 0
+    obj_start: Optional[int] = None
+    for pos in range(start, len(raw_text)):
+        ch = raw_text[pos]
+        if ch == '{':
+            if depth == 0:
+                obj_start = pos
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                try:
+                    obj = json.loads(raw_text[obj_start:pos + 1])
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                obj_start = None
+
+    if objects:
+        logger.warning(
+            "Recovered %d invoice(s) from truncated JSON response "
+            "(max_tokens reached — last invoice may be incomplete)",
+            len(objects),
         )
-        raw_text = response.content[0].text.strip()
-        if response.stop_reason == "max_tokens":
-            logger.warning("Claude hit max_tokens%s — response may be truncated (%d chars)", chunk_label, len(raw_text))
-    except Exception as exc:
-        logger.exception("Claude API call failed%s", chunk_label)
-        return [], f"Claude API error: {exc}"
+        return objects, "TRUNCATED"
 
-    return _parse_claude_json(raw_text)
+    return [], f"Could not parse Claude response as JSON: {raw_text[:200]}"
+
+
+def _classify_chunk_error(err: str) -> str:
+    """Convert a raw error string into a user-readable failure category."""
+    if err == "TRUNCATED" or "max_tokens" in err or "truncat" in err.lower():
+        return "max_tokens: Claude output limit reached — partial results recovered"
+    if "rate_limit" in err or "429" in err:
+        return "rate_limit: API rate limit reached"
+    if "529" in err or "overload" in err.lower():
+        return "api_overload: Extraction service temporarily overloaded"
+    if "timeout" in err.lower():
+        return "timeout: Claude API call timed out"
+    if "JSON" in err or "parse" in err.lower() or "Could not parse" in err:
+        return "parse_error: Extraction output could not be parsed"
+    return f"unknown: {err[:120]}"
+
+
+def _call_claude_extract(
+    client: anthropic.Anthropic,
+    content_parts: list[dict],
+    system_prompt: str,
+    chunk_label: str = "",
+) -> tuple[list[dict], Optional[str]]:
+    """Send content_parts to Claude and return (invoices, error_or_None).
+
+    - Retries up to 3 times on transient errors (rate limit 429, overload 529).
+    - On max_tokens truncation, recovers all complete invoice objects via
+      _parse_claude_json and returns error="TRUNCATED" so the caller can surface
+      a partial-success warning rather than discarding extracted data.
+    """
+    import time as _time
+
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-opus-4-8",
+                max_tokens=32768,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": content_parts
+                        + [{"type": "text", "text": "Extract all invoices from this document."}],
+                    }
+                ],
+                timeout=120.0,
+            )
+            raw_text = response.content[0].text.strip()
+
+            if response.stop_reason == "max_tokens":
+                logger.warning(
+                    "Claude hit max_tokens%s — response truncated (%d chars), attempting partial recovery",
+                    chunk_label,
+                    len(raw_text),
+                )
+
+            invoices, err = _parse_claude_json(raw_text)
+
+            if err == "TRUNCATED":
+                logger.info(
+                    "Partial recovery%s: %d complete invoice(s) salvaged from truncated response",
+                    chunk_label,
+                    len(invoices),
+                )
+                return invoices, "TRUNCATED"
+
+            return invoices, err
+
+        except anthropic.RateLimitError as exc:
+            last_exc = exc
+            wait = 2 ** (attempt + 1)
+            logger.warning(
+                "Rate limit%s (attempt %d/3), retrying in %ds: %s",
+                chunk_label, attempt + 1, wait, exc,
+            )
+            _time.sleep(wait)
+
+        except anthropic.APIStatusError as exc:
+            if exc.status_code in (529, 500, 503):
+                last_exc = exc
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "API error %d%s (attempt %d/3), retrying in %ds",
+                    exc.status_code, chunk_label, attempt + 1, wait,
+                )
+                _time.sleep(wait)
+                continue
+            logger.exception("Claude API error%s", chunk_label)
+            return [], f"Claude API error {exc.status_code}: {exc.message}"
+
+        except Exception as exc:
+            logger.exception("Claude API call failed%s", chunk_label)
+            return [], f"Claude API error: {exc}"
+
+    return [], f"Claude API failed after 3 attempts: {last_exc}"
 
 
 async def _extract_invoices_from_file(
     upload: UploadFile, client: anthropic.Anthropic, batch_id: str = ""
-) -> tuple[list[dict], Optional[str]]:
+) -> tuple[list[dict], Optional[str], list[dict]]:
     """
     Extract invoices from a single file.
-    For scanned PDFs with many pages, processes in chunks of MAX_PAGES_PER_CHUNK
-    and merges all results. Returns (invoices_list, error_or_None).
+    Returns (invoices, error_or_None, chunk_warnings).
+    chunk_warnings is a list of per-chunk failure/truncation dicts for UI display.
     """
     file_bytes = await upload.read()
     filename = (upload.filename or "").lower()
@@ -1156,20 +1271,23 @@ async def _extract_invoices_from_file(
             _prescreen_pdf(file_bytes)
         except BlankDocumentError as exc:
             logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
-            return [], f"Skipped (no invoice content): {exc}"
+            return [], f"Skipped (no invoice content): {exc}", []
         except Exception as exc:
             logger.exception("Failed to process file %s", upload.filename)
-            return [], f"Could not process file: {exc}"
+            return [], f"Could not process file: {exc}", []
 
         if _is_scanned_pdf(file_bytes):
             chunks = _pdf_scanned_images_chunked(file_bytes)
-            logger.info("Scanned PDF %s: %d pages → %d chunks (parallel)", upload.filename, sum(len(c) for c in chunks), len(chunks))
+            total_pages = sum(len(c) for c in chunks)
+            logger.info(
+                "Scanned PDF %s: %d pages → %d chunks (parallel)",
+                upload.filename, total_pages, len(chunks),
+            )
             system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
             all_invoices: list[dict] = []
-            first_error: Optional[str] = None
+            chunk_warnings: list[dict] = []
 
-            # Run all chunks in parallel — reduces multi-page scanned PDFs from
-            # (N_chunks × Claude_latency) to (1 × Claude_latency), preventing Railway timeout.
+            # Run all chunks in parallel — wall-clock time ≈ one Claude call.
             import asyncio
             import concurrent.futures
 
@@ -1186,27 +1304,91 @@ async def _extract_invoices_from_file(
                 ]
                 results = await asyncio.gather(*futures)
 
-            # Reassemble in original page order
+            # Process each chunk result immediately — persist as soon as available.
+            # This guarantees that if Railway kills the process before all chunks
+            # finish, completed chunks are already in Supabase and recoverable.
             for i, (invs, err) in sorted(results, key=lambda x: x[0]):
-                if err and not invs:
-                    if first_error is None:
-                        first_error = err
-                    logger.warning("Chunk %d/%d failed: %s", i+1, len(chunks), err)
-                all_invoices.extend(invs)
+                page_start = i * MAX_PAGES_PER_CHUNK + 1
+                page_end = min((i + 1) * MAX_PAGES_PER_CHUNK, total_pages)
+                chunk_page_range = f"{page_start}–{page_end}"
+                is_truncated = (err == "TRUNCATED")
 
-            if not all_invoices and first_error:
-                return [], first_error
+                if err and not invs and not is_truncated:
+                    logger.warning(
+                        "Chunk %d/%d failed (pages %s): %s",
+                        i + 1, len(chunks), chunk_page_range, err,
+                    )
+                    chunk_warnings.append({
+                        "chunk": i + 1,
+                        "pages": chunk_page_range,
+                        "reason": _classify_chunk_error(err),
+                        "invoices_recovered": 0,
+                    })
+                    # Persist failure row immediately so the batch_id exists in Supabase
+                    log_extraction(
+                        batch_id=batch_id,
+                        file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
+                        invoices=[],
+                        processing_ms=int((time.monotonic() - t0) * 1000),
+                        error=err,
+                    )
+                    continue
 
-            for inv in all_invoices:
-                inv = normalize_hsn_codes(inv)
-                inv = normalize_uoms(inv)
-                inv = correct_line_item_rates(inv)
-                inv = detect_bill_discount_from_total(inv)
-                inv["confidence"] = compute_confidence(inv)
+                # Post-process this chunk immediately (not after all chunks finish).
+                # Per-invoice try/except ensures one bad invoice cannot discard the rest.
+                processed: list[dict] = []
+                for inv in invs:
+                    try:
+                        inv = normalize_hsn_codes(inv)
+                        inv = normalize_uoms(inv)
+                        inv = correct_line_item_rates(inv)
+                        inv = detect_bill_discount_from_total(inv)
+                        inv["confidence"] = compute_confidence(inv)
+                    except Exception as pp_exc:
+                        logger.warning(
+                            "Post-processing error for invoice in chunk %d: %s",
+                            i + 1, pp_exc,
+                        )
+                        inv.setdefault("confidence", 0.0)
+                        inv.setdefault(
+                            "confidence_reasons",
+                            ["Post-processing error — data may be incomplete"],
+                        )
+                    processed.append(inv)
 
+                all_invoices.extend(processed)
+
+                if is_truncated:
+                    chunk_warnings.append({
+                        "chunk": i + 1,
+                        "pages": chunk_page_range,
+                        "reason": "max_tokens: Claude output limit reached — last invoice in this section may be incomplete",
+                        "invoices_recovered": len(processed),
+                    })
+
+                # PERSIST IMMEDIATELY — do not batch at end of file.
+                log_extraction(
+                    batch_id=batch_id,
+                    file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
+                    invoices=processed,
+                    processing_ms=int((time.monotonic() - t0) * 1000),
+                    error="TRUNCATED" if is_truncated else None,
+                )
+                logger.info(
+                    "Chunk %d/%d persisted: %d invoices (pages %s)",
+                    i + 1, len(chunks), len(processed), chunk_page_range,
+                )
+
+            # Final summary log for the whole file
             processing_ms = int((time.monotonic() - t0) * 1000)
-            log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown", invoices=all_invoices, processing_ms=processing_ms)
-            return all_invoices, None
+            log_extraction(
+                batch_id=batch_id,
+                file_name=upload.filename or "unknown",
+                invoices=all_invoices,
+                processing_ms=processing_ms,
+                error=None if all_invoices else "All chunks failed",
+            )
+            return all_invoices, None, chunk_warnings
 
     # Non-PDF or native-text PDF: single Claude call
     try:
@@ -1235,27 +1417,50 @@ async def _extract_invoices_from_file(
             content_parts = [{"type": "text", "text": text}]
     except BlankDocumentError as exc:
         logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
-        return [], f"Skipped (no invoice content): {exc}"
+        return [], f"Skipped (no invoice content): {exc}", []
     except Exception as exc:
         logger.exception("Failed to process file %s", upload.filename)
-        return [], f"Could not process file: {exc}"
+        return [], f"Could not process file: {exc}", []
 
     system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
     invoices, err = _call_claude_extract(client, content_parts, system_prompt, f" ({upload.filename})")
-    if err and not invoices:
-        return [], err
+    is_truncated = (err == "TRUNCATED")
 
+    if err and not invoices and not is_truncated:
+        return [], err, []
+
+    warnings: list[dict] = []
+    if is_truncated:
+        warnings.append({
+            "chunk": 1,
+            "pages": "all",
+            "reason": "max_tokens: Claude output limit reached — some invoices may be missing",
+            "invoices_recovered": len(invoices),
+        })
+
+    processed: list[dict] = []
     for inv in invoices:
-        inv = normalize_hsn_codes(inv)
-        inv = normalize_uoms(inv)
-        inv = correct_line_item_rates(inv)
-        inv = detect_bill_discount_from_total(inv)
-        inv["confidence"] = compute_confidence(inv)
+        try:
+            inv = normalize_hsn_codes(inv)
+            inv = normalize_uoms(inv)
+            inv = correct_line_item_rates(inv)
+            inv = detect_bill_discount_from_total(inv)
+            inv["confidence"] = compute_confidence(inv)
+        except Exception as pp_exc:
+            logger.warning("Post-processing error for invoice in %s: %s", upload.filename, pp_exc)
+            inv.setdefault("confidence", 0.0)
+            inv.setdefault("confidence_reasons", ["Post-processing error — data may be incomplete"])
+        processed.append(inv)
 
     processing_ms = int((time.monotonic() - t0) * 1000)
-    log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown", invoices=invoices, processing_ms=processing_ms)
-
-    return invoices, None
+    log_extraction(
+        batch_id=batch_id,
+        file_name=upload.filename or "unknown",
+        invoices=processed,
+        processing_ms=processing_ms,
+        error="TRUNCATED" if is_truncated else None,
+    )
+    return processed, None, warnings
 
 
 def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
@@ -1336,11 +1541,16 @@ def _merge_cross_file_invoices(file_results: list[dict]) -> list[dict]:
 async def upload_invoices(
     files: list[UploadFile] = File(...),
     company_id: Optional[str] = Form(None),
+    batch_id: Optional[str] = Form(None),
 ):
     """
     Upload one or more invoice files for extraction.
 
-    Returns batch_id, per-file results, and total invoice count.
+    Accepts an optional batch_id from the frontend. When provided, the frontend
+    can query extraction_logs with this batch_id to recover results even if the
+    HTTP response never arrives (Railway timeout, network drop, browser crash).
+
+    Returns batch_id, per-file results with warnings, and total invoice count.
     """
     import os
 
@@ -1352,25 +1562,33 @@ async def upload_invoices(
         )
 
     client = anthropic.Anthropic(api_key=api_key)
-    batch_id = str(uuid.uuid4())
+    # Use caller-provided batch_id so recovery queries work even if response is lost
+    if not batch_id:
+        batch_id = str(uuid.uuid4())
 
     file_results = []
 
     for upload in files:
-        invoices, error = await _extract_invoices_from_file(upload, client, batch_id)
-        if error:
-            log_extraction(batch_id=batch_id, file_name=upload.filename or "unknown",
-                           invoices=[], processing_ms=0, error=error)
+        invoices, error, warnings = await _extract_invoices_from_file(upload, client, batch_id)
+
+        if error and not invoices:
+            log_extraction(
+                batch_id=batch_id,
+                file_name=upload.filename or "unknown",
+                invoices=[],
+                processing_ms=0,
+                error=error,
+            )
+
         file_results.append({
             "filename": upload.filename or "unknown",
             "invoices": invoices,
-            "error": error,
+            "error": error if not invoices else None,
+            "warnings": warnings,
+            "extraction_complete": len(warnings) == 0 and not (error and not invoices),
         })
 
-    # Merge invoices with the same invoice number across different files
-    # (handles the case where a multi-page invoice was scanned as separate image files)
     file_results = _merge_cross_file_invoices(file_results)
-
     total_invoices = sum(len(fr["invoices"]) for fr in file_results)
 
     return {

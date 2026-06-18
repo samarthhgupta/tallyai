@@ -3,11 +3,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { extractInvoices } from '@/lib/extract';
+import { extractInvoices, tryRecoverBatch } from '@/lib/extract';
 import { computeReadiness, createBatch, insertAcceptedInvoices, insertRejectedInvoices, type InvoiceToSave } from '@/lib/db';
 import { learnVendorName } from '@/lib/suppliers';
 import { findDuplicate, recordInvoice } from '@/lib/invoiceHistory';
-import type { ExtractedInvoice, FileResult, ExtractionResponse } from '@/types/invoice';
+import type { ExtractedInvoice, FileResult, ExtractionResponse, ChunkWarning } from '@/types/invoice';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { downloadBulkExcel } from '@/lib/exportExcel';
 import AppLayout from '@/components/AppLayout';
@@ -78,6 +78,130 @@ function ReadinessBadge({ readiness, flags }: { readiness: QueueItem['readiness'
         </div>
       )}
     </span>
+  );
+}
+
+// ─── ExtractionWarningBanner ──────────────────────────────────────────────────
+
+interface ExtractionWarningState {
+  type: 'partial' | 'recovered' | 'truncated';
+  successCount: number;
+  failureDetails: Array<{ pages: string; reason: string }>;
+}
+
+function ExtractionWarningBanner({
+  warning,
+  onDismiss,
+}: {
+  warning: ExtractionWarningState;
+  onDismiss: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const titles: Record<ExtractionWarningState['type'], string> = {
+    partial: 'Partial extraction completed',
+    recovered: 'Results recovered after connection failure',
+    truncated: 'Extraction partially completed — output limit reached',
+  };
+  const descriptions: Record<ExtractionWarningState['type'], string> = {
+    partial: `${warning.successCount} invoice${warning.successCount !== 1 ? 's' : ''} extracted successfully. Some sections could not be extracted.`,
+    recovered: `${warning.successCount} invoice${warning.successCount !== 1 ? 's' : ''} recovered from the server after the connection was interrupted. Some invoices may be missing.`,
+    truncated: `${warning.successCount} invoice${warning.successCount !== 1 ? 's' : ''} extracted. Claude reached its output limit — the last section of the document may be incomplete.`,
+  };
+  const actions: Record<ExtractionWarningState['type'], string> = {
+    partial: 'Review the extracted invoices now. Re-upload the file to retry missing sections.',
+    recovered: 'Review the recovered invoices below. Re-upload the original file to extract any missing invoices.',
+    truncated: 'Review the extracted invoices. Re-upload this file to attempt the remaining invoices.',
+  };
+
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/40 p-4 mb-4">
+      <div className="flex gap-3">
+        <span className="text-amber-500 text-lg shrink-0 mt-0.5">⚠</span>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-amber-800 dark:text-amber-200 text-sm">
+            {titles[warning.type]}
+          </p>
+          <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+            {descriptions[warning.type]}
+          </p>
+          <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+            {actions[warning.type]}
+          </p>
+          {warning.failureDetails.length > 0 && (
+            <button
+              className="mt-2 text-xs text-amber-600 dark:text-amber-400 underline hover:no-underline"
+              onClick={() => setExpanded((x) => !x)}
+            >
+              {expanded ? 'Hide details ▲' : 'Why did this happen? ▼'}
+            </button>
+          )}
+          {expanded && (
+            <ul className="mt-2 space-y-1">
+              {warning.failureDetails.map((d, i) => (
+                <li key={i} className="text-xs text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/50 rounded px-2 py-1">
+                  <span className="font-medium">Pages {d.pages}:</span> {d.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <button
+          className="shrink-0 text-amber-400 hover:text-amber-600 dark:hover:text-amber-200 text-xl leading-none"
+          onClick={onDismiss}
+          title="Dismiss"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── RecoveryOfferBanner ──────────────────────────────────────────────────────
+
+function RecoveryOfferBanner({
+  offer,
+  onRecover,
+  onDiscard,
+}: {
+  offer: ExtractionResponse;
+  onRecover: () => void;
+  onDiscard: () => void;
+}) {
+  const fileNames = offer.file_results.map((fr) => fr.filename).join(', ');
+  return (
+    <div className="rounded-lg border border-blue-300 bg-blue-50 dark:bg-blue-950/40 p-4 mb-6">
+      <div className="flex gap-3">
+        <span className="text-blue-500 text-lg shrink-0 mt-0.5">↺</span>
+        <div className="flex-1">
+          <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+            Previous extraction available
+          </p>
+          <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
+            {offer.total_invoices} invoice{offer.total_invoices !== 1 ? 's' : ''} were extracted
+            in a previous session that did not complete. You can recover them now.
+          </p>
+          <p className="text-xs text-blue-500 dark:text-blue-400 mt-1 truncate" title={fileNames}>
+            {fileNames}
+          </p>
+          <div className="flex gap-2 mt-3">
+            <button
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+              onClick={onRecover}
+            >
+              Recover {offer.total_invoices} invoice{offer.total_invoices !== 1 ? 's' : ''}
+            </button>
+            <button
+              className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/30"
+              onClick={onDiscard}
+            >
+              Discard and start fresh
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -223,6 +347,11 @@ export default function UploadPage() {
   const [itcPopup, setItcPopup] = useState<ITCItem[] | null>(null);
   const [rejectPopup, setRejectPopup] = useState<string[] | null>(null); // keys to reject
 
+  // Extraction warning (partial success / truncation / recovery)
+  const [extractionWarning, setExtractionWarning] = useState<ExtractionWarningState | null>(null);
+  // Recovery offer from previous interrupted session
+  const [recoveryOffer, setRecoveryOffer] = useState<ExtractionResponse | null>(null);
+
   // ── Auth check ──
   useEffect(() => {
     if (companyLoading) return;
@@ -277,6 +406,26 @@ export default function UploadPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, invoiceOverrides, batchId, financialYear, queueStorageKey, queueRestored]);
 
+  // Check for an interrupted batch from a previous session (crash / Railway timeout)
+  useEffect(() => {
+    if (!isAuthed || !queueStorageKey || !queueRestored) return;
+    if (queue.length > 0) return; // queue already restored — no recovery needed
+
+    const pendingBatch = localStorage.getItem(`${queueStorageKey}_pending_batch`);
+    if (!pendingBatch) return;
+
+    tryRecoverBatch(pendingBatch).then((recovered) => {
+      if (recovered && recovered.total_invoices > 0) {
+        setRecoveryOffer(recovered);
+      } else {
+        localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+      }
+    }).catch(() => {
+      localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthed, queueStorageKey, queueRestored]);
+
   const selectedCompany = company;
   const selectedCompanyId = company?.id ?? '';
 
@@ -315,6 +464,48 @@ export default function UploadPage() {
   const formatBytes = (b: number) =>
     b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
+  // ── Extraction helpers ──
+  const categoriseError = useCallback((msg: string): string => {
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
+      return 'Connection lost during extraction. Claude may have already processed part of your document — try re-uploading to recover.';
+    }
+    if (msg.includes('504') || msg.includes('Gateway Timeout') || msg.includes('timeout')) {
+      return 'Server timeout. The document took too long to process. Split the PDF into smaller parts (recommended: under 20 pages per file) and try again.';
+    }
+    if (msg.includes('500') || msg.includes('Internal Server')) {
+      return 'Extraction server error. Try again. If the error persists with the same file, the PDF format may not be supported.';
+    }
+    if (msg.includes('Skipped') || msg.includes('blank') || msg.includes('no invoice content')) {
+      return 'No invoice content detected in this file. Check that you uploaded the correct file.';
+    }
+    if (msg.includes('rate') || msg.includes('429')) {
+      return 'Extraction service rate limit reached. Wait 30 seconds and try again.';
+    }
+    return `Extraction failed: ${msg.slice(0, 200)}. Please try again.`;
+  }, []);
+
+  const buildQueueItems = useCallback((data: ExtractionResponse): QueueItem[] => {
+    const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
+    const companyName = selectedCompany?.name ?? null;
+    const items: QueueItem[] = [];
+    data.file_results.forEach((fr) => {
+      fr.invoices.forEach((inv, idx) => {
+        const r = computeReadiness(inv, companyGstin, companyName);
+        const invFY = invoiceFY(inv.invoice_date ?? '');
+        items.push({
+          key: `${fr.filename}:${idx}`,
+          inv,
+          filename: fr.filename,
+          readiness: r.readiness,
+          readinessFlags: r.flags,
+          itcWarning: r.itcStatus === 'potentially_ineligible',
+          fyMismatch: !!invFY && invFY !== financialYear,
+        });
+      });
+    });
+    return items;
+  }, [selectedCompany, financialYear]);
+
   // ── Extraction ──
   const handleExtract = async () => {
     if (!files.length) return;
@@ -325,13 +516,22 @@ export default function UploadPage() {
       return;
     }
 
+    // Generate batch_id BEFORE the request so we can query Supabase for recovery
+    // if the response never arrives (Railway timeout, network drop, browser crash).
+    const newBatchId = crypto.randomUUID();
+    setBatchId(newBatchId);
+    if (queueStorageKey) {
+      localStorage.setItem(`${queueStorageKey}_pending_batch`, newBatchId);
+    }
+
     setExtracting(true);
     setExtractError('');
+    setExtractionWarning(null);
+    setRecoveryOffer(null);
     setResult(null);
     setQueue([]);
     setSelected(new Set());
     setInvoiceOverrides(new Map());
-    setBatchId(null);
     setActionError('');
 
     const urls: Record<string, string> = {};
@@ -339,7 +539,7 @@ export default function UploadPage() {
     setFileUrls(urls);
 
     try {
-      const data = await extractInvoices(files);
+      const data = await extractInvoices(files, newBatchId);
 
       // Record to localStorage history (duplicate detection across sessions)
       data.file_results.forEach((fr) => {
@@ -350,30 +550,42 @@ export default function UploadPage() {
         });
       });
 
-      // Build queue items with readiness
-      const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
-      const companyName = selectedCompany?.name ?? null;
-      const items: QueueItem[] = [];
-      data.file_results.forEach((fr) => {
-        fr.invoices.forEach((inv, idx) => {
-          const r = computeReadiness(inv, companyGstin, companyName);
-          const invFY = invoiceFY(inv.invoice_date ?? '');
-          items.push({
-            key: `${fr.filename}:${idx}`,
-            inv,
-            filename: fr.filename,
-            readiness: r.readiness,
-            readinessFlags: r.flags,
-            itcWarning: r.itcStatus === 'potentially_ineligible',
-            fyMismatch: !!invFY && invFY !== financialYear,
-          });
-        });
-      });
-      setQueue(items);
+      setQueue(buildQueueItems(data));
       setResult(data);
-      // Batch is created lazily at accept time, not here
+
+      // Show partial-success warning if any chunk failed or was truncated
+      const anyIncomplete = data.file_results.some((fr) => fr.extraction_complete === false);
+      if (anyIncomplete) {
+        const allWarnings = data.file_results.flatMap((fr) => fr.warnings ?? []);
+        const failures = allWarnings.filter((w) => !w.reason.startsWith('recovered') && w.invoices_recovered === 0);
+        const truncations = allWarnings.filter((w) => w.reason.startsWith('max_tokens'));
+        if (failures.length > 0 || truncations.length > 0) {
+          setExtractionWarning({
+            type: truncations.length > 0 ? 'truncated' : 'partial',
+            successCount: data.total_invoices,
+            failureDetails: [...failures, ...truncations].map((w) => ({ pages: w.pages, reason: w.reason })),
+          });
+        }
+      }
+
+      if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+
     } catch (err: unknown) {
-      setExtractError(err instanceof Error ? err.message : 'Extraction failed. Please try again.');
+      // HTTP request failed — attempt Supabase recovery before showing error
+      const recovered = await tryRecoverBatch(newBatchId).catch(() => null);
+      if (recovered && recovered.total_invoices > 0) {
+        setQueue(buildQueueItems(recovered));
+        setResult(recovered);
+        setExtractionWarning({
+          type: 'recovered',
+          successCount: recovered.total_invoices,
+          failureDetails: [],
+        });
+        if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setExtractError(categoriseError(msg));
+      }
     } finally {
       setExtracting(false);
     }
@@ -658,6 +870,15 @@ export default function UploadPage() {
               <div className="mt-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md px-3 py-2 text-sm text-red-700 dark:text-red-400">{extractError}</div>
             )}
 
+            {extractionWarning && (
+              <div className="mt-3">
+                <ExtractionWarningBanner
+                  warning={extractionWarning}
+                  onDismiss={() => setExtractionWarning(null)}
+                />
+              </div>
+            )}
+
             <div className="mt-4">
               <button
                 onClick={handleExtract}
@@ -678,6 +899,28 @@ export default function UploadPage() {
               </button>
             </div>
           </div>
+
+          {/* ── Recovery Offer ── */}
+          {recoveryOffer && !queue.length && (
+            <RecoveryOfferBanner
+              offer={recoveryOffer}
+              onRecover={() => {
+                setQueue(buildQueueItems(recoveryOffer));
+                setResult(recoveryOffer);
+                setExtractionWarning({
+                  type: 'recovered',
+                  successCount: recoveryOffer.total_invoices,
+                  failureDetails: [],
+                });
+                setRecoveryOffer(null);
+                if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+              }}
+              onDiscard={() => {
+                setRecoveryOffer(null);
+                if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+              }}
+            />
+          )}
 
           {/* ── Upload Queue ── */}
           {queue.length > 0 && (

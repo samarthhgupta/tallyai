@@ -66,16 +66,26 @@ export interface ExtractedInvoice {
   duplicate_of_filename?: string;  // filename of that earlier copy
 }
 
+export interface ChunkWarning {
+  chunk: number;
+  pages: string;
+  reason: string;
+  invoices_recovered: number;
+}
+
 export interface FileResult {
   filename: string;
   invoices: ExtractedInvoice[];
   error: string | null;
+  warnings?: ChunkWarning[];
+  extraction_complete?: boolean;
 }
 
 export interface ExtractionResponse {
   batch_id: string;
   file_results: FileResult[];
   total_invoices: number;
+  recovered?: boolean;
 }
 
 export interface Company {

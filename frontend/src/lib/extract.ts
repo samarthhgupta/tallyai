@@ -1,4 +1,5 @@
-import type { ExtractedInvoice, FileResult } from '@/types/invoice';
+import type { ExtractedInvoice, FileResult, ExtractionResponse, ChunkWarning } from '@/types/invoice';
+import { getSupabase } from './supabase';
 
 function getBackendUrl(): string {
   const url = process.env.NEXT_PUBLIC_BACKEND_URL;
@@ -32,7 +33,6 @@ function computeConfidence(inv: ExtractedInvoice): { score: number; reasons: str
   );
   const billDiscount = inv.bill_discount_amount ?? 0;
   const taxableValue = subtotal - billDiscount;
-  // Recompute tax on post-discount taxable using each item's GST rate (pro-rated by share)
   const recomputedTax = (inv.line_items ?? []).reduce((s, item) => {
     const itemAmt = item.qty * item.rate * (1 - item.disc_percent / 100);
     const discountShare = subtotal > 0 && billDiscount > 0 ? billDiscount * (itemAmt / subtotal) : 0;
@@ -51,16 +51,23 @@ function computeConfidence(inv: ExtractedInvoice): { score: number; reasons: str
   return { score: Math.max(0, Math.min(1, score)), reasons };
 }
 
-export async function extractInvoices(files: File[]): Promise<{
-  batch_id: string;
-  file_results: FileResult[];
-  total_invoices: number;
-}> {
+function applyConfidence(invoices: ExtractedInvoice[]): ExtractedInvoice[] {
+  return invoices.map((inv) => {
+    const { score, reasons } = computeConfidence(inv);
+    return { ...inv, confidence: score, confidence_reasons: reasons };
+  });
+}
+
+export async function extractInvoices(
+  files: File[],
+  batchId: string,
+): Promise<ExtractionResponse> {
   const backendUrl = getBackendUrl();
 
   const form = new FormData();
   files.forEach((f) => form.append('files', f));
   form.append('company_id', 'demo');
+  form.append('batch_id', batchId);
 
   const res = await fetch(`${backendUrl}/invoices/upload`, {
     method: 'POST',
@@ -72,15 +79,82 @@ export async function extractInvoices(files: File[]): Promise<{
     throw new Error(`Server error ${res.status}: ${err.slice(0, 300)}`);
   }
 
-  const data = await res.json();
+  const data: ExtractionResponse = await res.json();
 
   // Re-apply client-side confidence scoring on top of server scores
   for (const fileResult of data.file_results) {
-    fileResult.invoices = (fileResult.invoices as ExtractedInvoice[]).map((inv) => {
-      const { score, reasons } = computeConfidence(inv);
-      return { ...inv, confidence: score, confidence_reasons: reasons };
-    });
+    fileResult.invoices = applyConfidence(fileResult.invoices);
   }
 
   return data;
+}
+
+/**
+ * Called after a network failure. Queries Supabase extraction_logs for any
+ * invoices already persisted under this batch_id from per-chunk immediate writes.
+ * Returns a reconstructed ExtractionResponse, or null if nothing was found.
+ */
+export async function tryRecoverBatch(batchId: string): Promise<ExtractionResponse | null> {
+  try {
+    const sb = getSupabase();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (sb as any)
+      .from('extraction_logs')
+      .select('file_name, invoices, invoice_count, error')
+      .eq('batch_id', batchId)
+      .order('created_at');
+
+    if (error || !data?.length) return null;
+
+    // Group rows by base filename (strip __chunk_N suffix from per-chunk rows).
+    // Skip the summary row (no __chunk_ suffix) — its invoices are already in the chunk rows.
+    const byFile = new Map<string, { invoices: ExtractedInvoice[]; warnings: ChunkWarning[] }>();
+    for (const row of data) {
+      const rawName = row.file_name as string;
+      const chunkMatch = rawName.match(/__chunk_(\d+)$/);
+      if (!chunkMatch) continue; // skip summary rows
+
+      const base = rawName.slice(0, rawName.lastIndexOf('__chunk_'));
+      const entry = byFile.get(base) ?? { invoices: [], warnings: [] };
+      const chunkInvoices: ExtractedInvoice[] = (row.invoices ?? []) as ExtractedInvoice[];
+      entry.invoices.push(...chunkInvoices);
+
+      if (row.error) {
+        entry.warnings.push({
+          chunk: parseInt(chunkMatch[1], 10),
+          pages: '?',
+          reason: row.error === 'TRUNCATED'
+            ? 'max_tokens: Response truncated — some invoices may be missing'
+            : `chunk_failed: ${row.error}`,
+          invoices_recovered: chunkInvoices.length,
+        });
+      }
+      byFile.set(base, entry);
+    }
+
+    if (byFile.size === 0) return null;
+
+    const file_results: FileResult[] = Array.from(byFile.entries()).map(([filename, { invoices, warnings }]) => ({
+      filename,
+      invoices: applyConfidence(invoices),
+      error: null,
+      warnings: [
+        ...warnings,
+        {
+          chunk: 0,
+          pages: 'all',
+          reason: 'recovered: Results recovered after connection failure — extraction may be incomplete',
+          invoices_recovered: invoices.length,
+        },
+      ],
+      extraction_complete: false,
+    }));
+
+    const total = file_results.reduce((s, fr) => s + fr.invoices.length, 0);
+    if (total === 0) return null;
+
+    return { batch_id: batchId, file_results, total_invoices: total, recovered: true };
+  } catch {
+    return null;
+  }
 }
