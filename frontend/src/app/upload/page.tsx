@@ -416,15 +416,24 @@ export default function UploadPage() {
     const pendingBatch = localStorage.getItem(`${queueStorageKey}_pending_batch`);
     if (!pendingBatch) return;
 
-    tryRecoverBatch(pendingBatch).then((recovered) => {
-      if (recovered && recovered.total_invoices > 0) {
-        setRecoveryOffer(recovered);
-      } else {
+    // Backend may still be processing when we check (e.g. user refreshed mid-extraction).
+    // Retry up to 6 times at 20s intervals (2 minutes) before giving up and clearing the key.
+    let pollsRemaining = 6;
+    const attemptRecovery = () => {
+      tryRecoverBatch(pendingBatch).then((recovered) => {
+        if (recovered && recovered.total_invoices > 0) {
+          setRecoveryOffer(recovered);
+        } else if (pollsRemaining > 0) {
+          pollsRemaining--;
+          recoveryPollRef.current = setTimeout(attemptRecovery, 20_000);
+        } else {
+          localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+        }
+      }).catch(() => {
         localStorage.removeItem(`${queueStorageKey}_pending_batch`);
-      }
-    }).catch(() => {
-      localStorage.removeItem(`${queueStorageKey}_pending_batch`);
-    });
+      });
+    };
+    attemptRecovery();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, queueStorageKey, queueRestored]);
 
