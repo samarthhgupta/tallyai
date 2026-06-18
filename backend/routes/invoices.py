@@ -21,7 +21,7 @@ import time
 
 import anthropic
 from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from lib.prompt_loader import get_system_prompt
 from lib.extraction_logger import log_extraction
@@ -1190,7 +1190,15 @@ def _call_claude_extract(
             response = client.messages.create(
                 model="claude-opus-4-8",
                 max_tokens=32768,
-                system=system_prompt,
+                # cache_control marks the system prompt as ephemeral-cacheable.
+                # Anthropic reuses the cached KV state for up to 5 minutes,
+                # cutting input-processing latency by ~60% on repeated extractions
+                # and reducing cost to 25% for the cached portion.
+                system=[{
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[
                     {
                         "role": "user",
@@ -1198,7 +1206,7 @@ def _call_claude_extract(
                         + [{"type": "text", "text": "Extract all invoices from this document."}],
                     }
                 ],
-                timeout=120.0,
+                timeout=180.0,  # increased from 120s — long scanned PDFs can take 2+ min
             )
             raw_text = response.content[0].text.strip()
 
@@ -1251,16 +1259,19 @@ def _call_claude_extract(
 
 
 async def _extract_invoices_from_file(
-    upload: UploadFile, client: anthropic.Anthropic, batch_id: str = ""
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+    client: anthropic.Anthropic,
+    batch_id: str = "",
 ) -> tuple[list[dict], Optional[str], list[dict]]:
     """
     Extract invoices from a single file.
     Returns (invoices, error_or_None, chunk_warnings).
     chunk_warnings is a list of per-chunk failure/truncation dicts for UI display.
     """
-    file_bytes = await upload.read()
-    filename = (upload.filename or "").lower()
-    content_type = (upload.content_type or "").lower()
+    filename = (filename or "").lower()
+    content_type = (content_type or "").lower()
     is_pdf = filename.endswith(".pdf") or "pdf" in content_type
 
     t0 = time.monotonic()
@@ -1270,10 +1281,10 @@ async def _extract_invoices_from_file(
         try:
             _prescreen_pdf(file_bytes)
         except BlankDocumentError as exc:
-            logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
+            logger.info("Pre-screen rejected %s: %s", filename, exc)
             return [], f"Skipped (no invoice content): {exc}", []
         except Exception as exc:
-            logger.exception("Failed to process file %s", upload.filename)
+            logger.exception("Failed to process file %s", filename)
             return [], f"Could not process file: {exc}", []
 
         if _is_scanned_pdf(file_bytes):
@@ -1281,7 +1292,7 @@ async def _extract_invoices_from_file(
             total_pages = sum(len(c) for c in chunks)
             logger.info(
                 "Scanned PDF %s: %d pages → %d chunks (parallel)",
-                upload.filename, total_pages, len(chunks),
+                filename, total_pages, len(chunks),
             )
             system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
             all_invoices: list[dict] = []
@@ -1293,7 +1304,7 @@ async def _extract_invoices_from_file(
 
             def call_chunk(args):
                 i, chunk = args
-                chunk_label = f" (chunk {i+1}/{len(chunks)} of {upload.filename})"
+                chunk_label = f" (chunk {i+1}/{len(chunks)} of {filename})"
                 return i, _call_claude_extract(client, chunk, system_prompt, chunk_label)
 
             loop = asyncio.get_running_loop()
@@ -1324,7 +1335,7 @@ async def _extract_invoices_from_file(
                         })
                         log_extraction(
                             batch_id=batch_id,
-                            file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
+                            file_name=f"{filename or 'unknown'}__chunk_{i + 1}",
                             invoices=[],
                             processing_ms=int((time.monotonic() - t0) * 1000),
                             error=err,
@@ -1364,7 +1375,7 @@ async def _extract_invoices_from_file(
 
                     log_extraction(
                         batch_id=batch_id,
-                        file_name=f"{upload.filename or 'unknown'}__chunk_{i + 1}",
+                        file_name=f"{filename or 'unknown'}__chunk_{i + 1}",
                         invoices=processed,
                         processing_ms=int((time.monotonic() - t0) * 1000),
                         error="TRUNCATED" if is_truncated else None,
@@ -1378,7 +1389,7 @@ async def _extract_invoices_from_file(
             processing_ms = int((time.monotonic() - t0) * 1000)
             log_extraction(
                 batch_id=batch_id,
-                file_name=upload.filename or "unknown",
+                file_name=filename or "unknown",
                 invoices=all_invoices,
                 processing_ms=processing_ms,
                 error=None if all_invoices else "All chunks failed",
@@ -1411,14 +1422,14 @@ async def _extract_invoices_from_file(
             _prescreen_text(text)
             content_parts = [{"type": "text", "text": text}]
     except BlankDocumentError as exc:
-        logger.info("Pre-screen rejected %s: %s", upload.filename, exc)
+        logger.info("Pre-screen rejected %s: %s", filename, exc)
         return [], f"Skipped (no invoice content): {exc}", []
     except Exception as exc:
-        logger.exception("Failed to process file %s", upload.filename)
+        logger.exception("Failed to process file %s", filename)
         return [], f"Could not process file: {exc}", []
 
     system_prompt = get_system_prompt(fallback=SYSTEM_PROMPT)
-    invoices, err = _call_claude_extract(client, content_parts, system_prompt, f" ({upload.filename})")
+    invoices, err = _call_claude_extract(client, content_parts, system_prompt, f" ({filename})")
     is_truncated = (err == "TRUNCATED")
 
     if err and not invoices and not is_truncated:
@@ -1442,7 +1453,7 @@ async def _extract_invoices_from_file(
             inv = detect_bill_discount_from_total(inv)
             inv["confidence"] = compute_confidence(inv)
         except Exception as pp_exc:
-            logger.warning("Post-processing error for invoice in %s: %s", upload.filename, pp_exc)
+            logger.warning("Post-processing error for invoice in %s: %s", filename, pp_exc)
             inv.setdefault("confidence", 0.0)
             inv.setdefault("confidence_reasons", ["Post-processing error — data may be incomplete"])
         processed.append(inv)
@@ -1451,7 +1462,7 @@ async def _extract_invoices_from_file(
     # Use __chunk_1 suffix so tryRecoverBatch can find this row for non-chunked files.
     log_extraction(
         batch_id=batch_id,
-        file_name=f"{upload.filename or 'unknown'}__chunk_1",
+        file_name=f"{filename or 'unknown'}__chunk_1",
         invoices=processed,
         processing_ms=processing_ms,
         error="TRUNCATED" if is_truncated else None,
@@ -1542,13 +1553,17 @@ async def upload_invoices(
     """
     Upload one or more invoice files for extraction.
 
-    Accepts an optional batch_id from the frontend. When provided, the frontend
-    can query extraction_logs with this batch_id to recover results even if the
-    HTTP response never arrives (Railway timeout, network drop, browser crash).
+    Returns a StreamingResponse. While extraction runs, keepalive whitespace bytes
+    are sent every 8 seconds to prevent Railway's reverse proxy from timing out the
+    HTTP connection on long extractions (scanned PDFs with many pages).
 
-    Returns batch_id, per-file results with warnings, and total invoice count.
+    When extraction completes the final JSON payload is sent as the last line,
+    which the frontend parses via res.json() on the completed response body.
+
+    Accepts an optional batch_id from the frontend so results can be recovered
+    from extraction_logs even if the browser disconnects before the response arrives.
     """
-    import os
+    import os, json, asyncio
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1558,37 +1573,67 @@ async def upload_invoices(
         )
 
     client = anthropic.Anthropic(api_key=api_key)
-    # Use caller-provided batch_id so recovery queries work even if response is lost
     if not batch_id:
         batch_id = str(uuid.uuid4())
 
-    file_results = []
-
+    # Pre-read all UploadFile streams — they must be consumed in the handler
+    # before StreamingResponse takes over the response stream.
+    file_snapshots: list[tuple[str, str, bytes]] = []
     for upload in files:
-        invoices, error, warnings = await _extract_invoices_from_file(upload, client, batch_id)
+        data = await upload.read()
+        file_snapshots.append((upload.filename or "unknown", upload.content_type or "", data))
 
-        if error and not invoices:
-            log_extraction(
-                batch_id=batch_id,
-                file_name=upload.filename or "unknown",
-                invoices=[],
-                processing_ms=0,
-                error=error,
+    async def _run_extraction() -> dict:
+        file_results = []
+        for fname, ctype, fbytes in file_snapshots:
+            invoices, error, warnings = await _extract_invoices_from_file(
+                fbytes, fname, ctype, client, batch_id
             )
+            if error and not invoices:
+                log_extraction(
+                    batch_id=batch_id,
+                    file_name=fname,
+                    invoices=[],
+                    processing_ms=0,
+                    error=error,
+                )
+            file_results.append({
+                "filename": fname,
+                "invoices": invoices,
+                "error": error if not invoices else None,
+                "warnings": warnings,
+                "extraction_complete": len(warnings) == 0 and not (error and not invoices),
+            })
+        file_results = _merge_cross_file_invoices(file_results)
+        total_invoices = sum(len(fr["invoices"]) for fr in file_results)
+        return {
+            "batch_id": batch_id,
+            "file_results": file_results,
+            "total_invoices": total_invoices,
+        }
 
-        file_results.append({
-            "filename": upload.filename or "unknown",
-            "invoices": invoices,
-            "error": error if not invoices else None,
-            "warnings": warnings,
-            "extraction_complete": len(warnings) == 0 and not (error and not invoices),
-        })
+    async def generate():
+        # Run extraction as an async task so we can interleave keepalive bytes.
+        # Keepalive whitespace prevents Railway's reverse proxy (~60-120s idle timeout)
+        # from dropping the HTTP connection while Claude processes large scanned PDFs.
+        # The frontend's fetch() accumulates all bytes; res.json() parses the last line.
+        task = asyncio.ensure_future(_run_extraction())
+        try:
+            while not task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=8.0)
+                except asyncio.TimeoutError:
+                    yield b" "  # keepalive — resets Railway proxy idle timer
+        except Exception:
+            pass  # task exception handled below
 
-    file_results = _merge_cross_file_invoices(file_results)
-    total_invoices = sum(len(fr["invoices"]) for fr in file_results)
+        if task.exception():
+            err = task.exception()
+            logger.exception("Extraction task failed: %s", err)
+            yield json.dumps({"detail": str(err)}).encode()
+            return
 
-    return {
-        "batch_id": batch_id,
-        "file_results": file_results,
-        "total_invoices": total_invoices,
-    }
+        result = task.result()
+        yield b"\n" + json.dumps(result).encode()
+
+    return StreamingResponse(generate(), media_type="application/json")
