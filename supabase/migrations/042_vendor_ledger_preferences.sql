@@ -2,8 +2,7 @@ CREATE TABLE IF NOT EXISTS vendor_ledger_preferences (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id  uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   vendor_key  text NOT NULL,
-  -- vendor_key is: vendor_gstin (uppercased) if present, else 'name:<normalised_name>'
-  -- normalised_name = trim().toLowerCase().replace(/\s+/g, ' ')
+  -- vendor_key is: vendor_gstin (uppercased) when GSTIN is present and valid
   ledger_type text NOT NULL,
   -- 'purchase' | 'CGST' | 'SGST' | 'IGST' | 'CESS'
   ledger_name text NOT NULL,
@@ -17,26 +16,11 @@ CREATE INDEX IF NOT EXISTS vendor_ledger_preferences_company_vendor
 
 ALTER TABLE vendor_ledger_preferences ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Company members can read vendor ledger preferences"
-  ON vendor_ledger_preferences FOR SELECT
+CREATE POLICY "Company owner access"
+  ON vendor_ledger_preferences FOR ALL
   USING (
-    company_id IN (
-      SELECT company_id FROM company_users WHERE user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Company members can upsert vendor ledger preferences"
-  ON vendor_ledger_preferences FOR INSERT
+    company_id IN (SELECT id FROM companies WHERE created_by = auth.uid())
+  )
   WITH CHECK (
-    company_id IN (
-      SELECT company_id FROM company_users WHERE user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Company members can update vendor ledger preferences"
-  ON vendor_ledger_preferences FOR UPDATE
-  USING (
-    company_id IN (
-      SELECT company_id FROM company_users WHERE user_id = auth.uid()
-    )
+    company_id IN (SELECT id FROM companies WHERE created_by = auth.uid())
   );
