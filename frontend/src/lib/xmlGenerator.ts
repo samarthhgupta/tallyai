@@ -170,8 +170,12 @@ function findTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string, rate
   const comp = component.toUpperCase();
   const specific = dutiesTaxes.find((d) => d.tax_component === comp && d.tax_rate === rate);
   if (specific) return specific.tally_ledger_name;
-  const consolidated = dutiesTaxes.find((d) => d.tax_component === comp && d.tax_rate == null);
-  return consolidated?.tally_ledger_name ?? null;
+  // Among consolidated (catch-all) entries, prefer Input ledgers over Output ledgers.
+  // Purchase invoices should default to Input GST; Output is the exception, not the rule.
+  const consolidated = dutiesTaxes.filter((d) => d.tax_component === comp && d.tax_rate == null);
+  if (consolidated.length === 0) return null;
+  const input = consolidated.find((d) => d.tally_ledger_name.toLowerCase().startsWith('input'));
+  return (input ?? consolidated[0]).tally_ledger_name;
 }
 
 

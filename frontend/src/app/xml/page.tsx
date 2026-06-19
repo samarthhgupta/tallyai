@@ -312,14 +312,27 @@ function FlatPreviewTable({
   // Accepted invoices - once accepted, fields are locked in the UI (initialised from DB on mount)
   const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>(initialLockedInvoices);
 
-  // Stock item scope dialog popup state
-  const [stockConfirm, setStockConfirm] = React.useState<{
+  // Pending stock item change — held here until user confirms scope in the dialog.
+  // Only populated when the chosen name matches HSN @ Rate% naming convention.
+  // Committed to stockItemEdits only after scope selection; Cancel discards without any state update.
+  const [pendingStockChange, setPendingStockChange] = React.useState<{
     invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
   } | null>(null);
 
-  // HSN @ Rate% pattern: digits (HSN code) followed by " @ N%" — e.g. "57039010 @ 12%"
-  // The popup only appears when the confirmed name follows this convention.
+  // HSN @ Rate% pattern: leading digits (HSN code) + " @ N%" — e.g. "57039010 @ 12%"
+  // "Bathmats @ 12%" fails because it starts with a letter, not digits.
   const isHsnNamingPattern = (name: string) => /^\d[\d\s.]*\s*@\s*\d+(\.\d+)?%$/.test(name.trim());
+
+  // Commit a single stock item edit and, when the name is HSN-patterned, open the scope dialog.
+  const handleStockItemChange = (invoiceNo: string, itemDesc: string, hsn: string, gstPct: number | null, suggestedName: string, chosenName: string) => {
+    if (isHsnNamingPattern(chosenName)) {
+      // Defer commit — let the scope dialog decide which rows to update.
+      setPendingStockChange({ invoiceNo, itemDesc, hsn, gstPct, suggestedName, chosenName });
+    } else {
+      // Non-HSN selection: commit immediately, no dialog.
+      setStockItemEdits((p) => ({ ...p, [`${invoiceNo}_${itemDesc}`]: chosenName }));
+    }
+  };
 
   // Group rows by invoice number, preserving order
   const invoiceOrder: string[] = [];
@@ -1075,15 +1088,13 @@ function FlatPreviewTable({
                         freetext={stockItemFreetext[`${row.invoiceNo}_${row.itemDesc}`] ?? false}
                         createLabel="New Tally stock item name…"
                         onSelect={(v) => {
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v);
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
+                          handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v);
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
                       />
@@ -1092,8 +1103,7 @@ function FlatPreviewTable({
                         value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v);
                         }} />
                     ) : (
                       <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
@@ -1316,39 +1326,49 @@ function FlatPreviewTable({
         </table>
       </div>
 
-      {/* Stock item scope dialog — 3 options */}
-      {stockConfirm && (() => {
-        // "(new)" suffix note: option values are clean strings; the "(new)" label is UI-only in pendingOptions rendering.
+      {/* Stock item scope dialog — only shown when chosen name is HSN @ Rate% pattern */}
+      {pendingStockChange && (() => {
+        // Other suggested rows on the same invoice (excluding the row being confirmed).
         const invoiceOnlyRows = rows.filter((r) =>
-          r.invoice_number === stockConfirm.invoiceNo &&
-          r.ledger_type === 'Inventory' && r.is_suggested
+          r.invoice_number === pendingStockChange.invoiceNo &&
+          r.ledger_type === 'Inventory' && r.is_suggested &&
+          r.item_description !== pendingStockChange.itemDesc
         );
         const allUnlockedRows = rows.filter((r) =>
           r.ledger_type === 'Inventory' && r.is_suggested &&
-          !lockedInvoices[r.invoice_number]
+          !lockedInvoices[r.invoice_number] &&
+          !(r.invoice_number === pendingStockChange.invoiceNo && r.item_description === pendingStockChange.itemDesc)
         );
-        // Fix 1: If no suggested items exist in either scope, skip the dialog.
-        if (invoiceOnlyRows.length === 0 && allUnlockedRows.length === 0) {
-          setTimeout(() => setStockConfirm(null), 0);
-          return null;
-        }
+
+        // Apply HSN pattern to target rows + commit the originally-selected row.
         const applyHsnPattern = (targetRows: typeof rows) => {
-          targetRows.forEach((r) => {
-            const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
-            const li = inv?.line_items.find((l) => l.description === r.item_description);
-            if (li) {
-              const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-              setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
-            }
+          setStockItemEdits((p) => {
+            const next = { ...p, [`${pendingStockChange.invoiceNo}_${pendingStockChange.itemDesc}`]: pendingStockChange.chosenName };
+            targetRows.forEach((r) => {
+              const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
+              const li = inv?.line_items.find((l) => l.description === r.item_description);
+              if (li) {
+                const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
+                next[`${r.invoice_number}_${r.item_description ?? ''}`] = name;
+              }
+            });
+            return next;
           });
-          setStockConfirm(null);
+          setPendingStockChange(null);
         };
+
+        // "Map individually" — commit only the selected row, no propagation.
+        const commitSingle = () => {
+          setStockItemEdits((p) => ({ ...p, [`${pendingStockChange.invoiceNo}_${pendingStockChange.itemDesc}`]: pendingStockChange.chosenName }));
+          setPendingStockChange(null);
+        };
+
         return (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
             <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply naming pattern to all?</h3>
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply HSN naming pattern to all?</h3>
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
+                You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{pendingStockChange.chosenName}</span>
               </p>
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                 Would you like to apply <span className="font-mono font-semibold">HSN @ Rate%</span> naming to other AI-suggested stock items?
@@ -1360,24 +1380,28 @@ function FlatPreviewTable({
                   onClick={() => applyHsnPattern(invoiceOnlyRows)}
                 >
                   <div className="font-medium text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
-                  <div className="text-xs text-gray-500 mt-0.5">{invoiceOnlyRows.length} suggested item{invoiceOnlyRows.length !== 1 ? 's' : ''} on this invoice.</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{invoiceOnlyRows.length} other suggested item{invoiceOnlyRows.length !== 1 ? 's' : ''} on this invoice will be updated.</div>
                 </button>
                 <button
                   disabled={allUnlockedRows.length === 0}
                   className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                  onClick={() => {
-                    // Defect 3 fix: update local state only; no pre-acceptance master write.
-                    applyHsnPattern(allUnlockedRows);
-                  }}
+                  onClick={() => applyHsnPattern(allUnlockedRows)}
                 >
                   <div className="font-medium text-indigo-700 dark:text-indigo-300">Apply to all {allUnlockedRows.length} loaded unaccepted invoices</div>
-                  <div className="text-xs text-gray-500 mt-0.5">Session-scoped. All suggested stock items across all unaccepted invoices are updated.</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Session-scoped. All other suggested stock items across all unaccepted invoices are updated.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-700 dark:text-gray-300"
+                  onClick={commitSingle}
+                >
+                  <div className="font-medium">No – map individually</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Only this item is updated. Other suggested items remain unchanged.</div>
                 </button>
                 <button
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-500"
-                  onClick={() => setStockConfirm(null)}
+                  onClick={() => setPendingStockChange(null)}
                 >
-                  No – map individually
+                  Cancel
                 </button>
               </div>
             </div>
