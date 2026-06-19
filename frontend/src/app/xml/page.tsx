@@ -83,7 +83,6 @@ function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
   onConfirm: (value: string) => void;
   onCancel: () => void;
 }) {
-  console.log('[CREATE_NEW] InlineCreateInput rendered, placeholder:', placeholder);
   return (
     <input
       autoFocus
@@ -91,10 +90,10 @@ function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
       placeholder={placeholder}
       className="border border-indigo-300 dark:border-indigo-800 rounded px-2 py-0.5 text-xs bg-indigo-50 dark:bg-indigo-900/30 dark:text-gray-100 w-full font-mono"
       onKeyDown={(e) => {
-        if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); console.log('[CREATE_NEW] Enter pressed, value:', JSON.stringify(v)); if (v) onConfirm(v); else onCancel(); }
-        if (e.key === 'Escape') { console.log('[CREATE_NEW] Escape pressed'); onCancel(); }
+        if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }
+        if (e.key === 'Escape') { onCancel(); }
       }}
-      onBlur={(e) => { const v = e.currentTarget.value.trim(); console.log('[CREATE_NEW] onBlur, value:', JSON.stringify(v)); if (v) onConfirm(v); else onCancel(); }}
+      onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }}
     />
   );
 }
@@ -128,12 +127,11 @@ function CreatableLedgerDropdown({
   }`;
 
   if (freetext) {
-    console.log('[CREATE_NEW] CreatableLedgerDropdown rendering InlineCreateInput, label:', createLabel);
     return (
       <InlineCreateInput
         placeholder={createLabel}
-        onConfirm={(v) => { console.log('[CREATE_NEW] onConfirmCreate called, value:', JSON.stringify(v), 'label:', createLabel); onConfirmCreate(v); }}
-        onCancel={() => { console.log('[CREATE_NEW] onCancelCreate called, label:', createLabel); onCancelCreate(); }}
+        onConfirm={onConfirmCreate}
+        onCancel={onCancelCreate}
       />
     );
   }
@@ -143,7 +141,7 @@ function CreatableLedgerDropdown({
       <select
         value={value}
         onChange={(e) => {
-          if (e.target.value === '__new__') { console.log('[CREATE_NEW] __new__ selected, calling onStartCreate, label:', createLabel); onStartCreate(); return; }
+          if (e.target.value === '__new__') { onStartCreate(); return; }
           if (!e.target.value) return;
           onSelect(e.target.value);
         }}
@@ -280,9 +278,9 @@ function FlatPreviewTable({
   const [pendingSuppliers, setPendingSuppliers] = React.useState<string[]>([]);
   const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({}); // keyed by `${invoiceNo}_${itemDesc}`
   const [pendingStockItems, setPendingStockItems] = React.useState<string[]>([]);
-  const [cgstFreetext, setCgstFreetext] = React.useState(false);
-  const [sgstFreetext, setSgstFreetext] = React.useState(false);
-  const [igstFreetext, setIgstFreetext] = React.useState(false);
+  const [cgstFreetext, setCgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [sgstFreetext, setSgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [igstFreetext, setIgstFreetext] = React.useState<Record<string, boolean>>({});
   const [pendingCgst, setPendingCgst] = React.useState<string[]>([]);
   const [pendingSgst, setPendingSgst] = React.useState<string[]>([]);
   const [pendingIgst, setPendingIgst] = React.useState<string[]>([]);
@@ -952,14 +950,13 @@ function FlatPreviewTable({
                         freetext={supplierFreetext[row.vendorName] ?? false}
                         createLabel="New supplier ledger name…"
                         onSelect={(v) => setVendorEdits((p) => ({ ...p, [row.vendorName]: v }))}
-                        onStartCreate={() => { console.log('[CREATE_NEW] VENDOR onStartCreate, vendorName:', row.vendorName); setSupplierFreetext((p) => ({ ...p, [row.vendorName]: true })); }}
+                        onStartCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: true }))}
                         onConfirmCreate={(v) => {
-                          console.log('[CREATE_NEW] VENDOR onConfirmCreate, v:', v, 'vendorName:', row.vendorName);
                           setPendingSuppliers((p) => p.includes(v) ? p : [...p, v]);
                           setVendorEdits((p) => ({ ...p, [row.vendorName]: v }));
                           setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false }));
                         }}
-                        onCancelCreate={() => { console.log('[CREATE_NEW] VENDOR onCancelCreate, vendorName:', row.vendorName); setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false })); }}
+                        onCancelCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false }))}
                       />
                     ) : (
                       <EditableField value={vendorDisplayVal} suggested={row.vendorSuggested} color="text-purple-800"
@@ -983,7 +980,6 @@ function FlatPreviewTable({
                     ) : purchaseLedgerCreating[row.invoiceNo] ? (
                       // Inline create-new input
                       <div className="flex items-center gap-1">
-                        {console.log('[CREATE_NEW] PURCHASE LEDGER inline input rendered, invoiceNo:', row.invoiceNo) as never}
                         <input
                           autoFocus
                           type="text"
@@ -1028,7 +1024,6 @@ function FlatPreviewTable({
                           value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
                           onChange={(e) => {
                             if (e.target.value === '__new__') {
-                              console.log('[CREATE_NEW] PURCHASE LEDGER __new__ selected, invoiceNo:', row.invoiceNo);
                               setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: true }));
                               return;
                             }
@@ -1105,13 +1100,12 @@ function FlatPreviewTable({
                         onSelect={(v) => {
                           handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v);
                         }}
-                        onStartCreate={() => { console.log('[CREATE_NEW] STOCK ITEM onStartCreate, key:', `${row.invoiceNo}_${row.itemDesc}`); setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true })); }}
+                        onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
-                          console.log('[CREATE_NEW] STOCK ITEM onConfirmCreate, v:', v);
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
                           handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v, true);
                         }}
-                        onCancelCreate={() => { console.log('[CREATE_NEW] STOCK ITEM onCancelCreate, key:', `${row.invoiceNo}_${row.itemDesc}`); setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false })); }}
+                        onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
                       />
                     ) : isInventoryMode ? (
                       <EditableField
@@ -1190,7 +1184,6 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'cgst_sgst' && (() => {
                       const cgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'CGST').map((d) => d.tally_ledger_name);
-                      if (cgstFreetext) console.log('[CREATE_NEW] CGST cell rendering with freetext=true, invoiceNo:', row.invoiceNo);
                       return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
                         : cgstOpts.length > 0 || pendingCgst.length > 0
@@ -1199,23 +1192,22 @@ function FlatPreviewTable({
                             options={cgstOpts}
                             pendingOptions={pendingCgst}
                             suggested={row.cgstSuggested}
-                            freetext={cgstFreetext}
+                            freetext={cgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New CGST ledger name…"
                             onSelect={(v) => {
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'CGST', newLedger: v });
                               onMapTaxLedger('CGST', v);
                             }}
-                            onStartCreate={() => { console.log('[CREATE_NEW] CGST onStartCreate, invoiceNo:', row.invoiceNo, 'cgstFreetext BEFORE:', cgstFreetext); setCgstFreetext(true); }}
+                            onStartCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
-                              console.log('[CREATE_NEW] CGST onConfirmCreate, v:', v, 'invoiceNo:', row.invoiceNo);
                               setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'CGST', newLedger: v });
                               onMapTaxLedger('CGST', v);
-                              setCgstFreetext(false);
+                              setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => { console.log('[CREATE_NEW] CGST onCancelCreate, invoiceNo:', row.invoiceNo); setCgstFreetext(false); }}
+                            onCancelCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
                             onSave={(v) => {
@@ -1240,23 +1232,22 @@ function FlatPreviewTable({
                             options={sgstOpts}
                             pendingOptions={pendingSgst}
                             suggested={row.sgstSuggested}
-                            freetext={sgstFreetext}
+                            freetext={sgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New SGST ledger name…"
                             onSelect={(v) => {
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'SGST', newLedger: v });
                               onMapTaxLedger('SGST', v);
                             }}
-                            onStartCreate={() => { console.log('[CREATE_NEW] SGST onStartCreate, invoiceNo:', row.invoiceNo, 'sgstFreetext BEFORE:', sgstFreetext); setSgstFreetext(true); }}
+                            onStartCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
-                              console.log('[CREATE_NEW] SGST onConfirmCreate, v:', v, 'invoiceNo:', row.invoiceNo);
                               setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'SGST', newLedger: v });
                               onMapTaxLedger('SGST', v);
-                              setSgstFreetext(false);
+                              setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => { console.log('[CREATE_NEW] SGST onCancelCreate, invoiceNo:', row.invoiceNo); setSgstFreetext(false); }}
+                            onCancelCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
                             onSave={(v) => {
@@ -1273,7 +1264,6 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[160px]">
                     {row.taxType === 'igst' && (() => {
                       const igstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'IGST').map((d) => d.tally_ledger_name);
-                      if (igstFreetext) console.log('[CREATE_NEW] IGST cell rendering with freetext=true, invoiceNo:', row.invoiceNo);
                       return isLocked
                         ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
                         : igstOpts.length > 0 || pendingIgst.length > 0
@@ -1282,23 +1272,22 @@ function FlatPreviewTable({
                             options={igstOpts}
                             pendingOptions={pendingIgst}
                             suggested={row.igstSuggested}
-                            freetext={igstFreetext}
+                            freetext={igstFreetext[row.invoiceNo] ?? false}
                             createLabel="New IGST ledger name…"
                             onSelect={(v) => {
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'IGST', newLedger: v });
                               onMapTaxLedger('IGST', v);
                             }}
-                            onStartCreate={() => { console.log('[CREATE_NEW] IGST onStartCreate, invoiceNo:', row.invoiceNo, 'igstFreetext BEFORE:', igstFreetext); setIgstFreetext(true); }}
+                            onStartCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
-                              console.log('[CREATE_NEW] IGST onConfirmCreate, v:', v, 'invoiceNo:', row.invoiceNo);
                               setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
                               const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
                               setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'IGST', newLedger: v });
                               onMapTaxLedger('IGST', v);
-                              setIgstFreetext(false);
+                              setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => { console.log('[CREATE_NEW] IGST onCancelCreate, invoiceNo:', row.invoiceNo); setIgstFreetext(false); }}
+                            onCancelCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
                             onSave={(v) => {
