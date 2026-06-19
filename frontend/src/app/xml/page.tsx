@@ -317,6 +317,10 @@ function FlatPreviewTable({
     invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
   } | null>(null);
 
+  // HSN @ Rate% pattern: digits (HSN code) followed by " @ N%" — e.g. "57039010 @ 12%"
+  // The popup only appears when the confirmed name follows this convention.
+  const isHsnNamingPattern = (name: string) => /^\d[\d\s.]*\s*@\s*\d+(\.\d+)?%$/.test(name.trim());
+
   // Group rows by invoice number, preserving order
   const invoiceOrder: string[] = [];
   const byInvoice = new Map<string, PreviewRow[]>();
