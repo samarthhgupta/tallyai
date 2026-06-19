@@ -236,7 +236,7 @@ function FlatPreviewTable({
   initialLockedInvoices,
   purchaseLedgerMasters, historicalPurchaseLedgers, companyWidePurchaseLedger,
   dutiesTaxesMasters, stockItemMode,
-  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
+  onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, onDownloadExcel, companyId,
 }: {
   rows: PreviewRow[];
   invoices: StoredInvoice[];
@@ -245,9 +245,9 @@ function FlatPreviewTable({
   stockItems: { tally_item_name: string; hsn_code?: string | null; gst_percent?: number | null }[];
   stockItemMode?: 'hsn_driven' | null;
   initialLockedInvoices: Record<string, LockedInvoice>;
-  purchaseLedgerMasters: string[];           // tally_ledger_name values from purchase_ledger_config
-  historicalPurchaseLedgers: Record<string, string>; // key: vendor_gstin ?? 'name:'+normalized_name
-  companyWidePurchaseLedger: string | null;  // most-used PL across all company invoices (Case 3 fallback)
+  purchaseLedgerMasters: string[];
+  historicalPurchaseLedgers: Record<string, string>;
+  companyWidePurchaseLedger: string | null;
   dutiesTaxesMasters: { tax_component: string; tally_ledger_name: string }[];
   companyId: string;
   onMapExpense: (description: string, ledgerName: string) => void;
@@ -255,6 +255,7 @@ function FlatPreviewTable({
   onMapStockItem: (description: string, tallyItemName: string) => void;
   onMapTaxLedger: (type: 'CGST' | 'SGST' | 'IGST', name: string) => void;
   onAcceptInvoices: (payloads: InvoiceAcceptPayload[]) => Promise<void>;
+  onDownloadExcel: () => void;
 }) {
   const isInventoryMode = rows.some((r) => r.ledger_type === 'Inventory');
 
@@ -282,6 +283,14 @@ function FlatPreviewTable({
   const [roFreetext, setRoFreetext] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
   const [pendingRo, setPendingRo] = React.useState<string[]>([]);
 
+  // Filter / dashboard state
+  const [cardFilter, setCardFilter] = React.useState<'accepted' | 'pending_review' | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<'all' | 'accepted' | 'pending_review'>('all');
+  const [vendorFilter, setVendorFilter] = React.useState('');
+  const [invoiceFilter, setInvoiceFilter] = React.useState('');
+  const [gstinFilter, setGstinFilter] = React.useState('');
+  const [mappingFilter, setMappingFilter] = React.useState<'all' | 'ai_suggested_new' | 'new_stock_items'>('all');
+
   // Bulk-select state for inline accept / unaccept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
   const [selectedLockedInvoices, setSelectedLockedInvoices] = React.useState<Set<string>>(new Set());
@@ -292,7 +301,7 @@ function FlatPreviewTable({
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
-    itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
+    invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
   } | null>(null);
 
   // Group rows by invoice number, preserving order
@@ -518,6 +527,30 @@ function FlatPreviewTable({
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
+  // Filtered invoice set — drives which invoices appear in the table
+  const filteredInvoiceNos = React.useMemo(() => {
+    const effectiveStatus = cardFilter ?? statusFilter;
+    return new Set(invoiceOrder.filter(invNo => {
+      const invRows = byInvoice.get(invNo) ?? [];
+      const invoice = invoices.find(i => i.invoice_number === invNo);
+      const isAccepted = !!lockedInvoices[invNo];
+      const hasPendingReview = invRows.some(r => r.status === 'Suggested' || r.warning);
+      if (effectiveStatus === 'accepted' && !isAccepted) return false;
+      if (effectiveStatus === 'pending_review' && !hasPendingReview) return false;
+      if (vendorFilter && !invRows[0]?.vendor_name?.toLowerCase().includes(vendorFilter.toLowerCase())) return false;
+      if (invoiceFilter && !invNo.toLowerCase().includes(invoiceFilter.toLowerCase())) return false;
+      if (gstinFilter && !(invoice?.vendor_gstin ?? '').toLowerCase().includes(gstinFilter.toLowerCase())) return false;
+      if (mappingFilter === 'ai_suggested_new' && !invRows.some(r => r.is_suggested && r.status === 'Suggested')) return false;
+      if (mappingFilter === 'new_stock_items' && !invRows.some(r =>
+        r.ledger_type === 'Inventory' &&
+        pendingStockItems.includes(stockItemEdits[`${invNo}_${r.item_description ?? ''}`] ?? '')
+      )) return false;
+      return true;
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardFilter, statusFilter, vendorFilter, invoiceFilter, gstinFilter, mappingFilter,
+      rows, lockedInvoices, pendingStockItems, stockItemEdits]);
+
   // One checkbox per INVOICE - only for invoices that have at least one suggested field.
   // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
   const suggestableInvoices: string[] = [];
@@ -704,7 +737,72 @@ function FlatPreviewTable({
     if (errs.length) alert(`Some failed:\n${errs.join('\n')}`);
   };
 
+  // Dashboard counts — computed inside FlatPreviewTable where lockedInvoices state lives
+  const dashTotalCount = new Set(rows.map(r => r.invoice_number)).size;
+  const dashAcceptedCount = Object.keys(lockedInvoices).length;
+  const dashPendingCount = new Set(rows.filter(r => r.status === 'Suggested' || r.warning).map(r => r.invoice_number)).size;
+  const dashBlockedCount = new Set(rows.filter(r => r.status === 'Skipped').map(r => r.invoice_number)).size;
+
   return (
+    <div className="space-y-3">
+    {/* Dashboard cards */}
+    <div className="flex flex-wrap items-start gap-3">
+      <button
+        onClick={() => { setCardFilter(null); setStatusFilter('all'); }}
+        className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === null && statusFilter === 'all' ? 'bg-gray-100 dark:bg-gray-700 border-gray-400 dark:border-gray-500' : 'bg-gray-50 dark:bg-gray-900/40 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+      >
+        <span className="text-xl font-bold text-gray-900 dark:text-gray-100">{dashTotalCount}</span>
+        <span className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Total Invoices</span>
+      </button>
+      <button
+        onClick={() => setCardFilter(p => p === 'accepted' ? null : 'accepted')}
+        className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === 'accepted' ? 'bg-green-100 dark:bg-green-900/40 border-green-400 dark:border-green-600' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/30'}`}
+      >
+        <span className="text-xl font-bold text-green-800 dark:text-green-400">{dashAcceptedCount}</span>
+        <span className="text-xs text-green-700 dark:text-green-500 mt-0.5">Accepted – Ready for Export</span>
+      </button>
+      {dashPendingCount > 0 && (
+        <button
+          onClick={() => setCardFilter(p => p === 'pending_review' ? null : 'pending_review')}
+          className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === 'pending_review' ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-600' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/30'}`}
+        >
+          <span className="text-xl font-bold text-amber-800 dark:text-amber-300">{dashPendingCount}</span>
+          <span className="text-xs text-amber-700 dark:text-amber-500 mt-0.5">Pending Mapping Reviews</span>
+        </button>
+      )}
+      {dashBlockedCount > 0 && (
+        <div className="flex flex-col items-start px-4 py-3 rounded-xl border bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
+          <span className="text-xl font-bold text-red-800 dark:text-red-400">{dashBlockedCount}</span>
+          <span className="text-xs text-red-600 dark:text-red-500 mt-0.5">Blocked</span>
+        </div>
+      )}
+      <div className="flex items-center self-center text-xs text-gray-400 dark:text-gray-500 gap-1 ml-1">
+        <span className="font-mono">{dashAcceptedCount} accepted</span>
+        <span>+</span>
+        <span className="font-mono">{dashPendingCount} pending</span>
+        {dashBlockedCount > 0 && <><span>+</span><span className="font-mono">{dashBlockedCount} blocked</span></>}
+        <span>=</span>
+        <span className="font-mono font-semibold text-gray-600 dark:text-gray-300">{dashTotalCount} total</span>
+      </div>
+      <button
+        onClick={onDownloadExcel}
+        className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors self-start"
+      >
+        <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        Download as Excel
+      </button>
+    </div>
+    {/* Active card filter pill */}
+    {cardFilter && (
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700 rounded-lg text-sm w-fit">
+        <span className="text-indigo-700 dark:text-indigo-300 font-medium">
+          Filter: {cardFilter === 'accepted' ? 'Accepted – Ready for Export' : 'Pending Mapping Reviews'}
+        </span>
+        <button onClick={() => setCardFilter(null)} className="text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 ml-1 font-bold leading-none">×</button>
+      </div>
+    )}
     <div className="rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
       {/* Action bar */}
       {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
@@ -741,6 +839,79 @@ function FlatPreviewTable({
           )}
         </div>
       )}
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/60">
+        {/* Status pills */}
+        <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+          {(['all', 'accepted', 'pending_review'] as const).map(s => {
+            const isActive = cardFilter === null
+              ? statusFilter === s
+              : (s === 'accepted' && cardFilter === 'accepted') || (s === 'pending_review' && cardFilter === 'pending_review') || (s === 'all' && false);
+            return (
+              <button
+                key={s}
+                onClick={() => { setStatusFilter(s); setCardFilter(null); }}
+                className={`px-3 py-1.5 font-medium transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              >
+                {s === 'all' ? 'All' : s === 'accepted' ? 'Accepted' : 'Pending Review'}
+              </button>
+            );
+          })}
+        </div>
+        {/* Vendor filter */}
+        <select
+          value={vendorFilter}
+          onChange={e => setVendorFilter(e.target.value)}
+          className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 max-w-[180px]"
+        >
+          <option value="">All Vendors</option>
+          {Array.from(new Set(displayRows.map(r => r.vendorName))).sort().map(v => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+        {/* Invoice number filter */}
+        <input
+          type="text"
+          placeholder="Invoice No…"
+          value={invoiceFilter}
+          onChange={e => setInvoiceFilter(e.target.value)}
+          className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 w-28"
+        />
+        {/* GSTIN filter */}
+        <input
+          type="text"
+          placeholder="GSTIN…"
+          value={gstinFilter}
+          onChange={e => setGstinFilter(e.target.value)}
+          className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 w-36"
+        />
+        {/* Mapping filter pills */}
+        <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+          {([['all', 'All'], ['ai_suggested_new', '✦ AI Suggested New'], ['new_stock_items', 'New Stock Items']] as const).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setMappingFilter(m)}
+              className={`px-3 py-1.5 font-medium transition-colors ${mappingFilter === m ? 'bg-amber-500 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* Result count + clear */}
+        {filteredInvoiceNos.size !== invoiceOrder.length && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            Showing {filteredInvoiceNos.size} of {invoiceOrder.length}
+          </span>
+        )}
+        {(cardFilter || statusFilter !== 'all' || vendorFilter || invoiceFilter || gstinFilter || mappingFilter !== 'all') && (
+          <button
+            onClick={() => { setCardFilter(null); setStatusFilter('all'); setVendorFilter(''); setInvoiceFilter(''); setGstinFilter(''); setMappingFilter('all'); }}
+            className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
       {/* Top scrollbar mirror */}
       <div ref={topScrollRef} onScroll={onTopScroll} className="overflow-x-auto" style={{ height: 12 }}>
         <div style={{ width: tableScrollWidth, height: 1 }} />
@@ -786,6 +957,7 @@ function FlatPreviewTable({
           </thead>
           <tbody>
             {displayRows.map((row, i) => {
+              if (!filteredInvoiceNos.has(row.invoiceNo)) return null;
               const prevRow = displayRows[i - 1];
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
               const locked = lockedInvoices[row.invoiceNo];
@@ -1025,13 +1197,13 @@ function FlatPreviewTable({
                         createLabel="New Tally stock item name…"
                         onSelect={(v) => {
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
@@ -1042,7 +1214,7 @@ function FlatPreviewTable({
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }} />
                     ) : (
                       <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
@@ -1238,48 +1410,96 @@ function FlatPreviewTable({
         </table>
       </div>
 
-      {/* Stock item "apply to all" confirm popup */}
-      {stockConfirm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply naming pattern to all?</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-              You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
-            </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              Would you like to use <span className="font-mono font-semibold">HSN @ Rate%</span> as the naming pattern for all other AI-suggested stock items too?
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  // Defect 3 fix: update local state only; no pre-acceptance master write.
-                  // Apply HSN @ Rate% format to all suggested stock items across all invoices.
-                  rows
-                    .filter((r) => r.ledger_type === 'Inventory' && r.is_suggested)
-                    .forEach((r) => {
-                      const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
-                      const li = inv?.line_items.find((l) => l.description === r.item_description);
-                      if (li) {
-                        const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-                        setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
-                      }
-                    });
-                  setStockConfirm(null);
-                }}
-                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
-              >
-                Yes, use HSN @ Rate% for all
-              </button>
-              <button
-                onClick={() => setStockConfirm(null)}
-                className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                No, map individually
-              </button>
+      {/* Stock item naming pattern popup */}
+      {stockConfirm && (() => {
+        const sameInvoiceCandidates = displayRows.filter(r =>
+          r.invoiceNo === stockConfirm.invoiceNo &&
+          r.itemDesc &&
+          r.itemDesc !== stockConfirm.itemDesc &&
+          r.stockItemSuggested &&
+          !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+        );
+        const globalCandidateInvoiceNos = new Set(
+          displayRows.filter(r =>
+            r.itemDesc &&
+            r.stockItemSuggested &&
+            !lockedInvoices[r.invoiceNo] &&
+            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+          ).map(r => r.invoiceNo)
+        );
+        const applyPatternToRows = (targets: typeof displayRows) => {
+          targets.forEach(r => {
+            const inv = invoices.find(i => i.invoice_number === r.invoiceNo);
+            const li = inv?.line_items.find(l => l.description === r.itemDesc);
+            if (li) {
+              const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
+              setStockItemEdits(p => ({ ...p, [`${r.invoiceNo}_${r.itemDesc}`]: name }));
+            }
+          });
+        };
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply HSN naming pattern to all?</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Would you like to apply <span className="font-mono font-semibold">HSN @ GST%</span> naming to other AI-suggested stock items?
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => { applyPatternToRows(sameInvoiceCandidates); setStockConfirm(null); }}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                >
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {sameInvoiceCandidates.length === 0
+                      ? 'No other suggested items on this invoice'
+                      : `${sameInvoiceCandidates.length} other suggested item${sameInvoiceCandidates.length !== 1 ? 's' : ''} on this invoice will be updated`}
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    const allCandidates = displayRows.filter(r =>
+                      r.itemDesc &&
+                      r.stockItemSuggested &&
+                      !lockedInvoices[r.invoiceNo] &&
+                      !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                    );
+                    applyPatternToRows(allCandidates);
+                    setStockConfirm(null);
+                  }}
+                  disabled={globalCandidateInvoiceNos.size === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <div className={`text-sm font-semibold ${globalCandidateInvoiceNos.size > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-400 dark:text-gray-500'}`}>
+                    Apply to all {globalCandidateInvoiceNos.size} loaded unaccepted invoice{globalCandidateInvoiceNos.size !== 1 ? 's' : ''}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Session-scoped. All other suggested stock items across all unaccepted invoices are updated.</div>
+                </button>
+                <button
+                  onClick={() => setStockConfirm(null)}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">No – map individually</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Only this item is updated. Other suggested items remain unchanged.</div>
+                </button>
+                <button
+                  onClick={() => {
+                    setStockItemEdits(p => { const n = { ...p }; delete n[`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]; return n; });
+                    setStockConfirm(null);
+                  }}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Cancel</div>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+    </div>
     </div>
   );
 }
@@ -1694,8 +1914,7 @@ export default function XmlGeneratorPage() {
     }
   };
 
-  // All counts are invoice-level (unique invoice numbers), not PreviewRow-level.
-  // This keeps them consistent with previewInvoiceCount.
+  // Counts for drill-down panels (page-level, previewRows-based)
   const previewSkippedCount  = previewRows
     ? new Set(previewRows.filter((r) => r.status === 'Skipped').map((r) => r.invoice_number)).size
     : 0;
@@ -1704,15 +1923,6 @@ export default function XmlGeneratorPage() {
     : 0;
   const previewWarningCount  = previewRows
     ? new Set(previewRows.filter((r) => r.warning).map((r) => r.invoice_number)).size
-    : 0;
-  // An invoice is "ready" if it has no Skipped rows (Suggested rows are AI-filled and included in XML)
-  const previewInvoiceCount  = previewRows
-    ? new Set(
-        previewRows
-          .filter((r) => r.status !== 'Skipped')
-          .map((r) => r.invoice_number)
-          .filter((n) => !previewRows.some((r) => r.invoice_number === n && r.status === 'Skipped'))
-      ).size
     : 0;
 
   // Drill-down data for suggestion and warning badges
@@ -1843,53 +2053,6 @@ export default function XmlGeneratorPage() {
 
           {previewRows && (
             <div className="mt-5 space-y-4">
-              {/* Summary toolbar */}
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-4 py-2">
-                  <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span className="text-sm font-semibold text-green-800 dark:text-green-400">
-                    {previewInvoiceCount} invoice{previewInvoiceCount !== 1 ? 's' : ''} ready
-                  </span>
-                </div>
-                {previewSuggestedCount > 0 && (
-                  <button
-                    onClick={() => setShowSuggestionDrillDown((v) => !v)}
-                    className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors text-left"
-                  >
-                    <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                      {previewSuggestedCount} AI suggestion{previewSuggestedCount !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                )}
-                {previewSkippedCount > 0 && (
-                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-2">
-                    <span className="text-sm font-semibold text-red-800 dark:text-red-400">
-                      {previewSkippedCount} invoice{previewSkippedCount !== 1 ? 's' : ''} with errors
-                    </span>
-                  </div>
-                )}
-                {previewWarningCount > 0 && (
-                  <button
-                    onClick={() => setShowWarningDrillDown((v) => !v)}
-                    className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg px-4 py-2 hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors text-left"
-                  >
-                    <span className="text-sm font-semibold text-orange-700 dark:text-orange-400">
-                      {previewWarningCount} warning{previewWarningCount !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                )}
-                <button
-                  onClick={handleDownloadExcel}
-                  className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download as Excel
-                </button>
-              </div>
 
               {/* AI Suggestions drill-down */}
               {showSuggestionDrillDown && suggestionDrillDown.length > 0 && (
@@ -1969,6 +2132,7 @@ export default function XmlGeneratorPage() {
                 dutiesTaxesMasters={(cachedMasters?.dutiesTaxes ?? []).map((d) => ({ tax_component: d.tax_component, tally_ledger_name: d.tally_ledger_name }))}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
+                onDownloadExcel={handleDownloadExcel}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   if (description === 'Discount') {
