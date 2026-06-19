@@ -87,11 +87,25 @@ function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
       type="text"
       placeholder={placeholder}
       className="border border-indigo-300 dark:border-indigo-800 rounded px-2 py-0.5 text-xs bg-indigo-50 dark:bg-indigo-900/30 dark:text-gray-100 w-full font-mono"
+      onFocus={() => console.log('[CREATE_NEW]', { stage: 'onFocus', placeholder })}
       onKeyDown={(e) => {
         if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }
-        if (e.key === 'Escape') onCancel();
+        if (e.key === 'Escape') { console.log('[CREATE_NEW]', { stage: 'onCancelCreate', trigger: 'Escape', placeholder }); onCancel(); }
       }}
-      onBlur={(e) => { const v = e.currentTarget.value.trim(); setTimeout(() => { if (v) onConfirm(v); else onCancel(); }, 150); }}
+      onBlur={(e) => {
+        const v = e.currentTarget.value.trim();
+        const relatedTarget = e.relatedTarget as HTMLElement | null;
+        console.log('[CREATE_NEW]', { stage: 'onBlur', placeholder, value: v || '(empty)', relatedTarget: relatedTarget?.tagName ?? 'null' });
+        setTimeout(() => {
+          if (v) {
+            console.log('[CREATE_NEW]', { stage: 'onConfirm', placeholder, value: v });
+            onConfirm(v);
+          } else {
+            console.log('[CREATE_NEW]', { stage: 'onCancelCreate', trigger: 'onBlur-empty', placeholder });
+            onCancel();
+          }
+        }, 150);
+      }}
     />
   );
 }
@@ -1075,7 +1089,7 @@ function FlatPreviewTable({
                         freetext={supplierFreetext[row.vendorName] ?? false}
                         createLabel="New supplier ledger name…"
                         onSelect={(v) => setVendorEdits((p) => ({ ...p, [row.vendorName]: v }))}
-                        onStartCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: true }))}
+                        onStartCreate={() => { console.log('[CREATE_NEW]', { field: 'Vendor', stage: 'onStartCreate', vendorName: row.vendorName }); setSupplierFreetext((p) => ({ ...p, [row.vendorName]: true })); }}
                         onConfirmCreate={(v) => {
                           setPendingSuppliers((p) => p.includes(v) ? p : [...p, v]);
                           setVendorEdits((p) => ({ ...p, [row.vendorName]: v }));
@@ -1118,11 +1132,16 @@ function FlatPreviewTable({
                             }
                             if (e.key === 'Escape') setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
                           }}
+                          onFocus={() => console.log('[CREATE_NEW]', { field: 'PurchaseLedger', stage: 'onFocus', invoiceNo: row.invoiceNo })}
                           onBlur={(e) => {
                             const v = e.currentTarget.value.trim();
+                            const relatedTarget = e.relatedTarget as HTMLElement | null;
+                            console.log('[CREATE_NEW]', { field: 'PurchaseLedger', stage: 'onBlur', invoiceNo: row.invoiceNo, value: v || '(empty)', relatedTarget: relatedTarget?.tagName ?? 'null' });
                             if (v) {
                               setPendingPurchaseLedgers((p) => p.includes(v) ? p : [...p, v]);
                               setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                            } else {
+                              console.log('[CREATE_NEW]', { field: 'PurchaseLedger', stage: 'state_reset', reason: 'onBlur-empty' });
                             }
                             setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
                           }}
@@ -1134,6 +1153,7 @@ function FlatPreviewTable({
                           value={purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger}
                           onChange={(e) => {
                             if (e.target.value === '__new__') {
+                              console.log('[CREATE_NEW]', { field: 'PurchaseLedger', stage: 'onStartCreate', invoiceNo: row.invoiceNo });
                               setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: true }));
                               return;
                             }
@@ -1215,6 +1235,7 @@ function FlatPreviewTable({
                             !lockedInvoices[r.invoiceNo] &&
                             !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
+                          console.log('[HSN_PATTERN]', { path: 'dropdown', enteredValue: v, expectedPattern, patternMatch: isPatternMatch, otherSameInvoice, otherGlobal, willShowPopup: isPatternMatch && (otherSameInvoice || otherGlobal), rowHsn: row.hsn, rowTaxRate: row.taxRate });
                           if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
                             // Defer the write — dialog will commit it when user chooses.
                             setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
@@ -1223,7 +1244,7 @@ function FlatPreviewTable({
                             setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
                           }
                         }}
-                        onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                        onStartCreate={() => { console.log('[CREATE_NEW]', { field: 'StockItem', stage: 'onStartCreate', invoiceNo: row.invoiceNo, lineIdx: row.lineIdx }); setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true })); }}
                         onConfirmCreate={(v) => {
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
@@ -1240,6 +1261,7 @@ function FlatPreviewTable({
                             !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) && r.itemDesc && r.stockItemSuggested &&
                             !lockedInvoices[r.invoiceNo] && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
+                          console.log('[HSN_PATTERN]', { path: 'create_new', enteredValue: v, expectedPattern, patternMatch: isPatternMatch, otherSameInvoice, otherGlobal, willShowPopup: isPatternMatch && (otherSameInvoice || otherGlobal), rowHsn: row.hsn, rowTaxRate: row.taxRate, displayRowsCount: displayRows.length, candidateDetails: displayRows.filter(r => r.stockItemSuggested && !lockedInvoices[r.invoiceNo] && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]).map(r => ({ inv: r.invoiceNo, idx: r.lineIdx, suggested: r.stockItemSuggested })) });
                           if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
                             setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           } else {
@@ -1314,6 +1336,7 @@ function FlatPreviewTable({
                                 value={chargeEdits[ch.desc] ?? ch.ledger}
                                 onChange={(e) => {
                                   if (e.target.value === '__new__') {
+                                    console.log('[CREATE_NEW]', { field: 'Charge', stage: 'onStartCreate', desc: ch.desc });
                                     setChargeFreetext((p) => ({ ...p, [ch.desc]: true }));
                                     return;
                                   }
@@ -1357,7 +1380,7 @@ function FlatPreviewTable({
                             freetext={cgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New CGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }}
-                            onStartCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
+                            onStartCreate={() => { console.log('[CREATE_NEW]', { field: 'CGST', stage: 'onStartCreate', invoiceNo: row.invoiceNo }); setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: true })); }}
                             onConfirmCreate={(v) => {
                               setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, cgst: v }));
@@ -1385,7 +1408,7 @@ function FlatPreviewTable({
                             freetext={sgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New SGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }}
-                            onStartCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
+                            onStartCreate={() => { console.log('[CREATE_NEW]', { field: 'SGST', stage: 'onStartCreate', invoiceNo: row.invoiceNo }); setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: true })); }}
                             onConfirmCreate={(v) => {
                               setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, sgst: v }));
@@ -1413,7 +1436,7 @@ function FlatPreviewTable({
                             freetext={igstFreetext[row.invoiceNo] ?? false}
                             createLabel="New IGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }}
-                            onStartCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
+                            onStartCreate={() => { console.log('[CREATE_NEW]', { field: 'IGST', stage: 'onStartCreate', invoiceNo: row.invoiceNo }); setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: true })); }}
                             onConfirmCreate={(v) => {
                               setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, igst: v }));
