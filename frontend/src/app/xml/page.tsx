@@ -534,9 +534,8 @@ function FlatPreviewTable({
       const invRows = byInvoice.get(invNo) ?? [];
       const invoice = invoices.find(i => i.invoice_number === invNo);
       const isAccepted = !!lockedInvoices[invNo];
-      const hasPendingReview = invRows.some(r => r.status === 'Suggested' || r.warning);
       if (effectiveStatus === 'accepted' && !isAccepted) return false;
-      if (effectiveStatus === 'pending_review' && !hasPendingReview) return false;
+      if (effectiveStatus === 'pending_review' && isAccepted) return false;
       if (vendorFilter && !invRows[0]?.vendor_name?.toLowerCase().includes(vendorFilter.toLowerCase())) return false;
       if (invoiceFilter && !invNo.toLowerCase().includes(invoiceFilter.toLowerCase())) return false;
       if (gstinFilter && !(invoice?.vendor_gstin ?? '').toLowerCase().includes(gstinFilter.toLowerCase())) return false;
@@ -740,7 +739,7 @@ function FlatPreviewTable({
   // Dashboard counts — computed inside FlatPreviewTable where lockedInvoices state lives
   const dashTotalCount = new Set(rows.map(r => r.invoice_number)).size;
   const dashAcceptedCount = Object.keys(lockedInvoices).length;
-  const dashPendingCount = new Set(rows.filter(r => r.status === 'Suggested' || r.warning).map(r => r.invoice_number)).size;
+  const dashPendingCount = invoiceOrder.filter(invNo => !lockedInvoices[invNo]).length;
   const dashBlockedCount = new Set(rows.filter(r => r.status === 'Skipped').map(r => r.invoice_number)).size;
 
   return (
