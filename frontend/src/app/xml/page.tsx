@@ -1195,14 +1195,37 @@ function FlatPreviewTable({
                         freetext={stockItemFreetext[`${row.invoiceNo}_${row.itemDesc}`] ?? false}
                         createLabel="New Tally stock item name…"
                         onSelect={(v) => {
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          // Determine if the chosen name is the HSN@GST% pattern for THIS item.
+                          // Only show the propagation dialog when the pattern matches exactly.
+                          const expectedPattern = row.hsn
+                            ? `${row.hsn} @ ${row.taxRate ?? 0}%`
+                            : `${row.itemDesc} @ ${row.taxRate ?? 0}%`;
+                          const isPatternMatch = v.trim() === expectedPattern.trim();
+                          // Check whether other unresolved candidates exist (same invoice or global).
+                          const otherSameInvoice = displayRows.some(r =>
+                            r.invoiceNo === row.invoiceNo &&
+                            r.itemDesc && r.itemDesc !== row.itemDesc &&
+                            r.stockItemSuggested &&
+                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                          );
+                          const otherGlobal = displayRows.some(r =>
+                            r.itemDesc && r.stockItemSuggested &&
+                            !lockedInvoices[r.invoiceNo] &&
+                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                          );
+                          if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
+                            // Defer the write — dialog will commit it when user chooses.
+                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          } else {
+                            // No dialog needed — write immediately.
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                          }
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
+                          // User-created names are never HSN patterns — write immediately, no dialog.
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
@@ -1212,8 +1235,22 @@ function FlatPreviewTable({
                         value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          const expectedPattern = row.hsn
+                            ? `${row.hsn} @ ${row.taxRate ?? 0}%`
+                            : `${row.itemDesc} @ ${row.taxRate ?? 0}%`;
+                          const otherSameInvoice = displayRows.some(r =>
+                            r.invoiceNo === row.invoiceNo && r.itemDesc && r.itemDesc !== row.itemDesc &&
+                            r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                          );
+                          const otherGlobal = displayRows.some(r =>
+                            r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
+                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                          );
+                          if (v.trim() === expectedPattern.trim() && (otherSameInvoice || otherGlobal)) {
+                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          } else {
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                          }
                         }} />
                     ) : (
                       <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
@@ -1448,7 +1485,12 @@ function FlatPreviewTable({
               </p>
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={() => { applyPatternToRows(sameInvoiceCandidates); setStockConfirm(null); }}
+                  onClick={() => {
+                    // Write the current item first, then apply pattern to same-invoice candidates.
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
+                    applyPatternToRows(sameInvoiceCandidates);
+                    setStockConfirm(null);
+                  }}
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
                 >
                   <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
@@ -1466,6 +1508,8 @@ function FlatPreviewTable({
                       !lockedInvoices[r.invoiceNo] &&
                       !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
                     );
+                    // Write the current item first, then apply pattern globally.
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
                     applyPatternToRows(allCandidates);
                     setStockConfirm(null);
                   }}
@@ -1478,7 +1522,11 @@ function FlatPreviewTable({
                   <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Session-scoped. All other suggested stock items across all unaccepted invoices are updated.</div>
                 </button>
                 <button
-                  onClick={() => setStockConfirm(null)}
+                  onClick={() => {
+                    // Write ONLY this item — no propagation.
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
+                    setStockConfirm(null);
+                  }}
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">No – map individually</div>
@@ -1486,7 +1534,7 @@ function FlatPreviewTable({
                 </button>
                 <button
                   onClick={() => {
-                    setStockItemEdits(p => { const n = { ...p }; delete n[`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]; return n; });
+                    // Discard the pending selection — nothing is written.
                     setStockConfirm(null);
                   }}
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
