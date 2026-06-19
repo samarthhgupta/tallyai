@@ -1808,7 +1808,10 @@ export default function XmlGeneratorPage() {
       setCachedMasters(masters);
       const fresh = await getCompany(company!.id);
 
-      // Build historical purchase ledger map keyed by vendor_gstin or 'name:normalized_name'
+      // Build historical purchase ledger map (Case 2 — read-only, GSTIN-first with name fallback).
+      // See purchaseLedgers.ts for the intentional architecture note.
+      // Keys are vendor_gstin (preferred) or 'name:<normalized>' (fallback for vendors without GSTIN).
+      // This is NOT learning — it reads accepted invoice history and makes no writes.
       const supplierKeySet: Record<string, true> = {};
       for (const inv of invoices) {
         const k = inv.vendor_gstin ? inv.vendor_gstin : `name:${(inv.vendor_name ?? '').toLowerCase().trim()}`;

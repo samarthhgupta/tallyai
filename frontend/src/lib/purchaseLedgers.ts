@@ -100,6 +100,30 @@ export async function getCompanyWideMostUsedPurchaseLedger(
   return null;
 }
 
+// ─── INTENTIONAL ARCHITECTURE: GSTIN-FIRST WITH NAME FALLBACK (Case 2) ──────
+//
+// This function is Case 2 in the suggestion hierarchy. Unlike Case 1
+// (vendorLedgerPreferences.ts), this is a READ-ONLY suggestion layer.
+// It does not create preferences, does not write anything, and does not
+// constitute vendor learning.
+//
+// The vendor-name fallback (ilike) is intentional and must be preserved.
+// It provides historical suggestions for:
+//   - Unregistered vendors (no GSTIN by law)
+//   - Composition scheme vendors
+//   - Local/petty cash suppliers
+// Without it, these vendors always fall to Case 3 (company-wide) or Case 4
+// (default), losing all invoice-specific history regardless of how many times
+// they have been previously accepted.
+//
+// A name-matched wrong suggestion costs one dropdown correction.
+// A name-based WRITE to the preference table would be far more harmful — which
+// is why Case 1 (vendorLedgerPreferences.ts) is GSTIN-only.
+//
+// Future developers: do not change the ilike fallback to GSTIN-only here.
+// If you want GSTIN-only lookups, use Case 1 (getVendorLedgerPreferences).
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Returns the most frequently accepted Purchase Ledger for a supplier in this company.
 // Tie-break: most recently accepted. Only considers genuinely accepted invoices
 // (accepted_at IS NOT NULL). Returns null if no history found.
@@ -117,9 +141,9 @@ export async function getHistoricalPurchaseLedger(
     .not('tally_ledger_acceptance', 'is', null);
 
   if (vendorGstin) {
-    query = query.eq('vendor_gstin', vendorGstin);
+    query = query.eq('vendor_gstin', vendorGstin);   // Case 2a: GSTIN exact match
   } else {
-    query = query.ilike('vendor_name', vendorName!.trim());
+    query = query.ilike('vendor_name', vendorName!.trim()); // Case 2b: name fallback (read-only, not learning)
   }
 
   const { data, error } = await query;

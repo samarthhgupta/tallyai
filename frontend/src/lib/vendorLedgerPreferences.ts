@@ -2,10 +2,28 @@ import { getSupabase } from './supabase';
 
 export type LedgerType = 'purchase' | 'CGST' | 'SGST' | 'IGST' | 'CESS';
 
+// ─── INTENTIONAL ARCHITECTURE: GSTIN-ONLY LEARNING ───────────────────────────
+//
+// Case 1 (this module — vendor_ledger_preferences table) is GSTIN-only because
+// it creates durable learned behavior that persists across sessions. Writing a
+// wrong preference silently poisons every future suggestion for that vendor.
+// GSTIN is the only reliable vendor identity in Indian GST workflows: vendor
+// names degrade through OCR errors, abbreviations, and punctuation differences.
+//
+// Case 2 (getHistoricalPurchaseLedger in purchaseLedgers.ts) is a read-only
+// suggestion layer and intentionally allows vendor-name fallback when GSTIN is
+// unavailable. A wrong name-matched suggestion costs the accountant one dropdown
+// correction. It does NOT create preferences and must NOT be interpreted as
+// vendor learning.
+//
+// Future developers: do not add name-based writes to this module. The split
+// between GSTIN-only writes (Case 1) and GSTIN-first/name-fallback reads
+// (Case 2) is a deliberate design decision, not an oversight.
+// ─────────────────────────────────────────────────────────────────────────────
+
 // GSTIN validation: 15-character alphanumeric in standard Indian GST format.
-// Learning is GSTIN-only — vendor names are unreliable identifiers (OCR errors,
-// abbreviations, punctuation differences). If GSTIN is absent or invalid, no
-// preference is written or read.
+// If GSTIN is absent or fails validation, no preference is written or read —
+// the caller falls through to Case 2 (historical frequency) or Case 3 (default).
 function isValidGstin(gstin: string | null | undefined): boolean {
   if (!gstin?.trim()) return false;
   return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin.trim().toUpperCase());
