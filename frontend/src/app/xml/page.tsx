@@ -314,9 +314,13 @@ function FlatPreviewTable({
 
   // Pending stock item change — held here until user confirms scope in the dialog.
   // Only populated when the chosen name matches HSN @ Rate% naming convention.
-  // Committed to stockItemEdits only after scope selection; Cancel discards without any state update.
+  // isNewlyCreated: true when the item was typed via Create New (not from existing master).
+  //   - true  → add to pendingStockItems at commit time
+  //   - false → item already exists in master; no pendingStockItems update needed
+  // Cancel discards everything — no stockItemEdits update, no pendingStockItems entry.
   const [pendingStockChange, setPendingStockChange] = React.useState<{
-    invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
+    invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null;
+    suggestedName: string; chosenName: string; isNewlyCreated: boolean;
   } | null>(null);
 
   // HSN @ Rate% pattern: leading digits (HSN code) + " @ N%" — e.g. "57039010 @ 12%"
@@ -324,12 +328,18 @@ function FlatPreviewTable({
   const isHsnNamingPattern = (name: string) => /^\d[\d\s.]*\s*@\s*\d+(\.\d+)?%$/.test(name.trim());
 
   // Commit a single stock item edit and, when the name is HSN-patterned, open the scope dialog.
-  const handleStockItemChange = (invoiceNo: string, itemDesc: string, hsn: string, gstPct: number | null, suggestedName: string, chosenName: string) => {
+  // isNewlyCreated must be true when called from onConfirmCreate so the item is added to
+  // pendingStockItems at commit time (not before), preventing orphan entries on Cancel.
+  const handleStockItemChange = (
+    invoiceNo: string, itemDesc: string, hsn: string, gstPct: number | null,
+    suggestedName: string, chosenName: string, isNewlyCreated = false,
+  ) => {
     if (isHsnNamingPattern(chosenName)) {
-      // Defer commit — let the scope dialog decide which rows to update.
-      setPendingStockChange({ invoiceNo, itemDesc, hsn, gstPct, suggestedName, chosenName });
+      // Defer both the edit commit and the pendingStockItems registration until scope is chosen.
+      setPendingStockChange({ invoiceNo, itemDesc, hsn, gstPct, suggestedName, chosenName, isNewlyCreated });
     } else {
       // Non-HSN selection: commit immediately, no dialog.
+      if (isNewlyCreated) setPendingStockItems((p) => p.includes(chosenName) ? p : [...p, chosenName]);
       setStockItemEdits((p) => ({ ...p, [`${invoiceNo}_${itemDesc}`]: chosenName }));
     }
   };
@@ -1092,9 +1102,8 @@ function FlatPreviewTable({
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
-                          setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
-                          handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v);
+                          handleStockItemChange(row.invoiceNo, row.itemDesc, row.hsn, row.taxRate, row.stockItem, v, true);
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
                       />
@@ -1341,7 +1350,11 @@ function FlatPreviewTable({
         );
 
         // Apply HSN pattern to target rows + commit the originally-selected row.
+        // Registers the new item in pendingStockItems if it was created via Create New.
         const applyHsnPattern = (targetRows: typeof rows) => {
+          if (pendingStockChange.isNewlyCreated) {
+            setPendingStockItems((p) => p.includes(pendingStockChange.chosenName) ? p : [...p, pendingStockChange.chosenName]);
+          }
           setStockItemEdits((p) => {
             const next = { ...p, [`${pendingStockChange.invoiceNo}_${pendingStockChange.itemDesc}`]: pendingStockChange.chosenName };
             targetRows.forEach((r) => {
@@ -1359,6 +1372,9 @@ function FlatPreviewTable({
 
         // "Map individually" — commit only the selected row, no propagation.
         const commitSingle = () => {
+          if (pendingStockChange.isNewlyCreated) {
+            setPendingStockItems((p) => p.includes(pendingStockChange.chosenName) ? p : [...p, pendingStockChange.chosenName]);
+          }
           setStockItemEdits((p) => ({ ...p, [`${pendingStockChange.invoiceNo}_${pendingStockChange.itemDesc}`]: pendingStockChange.chosenName }));
           setPendingStockChange(null);
         };
