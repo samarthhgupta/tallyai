@@ -1065,7 +1065,7 @@ function FlatPreviewTable({
                   <td className="px-3 py-2 min-w-[180px]">
                     {isLocked ? (
                       <span className="font-mono font-medium text-purple-800">{effectiveVendorLedger || '-'}</span>
-                    ) : suppliers.length > 0 || pendingSuppliers.length > 0 ? (
+                    ) : (
                       <CreatableLedgerDropdown
                         value={vendorEdits[row.vendorName] ?? row.vendorLedger}
                         options={suppliers.map((s) => s.tally_ledger_name)}
@@ -1083,9 +1083,6 @@ function FlatPreviewTable({
                         }}
                         onCancelCreate={() => setSupplierFreetext((p) => ({ ...p, [row.vendorName]: false }))}
                       />
-                    ) : (
-                      <EditableField value={vendorDisplayVal} suggested={row.vendorSuggested} color="text-purple-800"
-                        onSave={(v) => { setVendorEdits((p) => ({ ...p, [row.vendorName]: v })); }} />
                     )}
                   </td>
                   {/* GSTIN */}
@@ -1228,10 +1225,26 @@ function FlatPreviewTable({
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
                         onConfirmCreate={(v) => {
-                          // User-created names are never HSN patterns — write immediately, no dialog.
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                          // Apply the same pattern-match check as onSelect — user may type the HSN pattern.
+                          const expectedPattern = row.hsn
+                            ? `${row.hsn} @ ${row.taxRate ?? 0}%`
+                            : `${row.itemDesc} @ ${row.taxRate ?? 0}%`;
+                          const isPatternMatch = v.trim() === expectedPattern.trim();
+                          const otherSameInvoice = displayRows.some(r =>
+                            r.invoiceNo === row.invoiceNo && r.lineIdx !== row.lineIdx &&
+                            r.itemDesc && r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+                          );
+                          const otherGlobal = displayRows.some(r =>
+                            r.lineIdx !== row.lineIdx && r.itemDesc && r.stockItemSuggested &&
+                            !lockedInvoices[r.invoiceNo] && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+                          );
+                          if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
+                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          } else {
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
+                          }
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
                       />
@@ -1289,7 +1302,13 @@ function FlatPreviewTable({
                               <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>
                                 {(locked?.charges?.[ch.desc] ?? ch.ledger) || '-'}
                               </span>
-                            ) : expenseLedgers.length > 0 && !chargeFreetext[ch.desc] ? (
+                            ) : chargeFreetext[ch.desc] ? (
+                              <InlineCreateInput
+                                placeholder="New charge ledger name…"
+                                onConfirm={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); }}
+                                onCancel={() => setChargeFreetext((p) => ({ ...p, [ch.desc]: false }))}
+                              />
+                            ) : expenseLedgers.length > 0 ? (
                               // C6: always show dropdown before acceptance
                               <select
                                 value={chargeEdits[ch.desc] ?? ch.ledger}
@@ -1314,7 +1333,7 @@ function FlatPreviewTable({
                             ) : (
                               <EditableField value={chargeEdits[ch.desc] ?? ch.ledger} suggested={ch.suggested}
                                 color={ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}
-                                onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); }} />
+                                onSave={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); }} />
                             )
                           )}
                         </td>
@@ -1330,8 +1349,7 @@ function FlatPreviewTable({
                       const cgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'CGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
-                        : cgstOpts.length > 0 || pendingCgst.length > 0
-                        ? <CreatableLedgerDropdown
+                        : <CreatableLedgerDropdown
                             value={taxLedgerEdits.cgst ?? row.cgstLedger}
                             options={cgstOpts}
                             pendingOptions={pendingCgst}
@@ -1347,9 +1365,7 @@ function FlatPreviewTable({
                               setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
                             onCancelCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
-                          />
-                        : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
+                          />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1361,8 +1377,7 @@ function FlatPreviewTable({
                       const sgstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'SGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '-'}</span>
-                        : sgstOpts.length > 0 || pendingSgst.length > 0
-                        ? <CreatableLedgerDropdown
+                        : <CreatableLedgerDropdown
                             value={taxLedgerEdits.sgst ?? row.sgstLedger}
                             options={sgstOpts}
                             pendingOptions={pendingSgst}
@@ -1378,9 +1393,7 @@ function FlatPreviewTable({
                               setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
                             onCancelCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
-                          />
-                        : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
+                          />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1392,8 +1405,7 @@ function FlatPreviewTable({
                       const igstOpts = dutiesTaxesMasters.filter((d) => d.tax_component === 'IGST').map((d) => d.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
-                        : igstOpts.length > 0 || pendingIgst.length > 0
-                        ? <CreatableLedgerDropdown
+                        : <CreatableLedgerDropdown
                             value={taxLedgerEdits.igst ?? row.igstLedger}
                             options={igstOpts}
                             pendingOptions={pendingIgst}
@@ -1409,9 +1421,7 @@ function FlatPreviewTable({
                               setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
                             onCancelCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
-                          />
-                        : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
+                          />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1423,8 +1433,7 @@ function FlatPreviewTable({
                       const roOpts = expenseLedgers.filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off').map((e) => e.tally_ledger_name);
                       return isLocked
                         ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>
-                        : roOpts.length > 0 || pendingRo.length > 0
-                        ? <CreatableLedgerDropdown
+                        : <CreatableLedgerDropdown
                             value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
                             options={roOpts}
                             pendingOptions={pendingRo}
@@ -1439,9 +1448,7 @@ function FlatPreviewTable({
                               setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
                             onCancelCreate={() => setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
-                          />
-                        : <EditableField value={effectiveRo} suggested={row.roSuggested} color="text-gray-600 dark:text-gray-400"
-                            onSave={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))} />;
+                          />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-500 dark:text-gray-400">{row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}</td>
