@@ -1011,8 +1011,13 @@ function FlatPreviewTable({
                             });
                           }}
                           className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
-                            row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerCase === 1
-                              ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
+                            // Fix 3: if a vendor preference is active (Case 1), show confirmed styling.
+                            // Otherwise amber for cases requiring verification (3, 4, or historical missing).
+                            (() => {
+                              const vendorPrefActive = !!purchaseLedgerEdits[row.invoiceNo];
+                              const needsVerify = !vendorPrefActive && (row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerCase === 1 || row.purchaseLedgerHistoricalMissing);
+                              return needsVerify ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700';
+                            })()
                           }`}
                         >
                           {/* No placeholder option — Case 3 always has a suggestion pre-selected */}
@@ -1021,7 +1026,8 @@ function FlatPreviewTable({
                             const cur = purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger;
                             const allOpts = [...purchaseLedgerMasters, ...pendingPurchaseLedgers];
                             if (cur && !allOpts.includes(cur)) {
-                              return <option value={cur}>{cur}{row.purchaseLedgerCase !== 2 ? ' ✦' : ''}</option>;
+                              const vendorPrefActive = !!purchaseLedgerEdits[row.invoiceNo];
+                              return <option value={cur}>{cur}{!vendorPrefActive && row.purchaseLedgerCase !== 2 ? ' ✦' : ''}</option>;
                             }
                             return null;
                           })()}
@@ -1029,7 +1035,8 @@ function FlatPreviewTable({
                           {pendingPurchaseLedgers.map((name) => <option key={`pending_${name}`} value={name}>{name} (new)</option>)}
                           <option value="__new__">+ Create new…</option>
                         </select>
-                        {(row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerHistoricalMissing) && (
+                        {/* Fix 3: ⓘ only shown when vendor preference is NOT active and case needs verification */}
+                        {!purchaseLedgerEdits[row.invoiceNo] && (row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerHistoricalMissing) && (
                           <span
                             className="shrink-0 text-amber-500 dark:text-amber-400 cursor-help text-sm"
                             title={
@@ -1316,6 +1323,11 @@ function FlatPreviewTable({
           r.ledger_type === 'Inventory' && r.is_suggested &&
           !lockedInvoices[r.invoice_number]
         );
+        // Fix 1: If no suggested items exist in either scope, skip the dialog.
+        if (invoiceOnlyRows.length === 0 && allUnlockedRows.length === 0) {
+          setTimeout(() => setStockConfirm(null), 0);
+          return null;
+        }
         const applyHsnPattern = (targetRows: typeof rows) => {
           targetRows.forEach((r) => {
             const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
@@ -1339,14 +1351,16 @@ function FlatPreviewTable({
               </p>
               <div className="flex flex-col gap-2">
                 <button
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  disabled={invoiceOnlyRows.length === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={() => applyHsnPattern(invoiceOnlyRows)}
                 >
                   <div className="font-medium text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
-                  <div className="text-xs text-gray-500 mt-0.5">Only suggested stock items on this invoice are updated.</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{invoiceOnlyRows.length} suggested item{invoiceOnlyRows.length !== 1 ? 's' : ''} on this invoice.</div>
                 </button>
                 <button
-                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  disabled={allUnlockedRows.length === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={() => {
                     // Defect 3 fix: update local state only; no pre-acceptance master write.
                     applyHsnPattern(allUnlockedRows);
@@ -1409,10 +1423,11 @@ function FlatPreviewTable({
                   <div className="text-xs text-gray-500 mt-0.5">No other invoices are affected. No learning occurs.</div>
                 </button>
                 <button
-                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  disabled={vendorInvoices.length === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={async () => {
                     applyToInvoices(vendorInvoices.map(i => i.invoice_number));
-                    // Learning: vendor-scoped bulk → write preference
+                    // Learning: vendor-scoped bulk + valid GSTIN → write preference (GSTIN-only)
                     if (companyId) {
                       await upsertVendorLedgerPreference(
                         companyId,
@@ -1427,10 +1442,13 @@ function FlatPreviewTable({
                   <div className="font-medium text-indigo-700 dark:text-indigo-300">
                     Apply to all {vendorInvoices.length} unaccepted invoices of {pendingTaxChange.vendorName || 'this vendor'}
                   </div>
-                  <div className="text-xs text-gray-500 mt-0.5">Vendor-scoped. Saves your preference for future sessions.</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    Vendor-scoped.{pendingTaxChange.vendorGstin ? ' Saves your preference for future sessions.' : ' No GSTIN — preference will not be saved for future sessions.'}
+                  </div>
                 </button>
                 <button
-                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  disabled={allUnlocked.length === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={() => applyToInvoices(allUnlocked.map(i => i.invoice_number))}
                 >
                   <div className="font-medium text-gray-900 dark:text-gray-100">
@@ -1482,12 +1500,13 @@ function FlatPreviewTable({
                   <div className="text-xs text-gray-500 mt-0.5">No other invoices are affected. No learning occurs.</div>
                 </button>
                 <button
-                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  disabled={vendorInvoices.length === 0}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   onClick={async () => {
                     const updates: Record<string, string> = {};
                     vendorInvoices.forEach(inv => { updates[inv.invoice_number] = pendingPLChange.newLedger; });
                     setPurchaseLedgerEdits(p => ({ ...p, ...updates }));
-                    // Learning: vendor-scoped bulk → write preference
+                    // Learning: vendor-scoped bulk + valid GSTIN → write preference (GSTIN-only)
                     if (companyId) {
                       await upsertVendorLedgerPreference(
                         companyId,
@@ -1503,7 +1522,9 @@ function FlatPreviewTable({
                   <div className="font-medium text-indigo-700 dark:text-indigo-300">
                     Apply to all {vendorInvoices.length} unaccepted invoices of {pendingPLChange.vendorName || 'this vendor'}
                   </div>
-                  <div className="text-xs text-gray-500 mt-0.5">Vendor-scoped. Saves your preference for future sessions.</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    Vendor-scoped.{pendingPLChange.vendorGstin ? ' Saves your preference for future sessions.' : ' No GSTIN — preference will not be saved for future sessions.'}
+                  </div>
                 </button>
                 <button
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-500"
