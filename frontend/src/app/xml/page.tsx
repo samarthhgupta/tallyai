@@ -1247,6 +1247,17 @@ function FlatPreviewTable({
                             !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) && r.itemDesc && r.stockItemSuggested &&
                             !lockedInvoices[r.invoiceNo] && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
+                          console.log('[HSN_CANDIDATES]', {
+                            thisRow: { invoiceNo: row.invoiceNo, lineIdx: row.lineIdx, hsn: row.hsn, taxRate: row.taxRate },
+                            enteredValue: v, expectedPattern, patternMatch: isPatternMatch,
+                            otherSameInvoice, otherGlobal,
+                            allRows: displayRows.map(r => ({
+                              invoiceNo: r.invoiceNo, lineIdx: r.lineIdx, itemDesc: r.itemDesc,
+                              stockItemSuggested: r.stockItemSuggested,
+                              hasEdit: !!stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`],
+                              isLocked: !!lockedInvoices[r.invoiceNo],
+                            })),
+                          });
                           if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
                             setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           } else {
@@ -1309,11 +1320,11 @@ function FlatPreviewTable({
                               <span className={`font-mono ${ch.isDiscount ? 'text-pink-700' : 'text-orange-700'}`}>
                                 {(locked?.charges?.[ch.desc] ?? ch.ledger) || '-'}
                               </span>
-                            ) : chargeFreetext[ch.desc] ? (
+                            ) : chargeFreetext[`${row.invoiceNo}_${ci}`] ? (
                               <InlineCreateInput
                                 placeholder="New charge ledger name…"
-                                onConfirm={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [ch.desc]: false })); }}
-                                onCancel={() => setChargeFreetext((p) => ({ ...p, [ch.desc]: false }))}
+                                onConfirm={(v) => { setChargeEdits((p) => ({ ...p, [ch.desc]: v })); setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: false })); }}
+                                onCancel={() => setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: false }))}
                               />
                             ) : expenseLedgers.length > 0 ? (
                               // C6: always show dropdown before acceptance
@@ -1321,7 +1332,7 @@ function FlatPreviewTable({
                                 value={chargeEdits[ch.desc] ?? ch.ledger}
                                 onChange={(e) => {
                                   if (e.target.value === '__new__') {
-                                    setChargeFreetext((p) => ({ ...p, [ch.desc]: true }));
+                                    setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: true }));
                                     return;
                                   }
                                   if (!e.target.value) return;
