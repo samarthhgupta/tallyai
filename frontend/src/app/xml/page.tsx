@@ -212,6 +212,7 @@ interface FlatDisplayRow {
   purchaseLedgerCase: 1 | 2 | 3 | 4;
   purchaseLedgerHistoricalMissing: boolean;
   itemDesc: string;
+  lineIdx: number; // 0-based index within this invoice's line items — unique row key
   hsn: string;
   stockItem: string;
   stockItemSuggested: boolean;
@@ -272,7 +273,7 @@ function FlatPreviewTable({
   // Create-new state for ledger types that previously lacked inline creation
   const [supplierFreetext, setSupplierFreetext] = React.useState<Record<string, boolean>>({}); // keyed by vendorName
   const [pendingSuppliers, setPendingSuppliers] = React.useState<string[]>([]);
-  const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({}); // keyed by `${invoiceNo}_${itemDesc}`
+  const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({}); // keyed by `${invoiceNo}_${lineIdx}`
   const [pendingStockItems, setPendingStockItems] = React.useState<string[]>([]);
   const [cgstFreetext, setCgstFreetext] = React.useState<Record<string, boolean>>({});
   const [sgstFreetext, setSgstFreetext] = React.useState<Record<string, boolean>>({});
@@ -301,7 +302,7 @@ function FlatPreviewTable({
 
   // Stock item "apply to all" popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
-    invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
+    invoiceNo: string; itemDesc: string; lineIdx: number; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
   } | null>(null);
 
   // Group rows by invoice number, preserving order
@@ -446,7 +447,7 @@ function FlatPreviewTable({
       if (invRows2.length === 0) {
         displayRows.push({
           ...base, isFirst: true, ...invoiceTail, ...plBase,
-          itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
+          itemDesc: '', lineIdx: 0, hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
           cgstAmt: 0, sgstAmt: 0, igstAmt: 0,
@@ -461,6 +462,7 @@ function FlatPreviewTable({
           ...(idx === 0 ? invoiceTail : emptyTail),
           ...plBase,
           itemDesc: row.item_description ?? '',
+          lineIdx: idx,
           hsn: lineItem?.hsn ?? '',
           stockItem: row.tally_ledger_name ?? '',
           stockItemSuggested: row.is_suggested === true,
@@ -480,7 +482,7 @@ function FlatPreviewTable({
       if (lineItems.length === 0) {
         displayRows.push({
           ...base, isFirst: true, ...invoiceTail, ...plBase,
-          itemDesc: '', hsn: '', stockItem: '', stockItemSuggested: false,
+          itemDesc: '', lineIdx: 0, hsn: '', stockItem: '', stockItemSuggested: false,
           taxRate: null, qty: null, uom: '', rate: null, disc: null,
           amount: Math.abs(partyRow?.amount ?? 0),
           cgstAmt: 0, sgstAmt: 0, igstAmt: 0,
@@ -508,6 +510,7 @@ function FlatPreviewTable({
           ...(idx === 0 ? invoiceTail : emptyTail),
           ...plBase,
           itemDesc: item.description ?? '',
+          lineIdx: idx,
           hsn: item.hsn ?? '',
           stockItem: resolvedStockItem,
           stockItemSuggested: resolvedSuggested,
@@ -540,9 +543,9 @@ function FlatPreviewTable({
       if (invoiceFilter && !invNo.toLowerCase().includes(invoiceFilter.toLowerCase())) return false;
       if (gstinFilter && !(invoice?.vendor_gstin ?? '').toLowerCase().includes(gstinFilter.toLowerCase())) return false;
       if (mappingFilter === 'ai_suggested_new' && !invRows.some(r => r.is_suggested && r.status === 'Suggested')) return false;
-      if (mappingFilter === 'new_stock_items' && !invRows.some(r =>
-        r.ledger_type === 'Inventory' &&
-        pendingStockItems.includes(stockItemEdits[`${invNo}_${r.item_description ?? ''}`] ?? '')
+      if (mappingFilter === 'new_stock_items' && !displayRows.some(r =>
+        r.invoiceNo === invNo && r.itemDesc &&
+        pendingStockItems.includes(stockItemEdits[`${invNo}_${r.lineIdx}`] ?? '')
       )) return false;
       return true;
     }));
@@ -596,7 +599,7 @@ function FlatPreviewTable({
       const lockedStock: Record<string, string> = {};
       for (const r of invRows) {
         if (r.itemDesc) {
-          const tallyName = stockItemEdits[`${invNo}_${r.itemDesc}`] ?? r.stockItem;
+          const tallyName = stockItemEdits[`${invNo}_${r.lineIdx}`] ?? r.stockItem;
           if (tallyName) {
             stockItems.push({ desc: r.itemDesc, hsn: r.hsn, uom: r.uom, gst_percent: r.taxRate ?? undefined, tallyName });
             lockedStock[r.itemDesc] = tallyName;
@@ -980,7 +983,7 @@ function FlatPreviewTable({
                 ? row.vendorLedger
                 : (locked?.vendorLedger ?? (vendorEdits[row.vendorName] ?? row.vendorLedger));
               const effectivePurchaseLedger = locked?.purchaseLedger ?? (purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger);
-              const effectiveStockItem      = locked?.stock[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem);
+              const effectiveStockItem      = locked?.stock[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.lineIdx}`] ?? row.stockItem);
               const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
               const effectiveSgst           = locked?.sgstLedger ?? (taxLedgerEdits.sgst ?? row.sgstLedger);
               const effectiveIgst           = locked?.igstLedger ?? (taxLedgerEdits.igst ?? row.igstLedger);
@@ -1188,11 +1191,11 @@ function FlatPreviewTable({
                       <span className="font-mono text-indigo-700">{effectiveStockItem || '-'}</span>
                     ) : isInventoryMode && (stockItems.length > 0 || pendingStockItems.length > 0) ? (
                       <CreatableLedgerDropdown
-                        value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
+                        value={stockItemEdits[`${row.invoiceNo}_${row.lineIdx}`] ?? row.stockItem}
                         options={stockItems.map((s) => s.tally_item_name)}
                         pendingOptions={pendingStockItems}
                         suggested={row.stockItemSuggested}
-                        freetext={stockItemFreetext[`${row.invoiceNo}_${row.itemDesc}`] ?? false}
+                        freetext={stockItemFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
                         createLabel="New Tally stock item name…"
                         onSelect={(v) => {
                           // Determine if the chosen name is the HSN@GST% pattern for THIS item.
@@ -1204,52 +1207,55 @@ function FlatPreviewTable({
                           // Check whether other unresolved candidates exist (same invoice or global).
                           const otherSameInvoice = displayRows.some(r =>
                             r.invoiceNo === row.invoiceNo &&
-                            r.itemDesc && r.itemDesc !== row.itemDesc &&
+                            r.lineIdx !== row.lineIdx &&
+                            r.itemDesc &&
                             r.stockItemSuggested &&
-                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                            !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           const otherGlobal = displayRows.some(r =>
+                            r.lineIdx !== row.lineIdx &&
                             r.itemDesc && r.stockItemSuggested &&
                             !lockedInvoices[r.invoiceNo] &&
-                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                            !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
                             // Defer the write — dialog will commit it when user chooses.
-                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           } else {
                             // No dialog needed — write immediately.
-                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
                           }
                         }}
-                        onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
+                        onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
                         onConfirmCreate={(v) => {
                           // User-created names are never HSN patterns — write immediately, no dialog.
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
-                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
+                          setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
+                          setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
                         }}
-                        onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
+                        onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
                       />
                     ) : isInventoryMode ? (
                       <EditableField
-                        value={stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem}
+                        value={stockItemEdits[`${row.invoiceNo}_${row.lineIdx}`] ?? row.stockItem}
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
                           const expectedPattern = row.hsn
                             ? `${row.hsn} @ ${row.taxRate ?? 0}%`
                             : `${row.itemDesc} @ ${row.taxRate ?? 0}%`;
                           const otherSameInvoice = displayRows.some(r =>
-                            r.invoiceNo === row.invoiceNo && r.itemDesc && r.itemDesc !== row.itemDesc &&
-                            r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                            r.invoiceNo === row.invoiceNo && r.lineIdx !== row.lineIdx && r.itemDesc &&
+                            r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           const otherGlobal = displayRows.some(r =>
+                            r.lineIdx !== row.lineIdx &&
                             r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
-                            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                            !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           if (v.trim() === expectedPattern.trim() && (otherSameInvoice || otherGlobal)) {
-                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                            setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           } else {
-                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
+                            setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
                           }
                         }} />
                     ) : (
@@ -1450,17 +1456,18 @@ function FlatPreviewTable({
       {stockConfirm && (() => {
         const sameInvoiceCandidates = displayRows.filter(r =>
           r.invoiceNo === stockConfirm.invoiceNo &&
+          r.lineIdx !== stockConfirm.lineIdx &&
           r.itemDesc &&
-          r.itemDesc !== stockConfirm.itemDesc &&
           r.stockItemSuggested &&
-          !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+          !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
         );
         const globalCandidateInvoiceNos = new Set(
           displayRows.filter(r =>
+            r.lineIdx !== stockConfirm.lineIdx &&
             r.itemDesc &&
             r.stockItemSuggested &&
             !lockedInvoices[r.invoiceNo] &&
-            !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+            !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
           ).map(r => r.invoiceNo)
         );
         const applyPatternToRows = (targets: typeof displayRows) => {
@@ -1469,7 +1476,7 @@ function FlatPreviewTable({
             const li = inv?.line_items.find(l => l.description === r.itemDesc);
             if (li) {
               const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-              setStockItemEdits(p => ({ ...p, [`${r.invoiceNo}_${r.itemDesc}`]: name }));
+              setStockItemEdits(p => ({ ...p, [`${r.invoiceNo}_${r.lineIdx}`]: name }));
             }
           });
         };
@@ -1487,7 +1494,7 @@ function FlatPreviewTable({
                 <button
                   onClick={() => {
                     // Write the current item first, then apply pattern to same-invoice candidates.
-                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
                     applyPatternToRows(sameInvoiceCandidates);
                     setStockConfirm(null);
                   }}
@@ -1503,13 +1510,14 @@ function FlatPreviewTable({
                 <button
                   onClick={() => {
                     const allCandidates = displayRows.filter(r =>
+                      r.lineIdx !== stockConfirm.lineIdx &&
                       r.itemDesc &&
                       r.stockItemSuggested &&
                       !lockedInvoices[r.invoiceNo] &&
-                      !stockItemEdits[`${r.invoiceNo}_${r.itemDesc}`]
+                      !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                     );
                     // Write the current item first, then apply pattern globally.
-                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
                     applyPatternToRows(allCandidates);
                     setStockConfirm(null);
                   }}
@@ -1524,7 +1532,7 @@ function FlatPreviewTable({
                 <button
                   onClick={() => {
                     // Write ONLY this item — no propagation.
-                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.itemDesc}`]: stockConfirm.chosenName }));
+                    setStockItemEdits(p => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
                     setStockConfirm(null);
                   }}
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
