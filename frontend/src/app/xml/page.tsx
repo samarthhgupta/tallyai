@@ -91,7 +91,7 @@ function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
         if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }
         if (e.key === 'Escape') onCancel();
       }}
-      onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }}
+      onBlur={(e) => { const v = e.currentTarget.value.trim(); setTimeout(() => { if (v) onConfirm(v); else onCancel(); }, 150); }}
     />
   );
 }
@@ -1210,7 +1210,7 @@ function FlatPreviewTable({
                             !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           const otherGlobal = displayRows.some(r =>
-                            r.lineIdx !== row.lineIdx &&
+                            !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) &&
                             r.itemDesc && r.stockItemSuggested &&
                             !lockedInvoices[r.invoiceNo] &&
                             !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
@@ -1237,7 +1237,7 @@ function FlatPreviewTable({
                             r.itemDesc && r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           const otherGlobal = displayRows.some(r =>
-                            r.lineIdx !== row.lineIdx && r.itemDesc && r.stockItemSuggested &&
+                            !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) && r.itemDesc && r.stockItemSuggested &&
                             !lockedInvoices[r.invoiceNo] && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
@@ -1261,7 +1261,7 @@ function FlatPreviewTable({
                             r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
                           const otherGlobal = displayRows.some(r =>
-                            r.lineIdx !== row.lineIdx &&
+                            !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) &&
                             r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
                             !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
                           );
@@ -1470,7 +1470,7 @@ function FlatPreviewTable({
         );
         const globalCandidateInvoiceNos = new Set(
           displayRows.filter(r =>
-            r.lineIdx !== stockConfirm.lineIdx &&
+            !(r.invoiceNo === stockConfirm.invoiceNo && r.lineIdx === stockConfirm.lineIdx) &&
             r.itemDesc &&
             r.stockItemSuggested &&
             !lockedInvoices[r.invoiceNo] &&
@@ -1517,7 +1517,7 @@ function FlatPreviewTable({
                 <button
                   onClick={() => {
                     const allCandidates = displayRows.filter(r =>
-                      r.lineIdx !== stockConfirm.lineIdx &&
+                      !(r.invoiceNo === stockConfirm.invoiceNo && r.lineIdx === stockConfirm.lineIdx) &&
                       r.itemDesc &&
                       r.stockItemSuggested &&
                       !lockedInvoices[r.invoiceNo] &&
