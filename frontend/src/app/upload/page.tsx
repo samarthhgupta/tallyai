@@ -162,10 +162,12 @@ function ExtractionWarningBanner({
 
 function RecoveryOfferBanner({
   offer,
+  hasExistingQueue,
   onRecover,
   onDiscard,
 }: {
   offer: ExtractionResponse;
+  hasExistingQueue: boolean;
   onRecover: () => void;
   onDiscard: () => void;
 }) {
@@ -181,6 +183,11 @@ function RecoveryOfferBanner({
           <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
             {offer.total_invoices} invoice{offer.total_invoices !== 1 ? 's' : ''} were extracted
             in a previous session that did not complete. You can recover them now.
+            {hasExistingQueue && (
+              <span className="block mt-1 text-amber-700 dark:text-amber-400">
+                Note: recovering will replace your current queue.
+              </span>
+            )}
           </p>
           <p className="text-xs text-blue-500 dark:text-blue-400 mt-1 truncate" title={fileNames}>
             {fileNames}
@@ -196,7 +203,7 @@ function RecoveryOfferBanner({
               className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/30"
               onClick={onDiscard}
             >
-              Discard and start fresh
+              Discard
             </button>
           </div>
         </div>
@@ -328,6 +335,8 @@ export default function UploadPage() {
   const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
+  // Ref to background recovery polling timeout — cancelled when a new extraction starts
+  const recoveryPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [result, setResult] = useState<ExtractionResponse | null>(null);
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -337,6 +346,8 @@ export default function UploadPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [invoiceOverrides, setInvoiceOverrides] = useState<Map<string, ExtractedInvoice>>(new Map());
   const [batchId, setBatchId] = useState<string | null>(null);
+  // Separate from extraction batchId — this tracks the invoice_batches row for acceptance.
+  const [acceptBatchId, setAcceptBatchId] = useState<string | null>(null);
   const [queueRestored, setQueueRestored] = useState(false);
 
   // Action state
@@ -409,20 +420,30 @@ export default function UploadPage() {
   // Check for an interrupted batch from a previous session (crash / Railway timeout)
   useEffect(() => {
     if (!isAuthed || !queueStorageKey || !queueRestored) return;
-    if (queue.length > 0) return; // queue already restored — no recovery needed
+    // Do NOT skip when queue.length > 0: a pending_batch may exist from a different
+    // interrupted session than the one currently in the queue. We always check.
 
     const pendingBatch = localStorage.getItem(`${queueStorageKey}_pending_batch`);
     if (!pendingBatch) return;
 
-    tryRecoverBatch(pendingBatch).then((recovered) => {
-      if (recovered && recovered.total_invoices > 0) {
-        setRecoveryOffer(recovered);
-      } else {
+    // Backend may still be processing when we check (e.g. user refreshed mid-extraction).
+    // Retry up to 6 times at 20s intervals (2 minutes) before giving up and clearing the key.
+    let pollsRemaining = 6;
+    const attemptRecovery = () => {
+      tryRecoverBatch(pendingBatch).then((recovered) => {
+        if (recovered && recovered.total_invoices > 0) {
+          setRecoveryOffer(recovered);
+        } else if (pollsRemaining > 0) {
+          pollsRemaining--;
+          recoveryPollRef.current = setTimeout(attemptRecovery, 20_000);
+        } else {
+          localStorage.removeItem(`${queueStorageKey}_pending_batch`);
+        }
+      }).catch(() => {
         localStorage.removeItem(`${queueStorageKey}_pending_batch`);
-      }
-    }).catch(() => {
-      localStorage.removeItem(`${queueStorageKey}_pending_batch`);
-    });
+      });
+    };
+    attemptRecovery();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed, queueStorageKey, queueRestored]);
 
@@ -467,7 +488,7 @@ export default function UploadPage() {
   // ── Extraction helpers ──
   const categoriseError = useCallback((msg: string): string => {
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network')) {
-      return 'Connection lost during extraction. Claude may have already processed part of your document — try re-uploading to recover.';
+      return 'Connection lost during extraction. Checking for any invoices already extracted — if found they will appear automatically. Otherwise refresh this page in 1–2 minutes to recover results.';
     }
     if (msg.includes('504') || msg.includes('Gateway Timeout') || msg.includes('timeout')) {
       return 'Server timeout. The document took too long to process. Split the PDF into smaller parts (recommended: under 20 pages per file) and try again.';
@@ -510,6 +531,12 @@ export default function UploadPage() {
   const handleExtract = async () => {
     if (!files.length) return;
 
+    // Cancel any background recovery poll from a previous failed attempt
+    if (recoveryPollRef.current) {
+      clearTimeout(recoveryPollRef.current);
+      recoveryPollRef.current = null;
+    }
+
     const oversized = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
     if (oversized.length > 0) {
       setExtractError(`File too large: ${oversized.map((f) => `${f.name} (${(f.size / 1048576).toFixed(1)} MB)`).join(', ')}. Maximum size is ${MAX_FILE_SIZE_MB} MB per file. Split the PDF into smaller parts and upload separately.`);
@@ -520,6 +547,7 @@ export default function UploadPage() {
     // if the response never arrives (Railway timeout, network drop, browser crash).
     const newBatchId = crypto.randomUUID();
     setBatchId(newBatchId);
+    setAcceptBatchId(null); // reset so acceptance creates a fresh invoice_batches row
     if (queueStorageKey) {
       localStorage.setItem(`${queueStorageKey}_pending_batch`, newBatchId);
     }
@@ -572,8 +600,12 @@ export default function UploadPage() {
 
     } catch (err: unknown) {
       // HTTP request failed — attempt Supabase recovery before showing error
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[VERIFY] CATCH_BLOCK_ENTERED', { batchId: newBatchId, error: msg, t: new Date().toISOString() });
+
       const recovered = await tryRecoverBatch(newBatchId).catch(() => null);
       if (recovered && recovered.total_invoices > 0) {
+        console.log('[VERIFY] IMMEDIATE_RECOVERY_SUCCESS', { batchId: newBatchId, invoices: recovered.total_invoices });
         setQueue(buildQueueItems(recovered));
         setResult(recovered);
         setExtractionWarning({
@@ -583,8 +615,42 @@ export default function UploadPage() {
         });
         if (queueStorageKey) localStorage.removeItem(`${queueStorageKey}_pending_batch`);
       } else {
-        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[VERIFY] CONNECTION_LOST_MESSAGE_SET — categoriseError will return:', { msg: msg.slice(0, 100) });
         setExtractError(categoriseError(msg));
+
+        // On network failures the backend keeps running after the client disconnects.
+        // log_extraction may be called 30–90s after the fetch threw. Poll every 20s
+        // for up to 2 minutes — if data appears, surface it automatically.
+        const isNetworkFailure = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('network');
+        if (isNetworkFailure) {
+          console.log('[VERIFY] RECOVERY_POLLING_STARTED', { batchId: newBatchId, maxAttempts: 6, intervalMs: 20000 });
+          const batchToRecover = newBatchId;
+          const storageKey = queueStorageKey;
+          let pollsRemaining = 6; // 6 × 20s = 2 minutes
+          const poll = () => {
+            if (pollsRemaining <= 0) {
+              console.log('[VERIFY] RECOVERY_POLLING_EXHAUSTED', { batchId: batchToRecover });
+              return;
+            }
+            pollsRemaining--;
+            recoveryPollRef.current = setTimeout(async () => {
+              console.log('[VERIFY] RECOVERY_POLL_ATTEMPT', { batchId: batchToRecover, pollsRemaining });
+              const recheck = await tryRecoverBatch(batchToRecover).catch(() => null);
+              if (recheck && recheck.total_invoices > 0) {
+                console.log('[VERIFY] RECOVERY_POLLING_SUCCESS', { batchId: batchToRecover, invoices: recheck.total_invoices });
+                setQueue(buildQueueItems(recheck));
+                setResult(recheck);
+                setExtractionWarning({ type: 'recovered', successCount: recheck.total_invoices, failureDetails: [] });
+                setExtractError('');
+                if (storageKey) localStorage.removeItem(`${storageKey}_pending_batch`);
+              } else {
+                console.log('[VERIFY] RECOVERY_POLL_EMPTY', { batchId: batchToRecover, pollsRemaining });
+                poll();
+              }
+            }, 20_000);
+          };
+          poll();
+        }
       }
     } finally {
       setExtracting(false);
@@ -683,11 +749,12 @@ export default function UploadPage() {
     }
 
     try {
-      // Create batch now if not yet created
-      let activeBatchId = batchId;
+      // acceptBatchId tracks the invoice_batches row (separate from extraction batchId,
+      // which is only used for recovery in extraction_logs and has no invoice_batches row).
+      let activeBatchId = acceptBatchId;
       if (!activeBatchId) {
         activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
-        setBatchId(activeBatchId);
+        setAcceptBatchId(activeBatchId);
       }
 
       const items: InvoiceToSave[] = keys
@@ -763,10 +830,10 @@ export default function UploadPage() {
     setActionLoading(true);
     setActionError('');
     try {
-      let activeBatchId = batchId;
+      let activeBatchId = acceptBatchId;
       if (!activeBatchId) {
         activeBatchId = await createBatch(selectedCompanyId, files.length, financialYear);
-        setBatchId(activeBatchId);
+        setAcceptBatchId(activeBatchId);
       }
 
       const items: InvoiceToSave[] = keys
@@ -901,9 +968,10 @@ export default function UploadPage() {
           </div>
 
           {/* ── Recovery Offer ── */}
-          {recoveryOffer && !queue.length && (
+          {recoveryOffer && (
             <RecoveryOfferBanner
               offer={recoveryOffer}
+              hasExistingQueue={queue.length > 0}
               onRecover={() => {
                 setQueue(buildQueueItems(recoveryOffer));
                 setResult(recoveryOffer);

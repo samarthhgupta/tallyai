@@ -15,6 +15,7 @@ import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import InvoiceDetailPanel from '@/components/InvoiceDetailPanel';
 import { getSupabase } from '@/lib/supabase';
+import { detectDuplicates, type DuplicateGroup } from '@/lib/duplicateDetection';
 
 // ─── Per-invoice computed financials (single source of truth) ────────────────
 // Always derives from the full tax summary (line items + SAC charges) so values
@@ -394,6 +395,8 @@ export default function PurchaseRegisterPage() {
   const totalRoundOff = invoiceFinancials.reduce((s, f) => s + f.roundOff, 0);
   const grandTotal = invoiceFinancials.reduce((s, f) => s + f.total, 0);
 
+  const dupGroups: DuplicateGroup[] = detectDuplicates(invoices);
+
   const itcOrder: Record<string, number> = { eligible: 0, reviewed_eligible: 1, potentially_ineligible: 2, not_applicable: 3 };
   const sortedInvoices = [...invoices].sort((a, b) => {
     const fa = financialsById.get(a.id)!;
@@ -434,6 +437,9 @@ export default function PurchaseRegisterPage() {
   const [showRejected, setShowRejected] = useState(false);
   const [rejectedRecords, setRejectedRecords] = useState<RejectedRecord[]>([]);
   const [loadingRejected, setLoadingRejected] = useState(false);
+
+  // Duplicate detection
+  const [showDupPanel, setShowDupPanel] = useState(false);
 
   // ── Auth check ──
   useEffect(() => {
@@ -957,6 +963,81 @@ export default function PurchaseRegisterPage() {
         {/* Error */}
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-sm text-red-700 dark:text-red-400 mb-4">{error}</div>
+        )}
+
+        {/* Duplicate invoice warning banner */}
+        {dupGroups.length > 0 && (
+          <div className="mb-4">
+            <button
+              onClick={() => setShowDupPanel((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors text-left"
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                  Duplicate invoices detected
+                </span>
+                <span className="text-sm text-amber-700 dark:text-amber-400">
+                  — {dupGroups.reduce((s, g) => s + g.invoices.length, 0)} invoices across {dupGroups.length} duplicate group{dupGroups.length !== 1 ? 's' : ''}
+                </span>
+              </span>
+              <span className="text-xs font-medium text-amber-700 dark:text-amber-400 shrink-0 ml-4">
+                {showDupPanel ? 'Hide duplicates ▲' : 'View duplicates ▼'}
+              </span>
+            </button>
+
+            {showDupPanel && (
+              <div className="mt-1 border border-amber-200 dark:border-amber-700 rounded-xl overflow-hidden bg-white dark:bg-gray-800">
+                <div className="bg-amber-50 dark:bg-amber-900/20 px-4 py-2.5 border-b border-amber-200 dark:border-amber-700">
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    These invoices share the same supplier and invoice number within the same financial year. Review and delete the unwanted copy — both will remain in XML export unless removed.
+                  </p>
+                </div>
+                <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {dupGroups.map((g, gi) => (
+                    <div key={gi} className="px-4 py-3">
+                      <div className="flex items-start gap-3 mb-2">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{g.vendorName}</p>
+                          {g.vendorGstin && (
+                            <p className="text-xs font-mono text-gray-500 dark:text-gray-400">{g.vendorGstin}</p>
+                          )}
+                        </div>
+                        <div className="ml-auto text-right shrink-0">
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Invoice No</p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">{g.invoiceNumber}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Occurrences</p>
+                          <p className="text-sm font-bold text-amber-700 dark:text-amber-400">{g.invoices.length}</p>
+                        </div>
+                      </div>
+                      <div className="ml-0 space-y-1">
+                        {g.invoices.map((inv) => {
+                          const fin = financialsById.get(inv.id);
+                          return (
+                            <div key={inv.id} className="flex items-center gap-4 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/40 rounded px-3 py-1.5">
+                              <span>Date: <span className="font-medium text-gray-800 dark:text-gray-200">{inv.invoice_date ?? '—'}</span></span>
+                              <span>Total: <span className="font-medium text-gray-800 dark:text-gray-200">₹{fin ? fin.total.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</span></span>
+                              <span>Accepted: <span className="font-medium text-gray-800 dark:text-gray-200">{inv.accepted_at ? new Date(inv.accepted_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</span></span>
+                              <button
+                                onClick={() => setDetailInvoice(inv)}
+                                className="ml-auto text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 hover:underline font-medium"
+                              >
+                                View →
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* No company */}

@@ -264,16 +264,26 @@ export function computeReadiness(
     readiness = 'critical';
   }
 
-  // Buyer name mismatch is critical regardless of GST - wrong company invoice must never be accepted
+  // Company mismatch check: if buyer GSTIN matches the selected company's GSTIN, the
+  // invoice belongs to this company regardless of name variation — allow with a warning.
+  // Only block when BOTH name AND GSTIN fail to match (unambiguously wrong company).
   if (companyName && inv.buyer_name?.trim()) {
     const buyerLower = inv.buyer_name.toLowerCase();
     const companyLower = companyName.toLowerCase();
-    // Check if any 5+ char word from company name appears in buyer name
     const companyWords = companyLower.split(/\s+/).filter((w) => w.length >= 5);
-    const matches = companyWords.length === 0 || companyWords.some((w) => buyerLower.includes(w));
-    if (!matches) {
-      flags.push(`Wrong company: buyer on invoice is "${inv.buyer_name}" but selected company is "${companyName}"`);
-      readiness = 'critical';
+    const nameMatches = companyWords.length === 0 || companyWords.some((w) => buyerLower.includes(w));
+    if (!nameMatches) {
+      const gstinMatches =
+        companyGstin?.trim() &&
+        inv.buyer_gstin?.trim() &&
+        inv.buyer_gstin.trim().toUpperCase() === companyGstin.trim().toUpperCase();
+      if (gstinMatches) {
+        flags.push(`Buyer name on invoice ("${inv.buyer_name}") differs from company name ("${companyName}") — verify before accepting`);
+        if (readiness === 'ready') readiness = 'warning';
+      } else {
+        flags.push(`Wrong company: buyer on invoice is "${inv.buyer_name}" but selected company is "${companyName}"`);
+        readiness = 'critical';
+      }
     }
   }
 
