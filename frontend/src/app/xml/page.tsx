@@ -273,9 +273,9 @@ function FlatPreviewTable({
   const [pendingSuppliers, setPendingSuppliers] = React.useState<string[]>([]);
   const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({}); // keyed by `${invoiceNo}_${itemDesc}`
   const [pendingStockItems, setPendingStockItems] = React.useState<string[]>([]);
-  const [cgstFreetext, setCgstFreetext] = React.useState(false);
-  const [sgstFreetext, setSgstFreetext] = React.useState(false);
-  const [igstFreetext, setIgstFreetext] = React.useState(false);
+  const [cgstFreetext, setCgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [sgstFreetext, setSgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [igstFreetext, setIgstFreetext] = React.useState<Record<string, boolean>>({});
   const [pendingCgst, setPendingCgst] = React.useState<string[]>([]);
   const [pendingSgst, setPendingSgst] = React.useState<string[]>([]);
   const [pendingIgst, setPendingIgst] = React.useState<string[]>([]);
@@ -1122,17 +1122,17 @@ function FlatPreviewTable({
                             options={cgstOpts}
                             pendingOptions={pendingCgst}
                             suggested={row.cgstSuggested}
-                            freetext={cgstFreetext}
+                            freetext={cgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New CGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }}
-                            onStartCreate={() => setCgstFreetext(true)}
+                            onStartCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
                               setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, cgst: v }));
                               onMapTaxLedger('CGST', v);
-                              setCgstFreetext(false);
+                              setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => setCgstFreetext(false)}
+                            onCancelCreate={() => setCgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
@@ -1153,17 +1153,17 @@ function FlatPreviewTable({
                             options={sgstOpts}
                             pendingOptions={pendingSgst}
                             suggested={row.sgstSuggested}
-                            freetext={sgstFreetext}
+                            freetext={sgstFreetext[row.invoiceNo] ?? false}
                             createLabel="New SGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }}
-                            onStartCreate={() => setSgstFreetext(true)}
+                            onStartCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
                               setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, sgst: v }));
                               onMapTaxLedger('SGST', v);
-                              setSgstFreetext(false);
+                              setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => setSgstFreetext(false)}
+                            onCancelCreate={() => setSgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
@@ -1184,17 +1184,17 @@ function FlatPreviewTable({
                             options={igstOpts}
                             pendingOptions={pendingIgst}
                             suggested={row.igstSuggested}
-                            freetext={igstFreetext}
+                            freetext={igstFreetext[row.invoiceNo] ?? false}
                             createLabel="New IGST ledger name…"
                             onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }}
-                            onStartCreate={() => setIgstFreetext(true)}
+                            onStartCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
                             onConfirmCreate={(v) => {
                               setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
                               setTaxLedgerEdits((p) => ({ ...p, igst: v }));
                               onMapTaxLedger('IGST', v);
-                              setIgstFreetext(false);
+                              setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
                             }}
-                            onCancelCreate={() => setIgstFreetext(false)}
+                            onCancelCreate={() => setIgstFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
                           />
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
                             onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
