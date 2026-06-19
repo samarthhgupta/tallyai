@@ -12,6 +12,7 @@ import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/
 import { loadPurchaseLedgers, addPurchaseLedger, getHistoricalPurchaseLedger, getCompanyWideMostUsedPurchaseLedger } from '@/lib/purchaseLedgers';
 import { loadVoucherTypes } from '@/lib/voucherTypes';
 import { generateTallyXml, generateMastersXml, buildTallyPreview, type PreviewRow, type MasterType } from '@/lib/xmlGenerator';
+import { upsertVendorLedgerPreference, getVendorLedgerPreferences, type LedgerType } from '@/lib/vendorLedgerPreferences';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
 import AppLayout from '@/components/AppLayout';
@@ -237,6 +238,7 @@ function FlatPreviewTable({
   initialLockedInvoices,
   purchaseLedgerMasters, historicalPurchaseLedgers, companyWidePurchaseLedger,
   dutiesTaxesMasters, stockItemMode,
+  initialVendorPrefTaxEdits, initialVendorPrefPLEdits,
   onMapExpense, onMapSupplier, onMapStockItem, onMapTaxLedger, onAcceptInvoices, companyId,
 }: {
   rows: PreviewRow[];
@@ -251,6 +253,8 @@ function FlatPreviewTable({
   companyWidePurchaseLedger: string | null;  // most-used PL across all company invoices (Case 3 fallback)
   dutiesTaxesMasters: { tax_component: string; tally_ledger_name: string }[];
   companyId: string;
+  initialVendorPrefTaxEdits?: Record<string, { cgst?: string; sgst?: string; igst?: string }>;
+  initialVendorPrefPLEdits?: Record<string, string>;
   onMapExpense: (description: string, ledgerName: string) => void;
   onMapSupplier: (vendorName: string, ledgerName: string) => void;
   onMapStockItem: (description: string, tallyItemName: string) => void;
@@ -261,11 +265,11 @@ function FlatPreviewTable({
 
   // Local editable overrides (keyed as needed)
   const [vendorEdits, setVendorEdits] = React.useState<Record<string, string>>({});
-  const [purchaseLedgerEdits, setPurchaseLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
+  const [purchaseLedgerEdits, setPurchaseLedgerEdits] = React.useState<Record<string, string>>(initialVendorPrefPLEdits ?? {}); // keyed by invoiceNo
   const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
   const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
   const [chargeFreetext, setChargeFreetext] = React.useState<Record<string, boolean>>({}); // desc → show freetext input
-  const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
+  const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<Record<string, { cgst?: string; sgst?: string; igst?: string }>>(initialVendorPrefTaxEdits ?? {});
   const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({}); // keyed by invoiceNo
   const [pendingPurchaseLedgers, setPendingPurchaseLedgers] = React.useState<string[]>([]);
   const [purchaseLedgerCreating, setPurchaseLedgerCreating] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
@@ -283,6 +287,23 @@ function FlatPreviewTable({
   const [roFreetext, setRoFreetext] = React.useState<Record<string, boolean>>({}); // keyed by invoiceNo
   const [pendingRo, setPendingRo] = React.useState<string[]>([]);
 
+  // Pending tax ledger change (for scope dialog)
+  const [pendingTaxChange, setPendingTaxChange] = React.useState<{
+    invoiceNo: string;
+    vendorGstin: string | null;
+    vendorName: string;
+    component: 'CGST' | 'SGST' | 'IGST';
+    newLedger: string;
+  } | null>(null);
+
+  // Pending purchase ledger change (for scope dialog)
+  const [pendingPLChange, setPendingPLChange] = React.useState<{
+    invoiceNo: string;
+    vendorGstin: string | null;
+    vendorName: string;
+    newLedger: string;
+  } | null>(null);
+
   // Bulk-select state for inline accept / unaccept
   const [selectedRows, setSelectedRows] = React.useState<Set<number>>(new Set());
   const [selectedLockedInvoices, setSelectedLockedInvoices] = React.useState<Set<string>>(new Set());
@@ -291,9 +312,9 @@ function FlatPreviewTable({
   // Accepted invoices - once accepted, fields are locked in the UI (initialised from DB on mount)
   const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedInvoice>>(initialLockedInvoices);
 
-  // Stock item "apply to all" popup state
+  // Stock item scope dialog popup state
   const [stockConfirm, setStockConfirm] = React.useState<{
-    itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
+    invoiceNo: string; itemDesc: string; hsn: string; gstPct: number | null; suggestedName: string; chosenName: string;
   } | null>(null);
 
   // Group rows by invoice number, preserving order
@@ -557,9 +578,9 @@ function FlatPreviewTable({
 
       const vendorLedger = vendorEdits[firstRow.vendorName] ?? firstRow.vendorLedger;
       const purchaseLedger = purchaseLedgerEdits[invNo] ?? firstRow.purchaseLedger;
-      const cgstLedger = taxLedgerEdits.cgst ?? firstRow.cgstLedger;
-      const sgstLedger = taxLedgerEdits.sgst ?? firstRow.sgstLedger;
-      const igstLedger = taxLedgerEdits.igst ?? firstRow.igstLedger;
+      const cgstLedger = taxLedgerEdits[invNo]?.cgst ?? firstRow.cgstLedger;
+      const sgstLedger = taxLedgerEdits[invNo]?.sgst ?? firstRow.sgstLedger;
+      const igstLedger = taxLedgerEdits[invNo]?.igst ?? firstRow.igstLedger;
 
       const stockItems: InvoiceAcceptPayload['stockItems'] = [];
       const lockedStock: Record<string, string> = {};
@@ -811,9 +832,9 @@ function FlatPreviewTable({
                 : (locked?.vendorLedger ?? (vendorEdits[row.vendorName] ?? row.vendorLedger));
               const effectivePurchaseLedger = locked?.purchaseLedger ?? (purchaseLedgerEdits[row.invoiceNo] ?? row.purchaseLedger);
               const effectiveStockItem      = locked?.stock[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.itemDesc}`] ?? row.stockItem);
-              const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
-              const effectiveSgst           = locked?.sgstLedger ?? (taxLedgerEdits.sgst ?? row.sgstLedger);
-              const effectiveIgst           = locked?.igstLedger ?? (taxLedgerEdits.igst ?? row.igstLedger);
+              const effectiveCgst           = locked?.cgstLedger ?? (taxLedgerEdits[row.invoiceNo]?.cgst ?? row.cgstLedger);
+              const effectiveSgst           = locked?.sgstLedger ?? (taxLedgerEdits[row.invoiceNo]?.sgst ?? row.sgstLedger);
+              const effectiveIgst           = locked?.igstLedger ?? (taxLedgerEdits[row.invoiceNo]?.igst ?? row.igstLedger);
               const effectiveRo             = locked?.roLedger ?? (roLedgerEdits[row.invoiceNo] ?? row.roLedger);
 
               // Editable input for any suggested Tally field
@@ -849,10 +870,10 @@ function FlatPreviewTable({
               const editedVendor = vendorEdits[row.vendorName];
               const vendorDisplayVal = editedVendor ?? row.vendorLedger;
 
-              // Per-row tax ledger display values (shared across all rows via taxLedgerEdits)
-              const cgstDisplay = taxLedgerEdits.cgst ?? row.cgstLedger;
-              const sgstDisplay = taxLedgerEdits.sgst ?? row.sgstLedger;
-              const igstDisplay = taxLedgerEdits.igst ?? row.igstLedger;
+              // Per-row tax ledger display values (per-invoice keyed via taxLedgerEdits)
+              const cgstDisplay = taxLedgerEdits[row.invoiceNo]?.cgst ?? row.cgstLedger;
+              const sgstDisplay = taxLedgerEdits[row.invoiceNo]?.sgst ?? row.sgstLedger;
+              const igstDisplay = taxLedgerEdits[row.invoiceNo]?.igst ?? row.igstLedger;
 
               return (
                 <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 dark:hover:bg-gray-700/50 transition-colors`}>
@@ -942,7 +963,13 @@ function FlatPreviewTable({
                               const v = e.currentTarget.value.trim();
                               if (v) {
                                 setPendingPurchaseLedgers((p) => p.includes(v) ? p : [...p, v]);
-                                setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                                const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                                setPendingPLChange({
+                                  invoiceNo: row.invoiceNo,
+                                  vendorGstin: inv?.vendor_gstin ?? null,
+                                  vendorName: inv?.vendor_name ?? row.vendorName,
+                                  newLedger: v,
+                                });
                               }
                               setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
                             }
@@ -952,7 +979,13 @@ function FlatPreviewTable({
                             const v = e.currentTarget.value.trim();
                             if (v) {
                               setPendingPurchaseLedgers((p) => p.includes(v) ? p : [...p, v]);
-                              setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingPLChange({
+                                invoiceNo: row.invoiceNo,
+                                vendorGstin: inv?.vendor_gstin ?? null,
+                                vendorName: inv?.vendor_name ?? row.vendorName,
+                                newLedger: v,
+                              });
                             }
                             setPurchaseLedgerCreating((p) => ({ ...p, [row.invoiceNo]: false }));
                           }}
@@ -969,7 +1002,13 @@ function FlatPreviewTable({
                             }
                             // Defect 1 fix: never store blank from dropdown (e.g. if browser resets selection)
                             if (!e.target.value) return;
-                            setPurchaseLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }));
+                            const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                            setPendingPLChange({
+                              invoiceNo: row.invoiceNo,
+                              vendorGstin: inv?.vendor_gstin ?? null,
+                              vendorName: inv?.vendor_name ?? row.vendorName,
+                              newLedger: e.target.value,
+                            });
                           }}
                           className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
                             row.purchaseLedgerCase === 3 || row.purchaseLedgerCase === 4 || row.purchaseLedgerCase === 1
@@ -1026,13 +1065,13 @@ function FlatPreviewTable({
                         createLabel="New Tally stock item name…"
                         onSelect={(v) => {
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }}
                         onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: true }))}
                         onConfirmCreate={(v) => {
                           setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                           setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }));
                         }}
                         onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: false }))}
@@ -1043,7 +1082,7 @@ function FlatPreviewTable({
                         suggested={row.stockItemSuggested} color="text-indigo-700"
                         onSave={(v) => {
                           setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.itemDesc}`]: v }));
-                          setStockConfirm({ itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
+                          setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, hsn: row.hsn, gstPct: row.taxRate, suggestedName: row.stockItem, chosenName: v });
                         }} />
                     ) : (
                       <span className="font-mono text-indigo-700">{row.stockItem || ''}</span>
@@ -1119,24 +1158,33 @@ function FlatPreviewTable({
                         ? <span className="font-mono font-medium text-teal-700">{effectiveCgst || '-'}</span>
                         : cgstOpts.length > 0 || pendingCgst.length > 0
                         ? <CreatableLedgerDropdown
-                            value={taxLedgerEdits.cgst ?? row.cgstLedger}
+                            value={taxLedgerEdits[row.invoiceNo]?.cgst ?? row.cgstLedger}
                             options={cgstOpts}
                             pendingOptions={pendingCgst}
                             suggested={row.cgstSuggested}
                             freetext={cgstFreetext}
                             createLabel="New CGST ledger name…"
-                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }}
+                            onSelect={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'CGST', newLedger: v });
+                              onMapTaxLedger('CGST', v);
+                            }}
                             onStartCreate={() => setCgstFreetext(true)}
                             onConfirmCreate={(v) => {
                               setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
-                              setTaxLedgerEdits((p) => ({ ...p, cgst: v }));
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'CGST', newLedger: v });
                               onMapTaxLedger('CGST', v);
                               setCgstFreetext(false);
                             }}
                             onCancelCreate={() => setCgstFreetext(false)}
                           />
                         : <EditableField value={effectiveCgst} suggested={row.cgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, cgst: v })); onMapTaxLedger('CGST', v); }} />;
+                            onSave={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'CGST', newLedger: v });
+                              onMapTaxLedger('CGST', v);
+                            }} />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1150,24 +1198,33 @@ function FlatPreviewTable({
                         ? <span className="font-mono font-medium text-teal-700">{effectiveSgst || '-'}</span>
                         : sgstOpts.length > 0 || pendingSgst.length > 0
                         ? <CreatableLedgerDropdown
-                            value={taxLedgerEdits.sgst ?? row.sgstLedger}
+                            value={taxLedgerEdits[row.invoiceNo]?.sgst ?? row.sgstLedger}
                             options={sgstOpts}
                             pendingOptions={pendingSgst}
                             suggested={row.sgstSuggested}
                             freetext={sgstFreetext}
                             createLabel="New SGST ledger name…"
-                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }}
+                            onSelect={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'SGST', newLedger: v });
+                              onMapTaxLedger('SGST', v);
+                            }}
                             onStartCreate={() => setSgstFreetext(true)}
                             onConfirmCreate={(v) => {
                               setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
-                              setTaxLedgerEdits((p) => ({ ...p, sgst: v }));
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'SGST', newLedger: v });
                               onMapTaxLedger('SGST', v);
                               setSgstFreetext(false);
                             }}
                             onCancelCreate={() => setSgstFreetext(false)}
                           />
                         : <EditableField value={effectiveSgst} suggested={row.sgstSuggested} color="text-teal-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, sgst: v })); onMapTaxLedger('SGST', v); }} />;
+                            onSave={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'SGST', newLedger: v });
+                              onMapTaxLedger('SGST', v);
+                            }} />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1181,24 +1238,33 @@ function FlatPreviewTable({
                         ? <span className="font-mono font-medium text-cyan-700">{effectiveIgst || '-'}</span>
                         : igstOpts.length > 0 || pendingIgst.length > 0
                         ? <CreatableLedgerDropdown
-                            value={taxLedgerEdits.igst ?? row.igstLedger}
+                            value={taxLedgerEdits[row.invoiceNo]?.igst ?? row.igstLedger}
                             options={igstOpts}
                             pendingOptions={pendingIgst}
                             suggested={row.igstSuggested}
                             freetext={igstFreetext}
                             createLabel="New IGST ledger name…"
-                            onSelect={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }}
+                            onSelect={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'IGST', newLedger: v });
+                              onMapTaxLedger('IGST', v);
+                            }}
                             onStartCreate={() => setIgstFreetext(true)}
                             onConfirmCreate={(v) => {
                               setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
-                              setTaxLedgerEdits((p) => ({ ...p, igst: v }));
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'IGST', newLedger: v });
                               onMapTaxLedger('IGST', v);
                               setIgstFreetext(false);
                             }}
                             onCancelCreate={() => setIgstFreetext(false)}
                           />
                         : <EditableField value={effectiveIgst} suggested={row.igstSuggested} color="text-cyan-700"
-                            onSave={(v) => { setTaxLedgerEdits((p) => ({ ...p, igst: v })); onMapTaxLedger('IGST', v); }} />;
+                            onSave={(v) => {
+                              const inv = invoices.find((i) => i.invoice_number === row.invoiceNo);
+                              setPendingTaxChange({ invoiceNo: row.invoiceNo, vendorGstin: inv?.vendor_gstin ?? null, vendorName: inv?.vendor_name ?? row.vendorName, component: 'IGST', newLedger: v });
+                              onMapTaxLedger('IGST', v);
+                            }} />;
                     })()}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
@@ -1239,48 +1305,217 @@ function FlatPreviewTable({
         </table>
       </div>
 
-      {/* Stock item "apply to all" confirm popup */}
-      {stockConfirm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply naming pattern to all?</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-              You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
-            </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              Would you like to use <span className="font-mono font-semibold">HSN @ Rate%</span> as the naming pattern for all other AI-suggested stock items too?
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  // Defect 3 fix: update local state only; no pre-acceptance master write.
-                  // Apply HSN @ Rate% format to all suggested stock items across all invoices.
-                  rows
-                    .filter((r) => r.ledger_type === 'Inventory' && r.is_suggested)
-                    .forEach((r) => {
-                      const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
-                      const li = inv?.line_items.find((l) => l.description === r.item_description);
-                      if (li) {
-                        const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
-                        setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
-                      }
-                    });
-                  setStockConfirm(null);
-                }}
-                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
-              >
-                Yes, use HSN @ Rate% for all
-              </button>
-              <button
-                onClick={() => setStockConfirm(null)}
-                className="flex-1 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                No, map individually
-              </button>
+      {/* Stock item scope dialog — 3 options */}
+      {stockConfirm && (() => {
+        // "(new)" suffix note: option values are clean strings; the "(new)" label is UI-only in pendingOptions rendering.
+        const invoiceOnlyRows = rows.filter((r) =>
+          r.invoice_number === stockConfirm.invoiceNo &&
+          r.ledger_type === 'Inventory' && r.is_suggested
+        );
+        const allUnlockedRows = rows.filter((r) =>
+          r.ledger_type === 'Inventory' && r.is_suggested &&
+          !lockedInvoices[r.invoice_number]
+        );
+        const applyHsnPattern = (targetRows: typeof rows) => {
+          targetRows.forEach((r) => {
+            const inv = invoices.find((i) => i.invoice_number === r.invoice_number);
+            const li = inv?.line_items.find((l) => l.description === r.item_description);
+            if (li) {
+              const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
+              setStockItemEdits((p) => ({ ...p, [`${r.invoice_number}_${r.item_description ?? ''}`]: name }));
+            }
+          });
+          setStockConfirm(null);
+        };
+        return (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply naming pattern to all?</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Would you like to apply <span className="font-mono font-semibold">HSN @ Rate%</span> naming to other AI-suggested stock items?
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  onClick={() => applyHsnPattern(invoiceOnlyRows)}
+                >
+                  <div className="font-medium text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Only suggested stock items on this invoice are updated.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  onClick={() => {
+                    // Defect 3 fix: update local state only; no pre-acceptance master write.
+                    applyHsnPattern(allUnlockedRows);
+                  }}
+                >
+                  <div className="font-medium text-indigo-700 dark:text-indigo-300">Apply to all {allUnlockedRows.length} loaded unaccepted invoices</div>
+                  <div className="text-xs text-gray-500 mt-0.5">Session-scoped. All suggested stock items across all unaccepted invoices are updated.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-500"
+                  onClick={() => setStockConfirm(null)}
+                >
+                  No – map individually
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* Tax ledger scope dialog */}
+      {pendingTaxChange && (() => {
+        const component = pendingTaxChange.component;
+        const lockedSet = new Set(Object.keys(lockedInvoices));
+        const vendorInvoices = invoices.filter(inv =>
+          !lockedSet.has(inv.invoice_number) &&
+          (pendingTaxChange.vendorGstin
+            ? inv.vendor_gstin === pendingTaxChange.vendorGstin
+            : inv.vendor_name?.trim().toLowerCase() === pendingTaxChange.vendorName.trim().toLowerCase())
+        );
+        const allUnlocked = invoices.filter(inv => !lockedSet.has(inv.invoice_number));
+
+        const applyToInvoices = (targetInvoiceNos: string[]) => {
+          const compKey = component.toLowerCase() as 'cgst' | 'sgst' | 'igst';
+          setTaxLedgerEdits(p => {
+            const next = { ...p };
+            for (const no of targetInvoiceNos) {
+              next[no] = { ...next[no], [compKey]: pendingTaxChange.newLedger };
+            }
+            return next;
+          });
+          setPendingTaxChange(null);
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                Change {component} ledger mapping?
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                You selected: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{pendingTaxChange.newLedger}</span>
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  onClick={() => applyToInvoices([pendingTaxChange.invoiceNo])}
+                >
+                  <div className="font-medium text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
+                  <div className="text-xs text-gray-500 mt-0.5">No other invoices are affected. No learning occurs.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  onClick={async () => {
+                    applyToInvoices(vendorInvoices.map(i => i.invoice_number));
+                    // Learning: vendor-scoped bulk → write preference
+                    if (companyId) {
+                      await upsertVendorLedgerPreference(
+                        companyId,
+                        pendingTaxChange.vendorGstin,
+                        pendingTaxChange.vendorName,
+                        component as LedgerType,
+                        pendingTaxChange.newLedger,
+                      );
+                    }
+                  }}
+                >
+                  <div className="font-medium text-indigo-700 dark:text-indigo-300">
+                    Apply to all {vendorInvoices.length} unaccepted invoices of {pendingTaxChange.vendorName || 'this vendor'}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">Vendor-scoped. Saves your preference for future sessions.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  onClick={() => applyToInvoices(allUnlocked.map(i => i.invoice_number))}
+                >
+                  <div className="font-medium text-gray-900 dark:text-gray-100">
+                    Apply to all {allUnlocked.length} loaded unaccepted invoices
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">Session-scoped correction. No vendor preference is saved.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-500"
+                  onClick={() => setPendingTaxChange(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Purchase Ledger scope dialog */}
+      {pendingPLChange && (() => {
+        const lockedSet = new Set(Object.keys(lockedInvoices));
+        const vendorInvoices = invoices.filter(inv =>
+          !lockedSet.has(inv.invoice_number) &&
+          (pendingPLChange.vendorGstin
+            ? inv.vendor_gstin === pendingPLChange.vendorGstin
+            : inv.vendor_name?.trim().toLowerCase() === pendingPLChange.vendorName.trim().toLowerCase())
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                Change Purchase Ledger scope?
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                You selected: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{pendingPLChange.newLedger}</span>
+                {pendingPLChange.vendorName && <> for <span className="font-medium">{pendingPLChange.vendorName}</span></>}
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm"
+                  onClick={() => {
+                    setPurchaseLedgerEdits(p => ({ ...p, [pendingPLChange.invoiceNo]: pendingPLChange.newLedger }));
+                    setPendingPLChange(null);
+                  }}
+                >
+                  <div className="font-medium text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
+                  <div className="text-xs text-gray-500 mt-0.5">No other invoices are affected. No learning occurs.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 text-sm"
+                  onClick={async () => {
+                    const updates: Record<string, string> = {};
+                    vendorInvoices.forEach(inv => { updates[inv.invoice_number] = pendingPLChange.newLedger; });
+                    setPurchaseLedgerEdits(p => ({ ...p, ...updates }));
+                    // Learning: vendor-scoped bulk → write preference
+                    if (companyId) {
+                      await upsertVendorLedgerPreference(
+                        companyId,
+                        pendingPLChange.vendorGstin,
+                        pendingPLChange.vendorName,
+                        'purchase',
+                        pendingPLChange.newLedger,
+                      );
+                    }
+                    setPendingPLChange(null);
+                  }}
+                >
+                  <div className="font-medium text-indigo-700 dark:text-indigo-300">
+                    Apply to all {vendorInvoices.length} unaccepted invoices of {pendingPLChange.vendorName || 'this vendor'}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">Vendor-scoped. Saves your preference for future sessions.</div>
+                </button>
+                <button
+                  className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-500"
+                  onClick={() => setPendingPLChange(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1463,6 +1698,8 @@ export default function XmlGeneratorPage() {
   const [cachedMasters, setCachedMasters] = useState<Awaited<ReturnType<typeof loadMasters>> | null>(null);
   const [cachedHistoricalPL, setCachedHistoricalPL] = useState<Record<string, string> | null>(null);
   const [cachedCompanyWidePL, setCachedCompanyWidePL] = useState<string | null>(null);
+  const [cachedVendorPrefTaxEdits, setCachedVendorPrefTaxEdits] = useState<Record<string, { cgst?: string; sgst?: string; igst?: string }>>({});
+  const [cachedVendorPrefPLEdits, setCachedVendorPrefPLEdits] = useState<Record<string, string>>({});
 
 
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
@@ -1579,6 +1816,38 @@ export default function XmlGeneratorPage() {
         : null;
       setCachedCompanyWidePL(companyWidePL);
 
+      // Phase 4: Load vendor ledger preferences for each unique vendor and pre-populate state
+      const vendorPrefsMap: Record<string, Awaited<ReturnType<typeof getVendorLedgerPreferences>>> = {};
+      await Promise.all(
+        Object.keys(supplierKeySet).map(async (key) => {
+          const isGstin = !key.startsWith('name:');
+          const prefs = await getVendorLedgerPreferences(
+            company!.id,
+            isGstin ? key : null,
+            isGstin ? null : key.slice(5),
+          );
+          vendorPrefsMap[key] = prefs;
+        })
+      );
+      // Pre-populate taxLedgerEdits and purchaseLedgerEdits from vendor preferences (Case 1 priority)
+      const initTaxEdits: Record<string, { cgst?: string; sgst?: string; igst?: string }> = {};
+      const initPLEdits: Record<string, string> = {};
+      for (const inv of invoices) {
+        const key = inv.vendor_gstin ? inv.vendor_gstin : `name:${(inv.vendor_name ?? '').toLowerCase().trim()}`;
+        const prefs = vendorPrefsMap[key];
+        if (!prefs) continue;
+        if (prefs.purchase) {
+          initPLEdits[inv.invoice_number] = prefs.purchase;
+        }
+        const taxEntry: { cgst?: string; sgst?: string; igst?: string } = {};
+        if (prefs.CGST) taxEntry.cgst = prefs.CGST;
+        if (prefs.SGST) taxEntry.sgst = prefs.SGST;
+        if (prefs.IGST) taxEntry.igst = prefs.IGST;
+        if (Object.keys(taxEntry).length > 0) {
+          initTaxEdits[inv.invoice_number] = taxEntry;
+        }
+      }
+
       const rows = buildTallyPreview({
         invoices, ...masters,
         purchaseLedgers: masters.purchaseLedgerMasters.map((l) => ({ gst_percent: null as null, tally_ledger_name: l.tally_ledger_name })),
@@ -1588,6 +1857,9 @@ export default function XmlGeneratorPage() {
         stockItemMode: fresh.stock_item_mode,
       });
       setPreviewRows(rows);
+      // Store vendor preferences so FlatPreviewTable can initialize from them
+      setCachedVendorPrefTaxEdits(initTaxEdits);
+      setCachedVendorPrefPLEdits(initPLEdits);
 
     } catch (e: unknown) {
       setPreviewError(e instanceof Error ? e.message : 'Preview failed');
@@ -2022,6 +2294,8 @@ export default function XmlGeneratorPage() {
                 dutiesTaxesMasters={(cachedMasters?.dutiesTaxes ?? []).map((d) => ({ tax_component: d.tax_component, tally_ledger_name: d.tally_ledger_name }))}
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
+                initialVendorPrefTaxEdits={cachedVendorPrefTaxEdits}
+                initialVendorPrefPLEdits={cachedVendorPrefPLEdits}
                 onMapExpense={async (description, ledgerName) => {
                   if (!company?.id) return;
                   if (description === 'Discount') {
