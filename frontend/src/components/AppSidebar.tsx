@@ -14,6 +14,7 @@ const NAV = [
     icon: '📋',
     children: [
       { label: 'Supplier Master', href: '/masters/suppliers', icon: '👥' },
+      { label: 'Customer Masters', href: '/masters/customers', icon: '🧑‍💼' },
       { label: 'Stock Items', href: '/masters/stock-items', icon: '📦' },
       { label: 'Purchase Ledgers', href: '/masters/purchase-ledger', icon: '📒' },
       { label: 'Expense Ledgers', href: '/masters/expense-ledgers', icon: '💸' },
@@ -24,6 +25,16 @@ const NAV = [
   },
   { label: 'Purchase Register', href: '/register', icon: '📊' },
   { label: 'Export to Tally', href: '/xml', icon: '💾' },
+  {
+    label: 'Sales',
+    icon: '🧾',
+    children: [
+      { label: 'Sales PDF Upload', href: '/sales/upload', icon: '📤' },
+      { label: 'Sales Excel Import', href: '/sales/excel-import', icon: '📥' },
+      { label: 'Sales Register', href: '/sales/register', icon: '📈' },
+      { label: 'Sales Export', href: '/sales/xml', icon: '💾' },
+    ],
+  },
 ];
 
 export default function AppSidebar() {

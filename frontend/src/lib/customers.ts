@@ -1,32 +1,60 @@
 // Customer Master - company-scoped, stored in Supabase.
-// Clone of suppliers.ts adapted for the customer_masters table (Sales Register).
+// Unique constraints: company_id + customer_gstin (B2B) | company_id + tally_ledger_name (B2C)
 //
-// KEY RULES (mirror suppliers.ts):
+// KEY RULES (do not violate):
 //   1. tally_ledger_name is stored and output EXACTLY as imported - no trim, no normalisation.
 //   2. Matching/dedup uses normalised comparison internally but never mutates the stored value.
 //   3. State is ALWAYS auto-derived - never entered by user.
 //   4. Invalid GSTIN format is allowed - import proceeds, gstin_valid = false.
 //   5. learnCustomerName() updates customer_name only - never touches tally_ledger_name.
-//   6. B2C customers: customer_gstin = '' and is_b2c = true.
 
 import { getSupabase } from './supabase';
-import { deriveStateFromGstin, validateGstin, normaliseGstin } from './suppliers';
-
-export { deriveStateFromGstin, validateGstin, normaliseGstin };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+const STATE_CODES: Record<string, string> = {
+  '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab',
+  '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi',
+  '08': 'Rajasthan', '09': 'Uttar Pradesh', '10': 'Bihar', '11': 'Sikkim',
+  '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur', '15': 'Mizoram',
+  '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+  '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh',
+  '24': 'Gujarat', '26': 'Dadra & Nagar Haveli and Daman & Diu', '27': 'Maharashtra',
+  '28': 'Andhra Pradesh', '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep',
+  '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry', '35': 'Andaman & Nicobar Islands',
+  '36': 'Telangana', '37': 'Andhra Pradesh (New)', '38': 'Ladakh',
+  '97': 'Other Territory', '99': 'Centre Jurisdiction',
+};
+
+export function deriveStateFromCustomerGstin(gstin: string): string | null {
+  const code = gstin.trim().substring(0, 2);
+  return STATE_CODES[code] ?? null;
+}
+
+const UNREGISTERED_MARKERS = new Set([
+  'UNREGISTERED', 'URD', 'N/A', 'NA', 'NIL', 'NOT APPLICABLE', 'NOT REGISTERED', '-', '',
+]);
+
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
+export function validateCustomerGstin(gstin: string): boolean {
+  return GSTIN_REGEX.test(gstin.trim().toUpperCase());
+}
+
+export function normaliseCustomerGstin(raw: string): string {
+  const up = (raw ?? '').trim().toUpperCase();
+  return UNREGISTERED_MARKERS.has(up) ? '' : up;
+}
 
 export interface CustomerMaster {
   id: string;
   company_id: string;
-  tally_ledger_name: string; // sacred - stored and output exactly as imported
+  tally_ledger_name: string; // sacred
   customer_gstin: string;    // '' for B2C
-  customer_name: string;     // auto = tally_ledger_name initially; updated by invoice learning
-  trade_name: string;        // optional trade/display name
-  state_name: string;        // auto-derived - never user-entered
+  customer_name: string;
+  trade_name: string | null;
+  state_name: string;
   is_b2c: boolean;
   gstin_valid: boolean;
   created_at: string;
@@ -34,8 +62,8 @@ export interface CustomerMaster {
 }
 
 export interface CustomerImportRow {
-  tally_ledger_name: string; // raw from Excel - stored as-is
-  customer_gstin: string;    // raw from Excel - normalised for lookup only
+  tally_ledger_name: string;
+  customer_gstin: string;
 }
 
 export interface CustomerImportResult {
@@ -44,11 +72,14 @@ export interface CustomerImportResult {
   errors: Array<{ row: number; identifier: string; reason: string }>;
 }
 
+// Aliases for backward compatibility with generated page imports
+export const validateGstin = validateCustomerGstin;
+export const normaliseGstin = normaliseCustomerGstin;
+export const deriveStateFromGstin = deriveStateFromCustomerGstin;
+
 export function isB2C(c: CustomerMaster): boolean {
   return c.is_b2c;
 }
-
-// ─── Supabase CRUD ───────────────────────────────────────────────────────────
 
 export async function loadCustomers(companyId: string): Promise<CustomerMaster[]> {
   const { data, error } = await db()
@@ -63,27 +94,25 @@ export async function loadCustomers(companyId: string): Promise<CustomerMaster[]
 export async function addCustomer(
   companyId: string,
   params: {
-    tally_ledger_name: string; // stored exactly as provided
+    tally_ledger_name: string;
     customer_gstin: string;
     customer_name?: string;
-    trade_name?: string;
-    companyState?: string;     // used for B2C state fallback
+    companyState?: string;
   },
 ): Promise<CustomerMaster> {
-  const gstin = normaliseGstin(params.customer_gstin);
+  const gstin = normaliseCustomerGstin(params.customer_gstin);
   const b2c = !gstin;
-  const gstinValid = gstin ? validateGstin(gstin) : true;
-
+  const gstinValid = gstin ? validateCustomerGstin(gstin) : true;
   const stateName = gstin
-    ? (deriveStateFromGstin(gstin) ?? '')
+    ? (deriveStateFromCustomerGstin(gstin) ?? '')
     : (params.companyState ?? '');
 
   const payload = {
     company_id: companyId,
-    tally_ledger_name: params.tally_ledger_name, // NO trim - stored exactly as-is
+    tally_ledger_name: params.tally_ledger_name,
     customer_gstin: gstin,
     customer_name: params.customer_name ?? params.tally_ledger_name,
-    trade_name: params.trade_name ?? '',
+    trade_name: null,
     state_name: stateName,
     is_b2c: b2c,
     gstin_valid: gstinValid,
@@ -97,7 +126,6 @@ export async function addCustomer(
     .single();
 
   if (!insertErr) return inserted as CustomerMaster;
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((insertErr as any).code !== '23505') throw insertErr;
 
@@ -129,34 +157,20 @@ export async function addCustomer(
 
 export async function updateCustomer(
   id: string,
-  params: Partial<Pick<CustomerMaster, 'customer_name' | 'customer_gstin' | 'tally_ledger_name' | 'trade_name'>>,
+  params: Partial<Pick<CustomerMaster, 'customer_name' | 'customer_gstin' | 'tally_ledger_name'>>,
   companyState?: string,
 ): Promise<void> {
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-
-  if (params.tally_ledger_name !== undefined) {
-    updates.tally_ledger_name = params.tally_ledger_name; // NO trim
-  }
-  if (params.customer_name !== undefined) {
-    updates.customer_name = params.customer_name;
-  }
-  if (params.trade_name !== undefined) {
-    updates.trade_name = params.trade_name;
-  }
+  if (params.tally_ledger_name !== undefined) updates.tally_ledger_name = params.tally_ledger_name;
+  if (params.customer_name !== undefined) updates.customer_name = params.customer_name;
   if (params.customer_gstin !== undefined) {
-    const gstin = normaliseGstin(params.customer_gstin);
+    const gstin = normaliseCustomerGstin(params.customer_gstin);
     updates.customer_gstin = gstin;
     updates.is_b2c = !gstin;
-    updates.gstin_valid = gstin ? validateGstin(gstin) : true;
-    updates.state_name = gstin
-      ? (deriveStateFromGstin(gstin) ?? '')
-      : (companyState ?? '');
+    updates.gstin_valid = gstin ? validateCustomerGstin(gstin) : true;
+    updates.state_name = gstin ? (deriveStateFromCustomerGstin(gstin) ?? '') : (companyState ?? '');
   }
-
-  const { error } = await db()
-    .from('customer_masters')
-    .update(updates)
-    .eq('id', id);
+  const { error } = await db().from('customer_masters').update(updates).eq('id', id);
   if (error) throw error;
 }
 
@@ -165,8 +179,6 @@ export async function deleteCustomer(id: string): Promise<void> {
   if (error) throw error;
 }
 
-// Word-overlap similarity check - prevents learnCustomerName from overwriting
-// customer_name with an unrelated business name when the GSTIN is wrong.
 function namesAreSimilar(a: string, b: string): boolean {
   const words = (s: string) =>
     s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
@@ -179,16 +191,13 @@ function namesAreSimilar(a: string, b: string): boolean {
   return hits.length >= 1;
 }
 
-// Auto-learn: called when a sales invoice is accepted.
-// Updates customer_name from invoice if GSTIN matches AND the invoice name is similar.
-// NEVER touches tally_ledger_name.
 export async function learnCustomerName(
   companyId: string,
   gstin: string,
   invoiceCustomerName: string,
 ): Promise<void> {
   if (!gstin || !invoiceCustomerName) return;
-  const normGstin = normaliseGstin(gstin);
+  const normGstin = normaliseCustomerGstin(gstin);
   if (!normGstin) return;
 
   const { data: existing } = await db()
@@ -199,11 +208,8 @@ export async function learnCustomerName(
     .single();
 
   if (!existing) return;
-
   if (!namesAreSimilar(invoiceCustomerName, existing.tally_ledger_name)) {
-    console.warn(
-      `learnCustomerName: skipped - invoice name "${invoiceCustomerName}" shares no words with ledger "${existing.tally_ledger_name}" (GSTIN ${normGstin}).`,
-    );
+    console.warn(`learnCustomerName: skipped - invoice name "${invoiceCustomerName}" shares no words with ledger "${existing.tally_ledger_name}" (GSTIN ${normGstin}).`);
     return;
   }
 
@@ -215,7 +221,6 @@ export async function learnCustomerName(
   if (error) console.warn('learnCustomerName failed silently:', error.message);
 }
 
-// Bulk upsert from Excel import. tally_ledger_name stored EXACTLY as in Excel.
 export async function bulkUpsertCustomers(
   companyId: string,
   rows: CustomerImportRow[],
@@ -237,8 +242,8 @@ export async function bulkUpsertCustomers(
 
   rows.forEach((row, i) => {
     const rowNum = i + 2;
-    const ledger = row.tally_ledger_name; // intentionally NOT trimmed
-    const gstin = normaliseGstin(row.customer_gstin);
+    const ledger = row.tally_ledger_name;
+    const gstin = normaliseCustomerGstin(row.customer_gstin);
     const b2c = !gstin;
 
     if (!ledger || !ledger.trim()) {
@@ -253,36 +258,27 @@ export async function bulkUpsertCustomers(
     }
     seenInFile.add(dedupeKey);
 
-    const gstinValid = gstin ? validateGstin(gstin) : true;
-    const stateName = gstin
-      ? (deriveStateFromGstin(gstin) ?? companyState)
-      : companyState;
+    const gstinValid = gstin ? validateCustomerGstin(gstin) : true;
+    const stateName = gstin ? (deriveStateFromCustomerGstin(gstin) ?? companyState) : companyState;
 
     const payload = {
       company_id: companyId,
-      tally_ledger_name: ledger, // NO trim - sacred
+      tally_ledger_name: ledger,
       customer_gstin: gstin,
       customer_name: ledger,
-      trade_name: '',
+      trade_name: null,
       state_name: stateName,
       is_b2c: b2c,
       gstin_valid: gstinValid,
       updated_at: new Date().toISOString(),
     };
 
-    const existingRecord = b2c
-      ? existingByLedger.get(ledger)
-      : existingByGstin.get(gstin);
+    const existingRecord = b2c ? existingByLedger.get(ledger) : existingByGstin.get(gstin);
 
     if (existingRecord) {
       toUpdate.push({
         id: existingRecord.id,
-        payload: {
-          tally_ledger_name: ledger,
-          state_name: stateName,
-          gstin_valid: gstinValid,
-          updated_at: new Date().toISOString(),
-        },
+        payload: { tally_ledger_name: ledger, state_name: stateName, gstin_valid: gstinValid, updated_at: new Date().toISOString() },
       });
       result.updated++;
     } else {
@@ -303,12 +299,11 @@ export async function bulkUpsertCustomers(
   return result;
 }
 
-// Returns the Tally ledger name for a customer GSTIN within a company, or null.
 export async function lookupCustomerLedger(
   companyId: string,
   gstin: string,
 ): Promise<string | null> {
-  const normGstin = normaliseGstin(gstin);
+  const normGstin = normaliseCustomerGstin(gstin);
   if (!normGstin) return null;
   const { data } = await db()
     .from('customer_masters')

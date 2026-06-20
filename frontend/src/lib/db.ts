@@ -417,6 +417,9 @@ export async function insertAcceptedInvoices(
       company_id: companyId,
       filename,
       original_filename: filename,
+      voucher_class: 'purchase',
+      voucher_direction: 'inward',
+      source: 'pdf_extraction',
       vendor_name: inv.vendor_name,
       vendor_gstin: inv.vendor_gstin,
       vendor_address: inv.vendor_address,
@@ -487,6 +490,9 @@ export async function insertRejectedInvoices(
       company_id: companyId,
       filename,
       original_filename: filename,
+      voucher_class: 'purchase',
+      voucher_direction: 'inward',
+      source: 'pdf_extraction',
       vendor_name: inv.vendor_name,
       vendor_gstin: inv.vendor_gstin,
       vendor_address: inv.vendor_address,
@@ -590,6 +596,8 @@ export async function saveBatchWithPeriod(
         company_id: companyId,
         filename: fr.filename,
         original_filename: fr.filename,
+        voucher_class: 'purchase',
+        source: 'pdf_extraction',
         vendor_name: inv.vendor_name,
         vendor_gstin: inv.vendor_gstin,
         vendor_address: inv.vendor_address,
@@ -643,6 +651,7 @@ export async function getPendingInvoices(
     .from('invoices')
     .select('*')
     .eq('company_id', companyId)
+    .eq('voucher_class', 'purchase')
     .eq('status', 'pending_review')
     .order('created_at', { ascending: true });
   if (batchId) q = q.eq('batch_id', batchId);
@@ -781,6 +790,7 @@ export async function getPurchaseRegister(
     .from('invoices')
     .select('*')
     .eq('company_id', companyId)
+    .eq('voucher_class', 'purchase')
     .eq('status', 'accepted')
     .order('invoice_date', { ascending: false })
     .order('accepted_at', { ascending: false });
