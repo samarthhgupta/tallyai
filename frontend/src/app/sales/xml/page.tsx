@@ -104,7 +104,7 @@ function InvoiceRow({ inv, customers, dutiesTaxes, salesLedgerOptions, companyId
   const defaultCustomerLedger = customerMaster?.tally_ledger_name ?? (inv.buyer_name ?? '');
 
   const [customerLedger, setCustomerLedger] = useState(existing?.customerLedger || defaultCustomerLedger);
-  const [salesLedger, setSalesLedger] = useState(existing?.salesLedger ?? '');
+  const [salesLedger, setSalesLedger] = useState(existing?.salesLedger ?? 'Sales');
   const [cgstLedger, setCgstLedger] = useState(existing?.cgstLedger ?? '');
   const [sgstLedger, setSgstLedger] = useState(existing?.sgstLedger ?? '');
   const [igstLedger, setIgstLedger] = useState(existing?.igstLedger ?? '');
@@ -345,8 +345,8 @@ export default function SalesXmlPage() {
         setTallyCompanyName(comp.tally_company_name ?? comp.name);
         setCompanyGstin(comp.gstin ?? '');
 
-        // Build sales ledger options from learned preferences
-        const salesLedgers = new Set<string>();
+        // Build sales ledger options from learned preferences; always include default
+        const salesLedgers = new Set<string>(['Sales']);
         for (const inv of invData) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const acc = inv.tally_ledger_acceptance as any;

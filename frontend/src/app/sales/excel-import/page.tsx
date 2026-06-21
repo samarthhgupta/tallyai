@@ -228,10 +228,15 @@ export default function SalesExcelImportPage() {
         {invoices.length > 0 && (
           <>
             <div className="mb-4 flex items-center justify-between">
-              <div>
+              <div className="flex items-center gap-3 flex-wrap">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {invoices.length} invoices from{' '}
                   <span className="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1 rounded">{filename}</span>
+                </span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  B2B: <strong>{invoices.filter(i => i.buyer_gstin).length}</strong>
+                  {' · '}
+                  B2C: <strong>{invoices.filter(i => !i.buyer_gstin).length}</strong>
                 </span>
               </div>
               <button
