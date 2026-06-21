@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { parseExcelSalesFile } from '@/lib/salesExtract';
-import { createSalesBatch, insertAcceptedSalesExcelInvoices } from '@/lib/salesDb';
+import { createSalesBatch, insertAcceptedSalesExcelInvoices, checkExcelDuplicates } from '@/lib/salesDb';
 import { learnCustomerName } from '@/lib/customers';
 import type { ExtractedInvoice } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
@@ -33,11 +33,17 @@ export default function SalesExcelImportPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // Duplicate detection state
+  const [duplicates, setDuplicates] = useState<string[]>([]);
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
+
   const handleFile = useCallback(async (file: File) => {
     setLoading(true);
     setError(null);
     setInvoices([]);
     setParseErrors([]);
+    setDuplicates([]);
+    setShowDuplicateWarning(false);
     try {
       const result = await parseExcelSalesFile(file);
       setFilename(file.name);
@@ -61,33 +67,65 @@ export default function SalesExcelImportPage() {
     if (file) handleFile(file);
   }, [handleFile]);
 
+  // Called when the user clicks "Import" — checks for duplicates first.
   const handleImport = async () => {
     if (!invoices.length) return;
     setSaving(true);
     setError(null);
+    setDuplicates([]);
+    setShowDuplicateWarning(false);
     try {
       const session = await getSession();
       if (!session) { router.push('/login'); return; }
       if (!company) { router.push('/select-company'); return; }
 
-      const batchId = await createSalesBatch(company.id, 1, fy, 'excel_import');
-      const items = invoices.map((inv) => ({ inv, filename }));
-      await insertAcceptedSalesExcelInvoices(company.id, batchId, items, fy);
-
-      // Learn customer names for GSTIN-bearing invoices
-      for (const inv of invoices) {
-        if (inv.buyer_gstin && inv.buyer_name) {
-          await learnCustomerName(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => {});
-        }
+      // Duplicate check before any DB write
+      const invoiceNumbers = invoices.map((inv) => inv.invoice_number).filter(Boolean);
+      const dupes = await checkExcelDuplicates(company.id, invoiceNumbers, fy);
+      if (dupes.length > 0) {
+        setDuplicates(dupes);
+        setShowDuplicateWarning(true);
+        setSaving(false);
+        return; // stop — wait for user decision
       }
 
-      setSuccess(true);
-      setTimeout(() => router.push('/sales/register'), 1200);
+      await doImport(company.id);
     } catch (e) {
       setError(getErrMsg(e));
     } finally {
       setSaving(false);
     }
+  };
+
+  // Called when user confirms they want to proceed despite duplicates.
+  const handleForceImport = async () => {
+    if (!company) return;
+    setSaving(true);
+    setShowDuplicateWarning(false);
+    setError(null);
+    try {
+      await doImport(company.id);
+    } catch (e) {
+      setError(getErrMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const doImport = async (companyId: string) => {
+    const batchId = await createSalesBatch(companyId, 1, fy, 'excel_import');
+    const items = invoices.map((inv) => ({ inv, filename }));
+    await insertAcceptedSalesExcelInvoices(companyId, batchId, items, fy);
+
+    // Learn customer names for GSTIN-bearing invoices
+    for (const inv of invoices) {
+      if (inv.buyer_gstin && inv.buyer_name) {
+        await learnCustomerName(companyId, inv.buyer_gstin, inv.buyer_name).catch(() => {});
+      }
+    }
+
+    setSuccess(true);
+    setTimeout(() => router.push('/sales/register'), 1200);
   };
 
   const totalTaxable = invoices.reduce((s, inv) => s + (inv.subtotal ?? 0), 0);
@@ -113,6 +151,40 @@ export default function SalesExcelImportPage() {
         {success && (
           <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg text-sm text-green-700 dark:text-green-400">
             ✓ {invoices.length} invoices imported. Redirecting to Sales Register…
+          </div>
+        )}
+
+        {/* Duplicate warning dialog */}
+        {showDuplicateWarning && (
+          <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">
+              {duplicates.length} invoice{duplicates.length !== 1 ? 's' : ''} already exist in the Sales Register for FY {fy}
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
+              Importing will create duplicate records. Cancel to skip, or proceed to import anyway.
+            </p>
+            <div className="flex flex-wrap gap-1.5 mb-3 max-h-24 overflow-y-auto">
+              {duplicates.map((num) => (
+                <span key={num} className="inline-block px-2 py-0.5 bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-300 text-xs font-mono rounded">
+                  {num}
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleForceImport}
+                disabled={saving}
+                className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                Import Anyway
+              </button>
+              <button
+                onClick={() => { setShowDuplicateWarning(false); setDuplicates([]); }}
+                className="px-4 py-2 border border-amber-300 dark:border-amber-700 text-sm text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
@@ -163,7 +235,7 @@ export default function SalesExcelImportPage() {
                 </span>
               </div>
               <button
-                onClick={() => { setInvoices([]); setParseErrors([]); setFilename(''); setError(null); }}
+                onClick={() => { setInvoices([]); setParseErrors([]); setFilename(''); setError(null); setDuplicates([]); setShowDuplicateWarning(false); }}
                 className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
               >
                 Clear
@@ -184,9 +256,13 @@ export default function SalesExcelImportPage() {
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                   {invoices.map((inv, i) => {
                     const gst = (inv.cgst ?? 0) + (inv.sgst ?? 0) + (inv.igst ?? 0);
+                    const isDupe = duplicates.includes(inv.invoice_number);
                     return (
-                      <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                        <td className="px-3 py-2 font-mono text-gray-900 dark:text-gray-100">{inv.invoice_number}</td>
+                      <tr key={i} className={`hover:bg-gray-50 dark:hover:bg-gray-800/50 ${isDupe ? 'bg-amber-50 dark:bg-amber-900/10' : ''}`}>
+                        <td className="px-3 py-2 font-mono text-gray-900 dark:text-gray-100">
+                          {inv.invoice_number}
+                          {isDupe && <span className="ml-1.5 text-amber-600 dark:text-amber-400 text-xs font-semibold">dup</span>}
+                        </td>
                         <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{inv.invoice_date}</td>
                         <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{inv.buyer_name}</td>
                         <td className="px-3 py-2 font-mono text-gray-500 dark:text-gray-400">{inv.buyer_gstin || 'B2C'}</td>
@@ -226,10 +302,10 @@ export default function SalesExcelImportPage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleImport}
-                disabled={saving || success}
+                disabled={saving || success || showDuplicateWarning}
                 className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {saving ? 'Importing…' : `Import ${invoices.length} Invoice${invoices.length !== 1 ? 's' : ''}`}
+                {saving ? 'Checking…' : `Import ${invoices.length} Invoice${invoices.length !== 1 ? 's' : ''}`}
               </button>
               <button
                 onClick={() => fileRef.current?.click()}

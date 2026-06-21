@@ -132,6 +132,7 @@ function buildSalesRow(
     company_id: companyId,
     filename,
     original_filename: filename,
+    source_file_name: filename,
     voucher_class: 'sales',
     voucher_direction: 'outward',
     source,
@@ -259,6 +260,27 @@ export async function getSalesRejectedRegister(companyId: string, financialYear?
     .eq('voucher_class', 'sales');
   const salesIds = new Set((salesInv ?? []).map((r: { id: string }) => r.id));
   return rows.filter((r) => salesIds.has(r.invoice_id));
+}
+
+/**
+ * Check which invoice numbers from a proposed Excel import already exist
+ * as accepted sales invoices for this company + FY. Returns the duplicates.
+ */
+export async function checkExcelDuplicates(
+  companyId: string,
+  invoiceNumbers: string[],
+  financialYear: string,
+): Promise<string[]> {
+  if (!invoiceNumbers.length) return [];
+  const { data, error } = await db()
+    .from('invoices')
+    .select('invoice_number')
+    .eq('company_id', companyId)
+    .eq('voucher_class', 'sales')
+    .eq('financial_year', financialYear)
+    .in('invoice_number', invoiceNumbers);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r: { invoice_number: string }) => r.invoice_number);
 }
 
 /** Delete ALL sales invoices for a company. Scoped to voucher_class='sales' only — never touches purchase data. */
