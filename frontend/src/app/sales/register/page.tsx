@@ -4,8 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import * as XLSX from 'xlsx';
 import { getSession } from '@/lib/auth';
-import { deleteInvoice, deleteAllCompanyInvoices, rejectInvoices, restoreRejectedInvoice } from '@/lib/db';
-import { getSalesRegister, getSalesRejectedRegister } from '@/lib/salesDb';
+import { deleteInvoice, rejectInvoices, restoreRejectedInvoice } from '@/lib/db';
+import { getSalesRegister, getSalesRejectedRegister, deleteAllSalesInvoices } from '@/lib/salesDb';
 import type { StoredInvoice } from '@/types/invoice';
 import { formatINR, buildFullTaxSummary, calcLineAmount } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
@@ -291,7 +291,7 @@ export default function SalesRegisterPage() {
   const handleDeleteAll = async () => {
     setDeleteAllLoading(true);
     try {
-      const count = await deleteAllCompanyInvoices(selectedCompanyId);
+      const count = await deleteAllSalesInvoices(selectedCompanyId);
       setInvoices([]);
       setShowDeleteAll(false);
       setDeleteAllConfirmText('');

@@ -260,3 +260,15 @@ export async function getSalesRejectedRegister(companyId: string, financialYear?
   const salesIds = new Set((salesInv ?? []).map((r: { id: string }) => r.id));
   return rows.filter((r) => salesIds.has(r.invoice_id));
 }
+
+/** Delete ALL sales invoices for a company. Scoped to voucher_class='sales' only — never touches purchase data. */
+export async function deleteAllSalesInvoices(companyId: string): Promise<number> {
+  const { data, error } = await db()
+    .from('invoices')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('voucher_class', 'sales')
+    .select('id');
+  if (error) throw new Error(error.message);
+  return (data ?? []).length;
+}
