@@ -198,7 +198,7 @@ export default function CustomerMastersPage() {
     ]);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Customer Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Debtors');
     XLSX.writeFile(wb, 'TallyAI_Customer_Master_Template.xlsx');
   };
 
@@ -268,7 +268,7 @@ export default function CustomerMastersPage() {
     const ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 35 }, { wch: 20 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Customer Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Debtors');
     XLSX.writeFile(wb, `CustomerMaster_${company?.name ?? 'export'}.xlsx`);
   };
 

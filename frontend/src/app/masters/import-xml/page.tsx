@@ -7,10 +7,13 @@ import { getSession } from '@/lib/auth';
 import { useCompany } from '@/lib/companyContext';
 import { bulkUpsertStockItems, type StockItemImportRow } from '@/lib/stockItems';
 import { bulkUpsertSuppliers, type ImportRow as SupplierRow } from '@/lib/suppliers';
+import { bulkUpsertCustomers, type CustomerImportRow } from '@/lib/customers';
 import { addPurchaseLedger } from '@/lib/purchaseLedgers';
+import { addSalesLedger } from '@/lib/salesLedgerConfig';
 import { bulkUpsertExpenseLedgers, type ExpenseLedgerImportRow } from '@/lib/expenseLedgers';
 import { addDutiesTaxes, TAX_COMPONENTS, type TaxComponent } from '@/lib/dutiesTaxes';
 import { upsertVoucherType, type PurchaseCategory } from '@/lib/voucherTypes';
+import { upsertFixedAssets, type FixedAssetInsert } from '@/lib/fixedAssets';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,10 +31,13 @@ interface VoucherTypeRow {
 interface ParsedData {
   stockItems: StockItemImportRow[];
   suppliers: SupplierRow[];
+  customers: CustomerImportRow[];
   purchaseLedgers: string[];
+  salesLedgers: string[];
   expenseLedgers: ExpenseLedgerImportRow[];
   dutiesTaxes: DutyRow[];
   voucherTypes: VoucherTypeRow[];
+  fixedAssets: FixedAssetInsert[];
   skipped: number;
   fileName: string;
 }
@@ -39,16 +45,39 @@ interface ParsedData {
 interface ImportResults {
   stockItems: { inserted: number; updated: number; errors: number };
   suppliers: { inserted: number; updated: number; errors: number };
+  customers: { inserted: number; updated: number; errors: number };
   purchaseLedgers: { added: number; skipped: number };
+  salesLedgers: { added: number; skipped: number };
   expenseLedgers: { inserted: number; updated: number; errors: number };
   dutiesTaxes: { added: number; errors: number };
   voucherTypes: { added: number; errors: number };
+  fixedAssets: { inserted: number; updated: number; errors: number };
 }
+
+// Tally accounting root groups — classification stops at first hit when walking up.
+const CLASSIFICATION_ROOTS = new Set([
+  'Sundry Debtors',
+  'Sundry Creditors',
+  'Purchase Accounts',
+  'Sales Accounts',
+  'Indirect Expenses',
+  'Direct Expenses',
+  'Duties & Taxes',
+  'Fixed Assets',
+  'Current Assets',
+  'Current Liabilities',
+  'Capital Account',
+  'Bank Accounts',
+  'Investments',
+  'Loans (Liability)',
+  'Indirect Incomes',
+  'Direct Incomes',
+  'Primary',
+]);
 
 // ── XML Parsing ───────────────────────────────────────────────────────────────
 
 function stripTallyControlChars(xml: string): string {
-  // Remove Tally's &#4; and other control character references (< 0x20, except tab/LF/CR)
   return xml.replace(/&#(\d+);/g, (_, n) => {
     const code = parseInt(n, 10);
     if (code < 32 && code !== 9 && code !== 10 && code !== 13) return '';
@@ -60,14 +89,29 @@ function getText(el: Element, tag: string): string {
   return el.getElementsByTagName(tag)[0]?.textContent?.trim() ?? '';
 }
 
+/** Walk parent chain to find accounting root. Returns null if cycle or unknown. */
+function resolveRoot(groupName: string, groupParentMap: Map<string, string>, maxDepth = 30): string | null {
+  let current = groupName;
+  for (let i = 0; i < maxDepth; i++) {
+    if (CLASSIFICATION_ROOTS.has(current)) return current;
+    const parent = groupParentMap.get(current);
+    if (!parent || parent === current) return null;
+    current = parent;
+  }
+  return null;
+}
+
 function parseTallyXml(rawContent: string, fileName: string): ParsedData {
   const result: ParsedData = {
     stockItems: [],
     suppliers: [],
+    customers: [],
     purchaseLedgers: [],
+    salesLedgers: [],
     expenseLedgers: [],
     dutiesTaxes: [],
     voucherTypes: [],
+    fixedAssets: [],
     skipped: 0,
     fileName,
   };
@@ -78,6 +122,19 @@ function parseTallyXml(rawContent: string, fileName: string): ParsedData {
     doc = new DOMParser().parseFromString(cleaned, 'text/xml');
   } catch {
     return result;
+  }
+
+  // ── Pass 1: Build group → parent map ─────────────────────────────────────
+  // Seed with the known Tally accounting roots pointing to 'Primary'.
+  const groupParentMap = new Map<string, string>();
+  CLASSIFICATION_ROOTS.forEach((root) => groupParentMap.set(root, 'Primary'));
+
+  const groupEls = doc.getElementsByTagName('GROUP');
+  for (let i = 0; i < groupEls.length; i++) {
+    const el = groupEls[i];
+    const name = el.getAttribute('NAME') ?? getText(el, 'NAME');
+    const parent = getText(el, 'PARENT');
+    if (name && parent) groupParentMap.set(name, parent);
   }
 
   // ── Stock Items ───────────────────────────────────────────────────────────
@@ -96,44 +153,54 @@ function parseTallyXml(rawContent: string, fileName: string): ParsedData {
     result.stockItems.push({ tally_item_name: name, hsn_code: hsn, unit, gst_percent: gstPercent });
   }
 
-  // ── Ledgers (route by parent group) ──────────────────────────────────────
+  // ── Pass 2: Route each LEDGER by resolved accounting root ────────────────
   const ledgerEls = doc.getElementsByTagName('LEDGER');
   for (let i = 0; i < ledgerEls.length; i++) {
     const el = ledgerEls[i];
     const name = el.getAttribute('NAME') ?? getText(el, 'NAME');
     if (!name || name.includes('Not Applicable')) continue;
 
-    const parent = getText(el, 'PARENT');
-    const parentLower = parent.toLowerCase();
+    const immediateParent = getText(el, 'PARENT');
+    const root = resolveRoot(immediateParent, groupParentMap);
 
-    if (parent === 'Sundry Creditors') {
-      // PARTYGSTIN is the party-level field in most Tally versions.
-      // GSTIN is a fallback used in some Tally ERP 9 / Prime exports.
-      // GSTREGISTRATIONNUMBER does not appear in practice.
+    if (root === 'Sundry Creditors') {
       const gstin = getText(el, 'PARTYGSTIN') || getText(el, 'GSTIN') || '';
       result.suppliers.push({ tally_ledger_name: name, vendor_gstin: gstin });
-    } else if (parent === 'Purchase Accounts' || parent === 'Purchase') {
+
+    } else if (root === 'Sundry Debtors') {
+      const gstin = getText(el, 'PARTYGSTIN') || getText(el, 'GSTIN') || '';
+      result.customers.push({ tally_ledger_name: name, customer_gstin: gstin });
+
+    } else if (root === 'Purchase Accounts') {
       if (!result.purchaseLedgers.includes(name)) result.purchaseLedgers.push(name);
-    } else if (parentLower.includes('expense') || parentLower.includes('expenditure')) {
-      // HSN/SAC: inside <HSNDETAILS.LIST><HSNCODE>. Empty when SRCOFHSNDETAILS is
-      // "As per Company/Group" — those have no ledger-level code; import blank.
+
+    } else if (root === 'Sales Accounts') {
+      if (!result.salesLedgers.includes(name)) result.salesLedgers.push(name);
+
+    } else if (root === 'Indirect Expenses' || root === 'Direct Expenses') {
       const sacCode = getText(el, 'HSNCODE').replace(/Not Applicable/i, '').trim() || undefined;
-      // GSTDETAILS.LIST contains one entry per duty head: CGST first, then SGST,
-      // then IGST. getElementsByTagName returns the CGST component rate (e.g. 9
-      // for 18% GST, 2.5 for 5% GST) — double it to get the total rate, same
-      // logic as the stock item parser.
       const gstRateRaw = getText(el, 'GSTRATE');
       const halfRate = gstRateRaw ? parseFloat(gstRateRaw) : NaN;
       const gstPercent = !isNaN(halfRate) && halfRate > 0 ? halfRate * 2 : null;
-      result.expenseLedgers.push({
-        tally_ledger_name: name,
-        sac_code: sacCode,
-        gst_percent: gstPercent,
-      });
-    } else if (parent === 'Duties & Taxes') {
+      result.expenseLedgers.push({ tally_ledger_name: name, sac_code: sacCode, gst_percent: gstPercent });
+
+    } else if (root === 'Duties & Taxes') {
       const parsed = parseDutyLedger(name);
       if (parsed) result.dutiesTaxes.push({ ...parsed, ledgerName: name });
       else result.skipped++;
+
+    } else if (root === 'Fixed Assets') {
+      result.fixedAssets.push({
+        company_id: '',  // filled in during import
+        tally_ledger_name: name,
+        asset_group: immediateParent || 'Fixed Assets',
+        hsn_code: getText(el, 'HSNCODE').replace(/Not Applicable/i, '').trim() || null,
+        gst_percent: null,
+        gst_applicable: true,
+        type_of_supply: 'Goods',
+        state_name: null,
+      });
+
     } else {
       result.skipped++;
     }
@@ -165,7 +232,6 @@ function parseDutyLedger(name: string): { component: TaxComponent; rate: number 
   }
   if (!component) return null;
 
-  // Extract rate from patterns like "@9%", "@9", "9%", " 18"
   const rateMatch = name.match(/@\s*([\d.]+)|(\d+(?:\.\d+)?)\s*%/);
   const rate = rateMatch ? parseFloat(rateMatch[1] ?? rateMatch[2]) : null;
 
@@ -179,7 +245,6 @@ async function readFileAsText(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = (e) => {
       const buf = e.target?.result as ArrayBuffer;
-      // Try UTF-16 first (Tally default), fall back to UTF-8
       try {
         const text = new TextDecoder('utf-16').decode(buf);
         if (text.includes('<')) { resolve(text); return; }
@@ -189,13 +254,6 @@ async function readFileAsText(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsArrayBuffer(file);
   });
-}
-
-// ── Summary helpers ───────────────────────────────────────────────────────────
-
-function totalItems(d: ParsedData) {
-  return d.stockItems.length + d.suppliers.length + d.purchaseLedgers.length +
-    d.expenseLedgers.length + d.dutiesTaxes.length + d.voucherTypes.length;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -224,12 +282,12 @@ export default function ImportXmlPage() {
     setResults(null);
     setImportError('');
     try {
-      const results: ParsedData[] = [];
+      const out: ParsedData[] = [];
       for (let i = 0; i < files.length; i++) {
         const text = await readFileAsText(files[i]);
-        results.push(parseTallyXml(text, files[i].name));
+        out.push(parseTallyXml(text, files[i].name));
       }
-      setParsed(results);
+      setParsed(out);
     } finally {
       setParsing(false);
     }
@@ -241,12 +299,15 @@ export default function ImportXmlPage() {
   }, [handleFiles]);
 
   const merged = {
-    stockItems:     parsed.flatMap((p) => p.stockItems),
-    suppliers:      parsed.flatMap((p) => p.suppliers),
+    stockItems:      parsed.flatMap((p) => p.stockItems),
+    suppliers:       parsed.flatMap((p) => p.suppliers),
+    customers:       parsed.flatMap((p) => p.customers),
     purchaseLedgers: Array.from(new Set(parsed.flatMap((p) => p.purchaseLedgers))),
-    expenseLedgers: parsed.flatMap((p) => p.expenseLedgers),
-    dutiesTaxes:    parsed.flatMap((p) => p.dutiesTaxes),
-    voucherTypes:   parsed.flatMap((p) => p.voucherTypes),
+    salesLedgers:    Array.from(new Set(parsed.flatMap((p) => p.salesLedgers))),
+    expenseLedgers:  parsed.flatMap((p) => p.expenseLedgers),
+    dutiesTaxes:     parsed.flatMap((p) => p.dutiesTaxes),
+    voucherTypes:    parsed.flatMap((p) => p.voucherTypes),
+    fixedAssets:     parsed.flatMap((p) => p.fixedAssets),
   };
 
   const handleImport = async () => {
@@ -254,12 +315,15 @@ export default function ImportXmlPage() {
     setImporting(true);
     setImportError('');
     const res: ImportResults = {
-      stockItems:     { inserted: 0, updated: 0, errors: 0 },
-      suppliers:      { inserted: 0, updated: 0, errors: 0 },
+      stockItems:      { inserted: 0, updated: 0, errors: 0 },
+      suppliers:       { inserted: 0, updated: 0, errors: 0 },
+      customers:       { inserted: 0, updated: 0, errors: 0 },
       purchaseLedgers: { added: 0, skipped: 0 },
-      expenseLedgers: { inserted: 0, updated: 0, errors: 0 },
-      dutiesTaxes:    { added: 0, errors: 0 },
-      voucherTypes:   { added: 0, errors: 0 },
+      salesLedgers:    { added: 0, skipped: 0 },
+      expenseLedgers:  { inserted: 0, updated: 0, errors: 0 },
+      dutiesTaxes:     { added: 0, errors: 0 },
+      voucherTypes:    { added: 0, errors: 0 },
+      fixedAssets:     { inserted: 0, updated: 0, errors: 0 },
     };
 
     try {
@@ -273,13 +337,19 @@ export default function ImportXmlPage() {
         res.suppliers = { inserted: r.inserted, updated: r.updated, errors: r.errors.length };
       }
 
+      if (merged.customers.length) {
+        const r = await bulkUpsertCustomers(company.id, merged.customers, company.state_name ?? '');
+        res.customers = { inserted: r.inserted, updated: r.updated, errors: r.errors.length };
+      }
+
       for (const name of merged.purchaseLedgers) {
-        try {
-          await addPurchaseLedger(company.id, name);
-          res.purchaseLedgers.added++;
-        } catch {
-          res.purchaseLedgers.skipped++;
-        }
+        try { await addPurchaseLedger(company.id, name); res.purchaseLedgers.added++; }
+        catch { res.purchaseLedgers.skipped++; }
+      }
+
+      for (const name of merged.salesLedgers) {
+        try { await addSalesLedger(company.id, name); res.salesLedgers.added++; }
+        catch { res.salesLedgers.skipped++; }
       }
 
       if (merged.expenseLedgers.length) {
@@ -291,17 +361,23 @@ export default function ImportXmlPage() {
         try {
           await addDutiesTaxes(company.id, { tax_component: d.component, tax_rate: d.rate, tally_ledger_name: d.ledgerName });
           res.dutiesTaxes.added++;
-        } catch {
-          res.dutiesTaxes.errors++;
-        }
+        } catch { res.dutiesTaxes.errors++; }
       }
 
       for (const v of merged.voucherTypes) {
         try {
           await upsertVoucherType(company.id, { purchase_category: v.category, tally_voucher_type_name: v.name });
           res.voucherTypes.added++;
+        } catch { res.voucherTypes.errors++; }
+      }
+
+      if (merged.fixedAssets.length) {
+        const rows = merged.fixedAssets.map((fa) => ({ ...fa, company_id: company.id }));
+        try {
+          await upsertFixedAssets(rows);
+          res.fixedAssets = { inserted: rows.length, updated: 0, errors: 0 };
         } catch {
-          res.voucherTypes.errors++;
+          res.fixedAssets = { inserted: 0, updated: 0, errors: rows.length };
         }
       }
 
@@ -314,9 +390,11 @@ export default function ImportXmlPage() {
     }
   };
 
-  const totalParsed = merged.stockItems.length + merged.suppliers.length +
-    merged.purchaseLedgers.length + merged.expenseLedgers.length +
-    merged.dutiesTaxes.length + merged.voucherTypes.length;
+  const totalParsed =
+    merged.stockItems.length + merged.suppliers.length + merged.customers.length +
+    merged.purchaseLedgers.length + merged.salesLedgers.length +
+    merged.expenseLedgers.length + merged.dutiesTaxes.length +
+    merged.voucherTypes.length + merged.fixedAssets.length;
 
   return (
     <AppLayout>
@@ -324,7 +402,7 @@ export default function ImportXmlPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Import from Tally XML</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Upload Tally &ldquo;All Masters&rdquo; XML exports. Records are auto-routed to the correct master based on their type.
+            Upload Tally &ldquo;All Masters&rdquo; XML exports. Records are auto-routed to the correct master based on their Tally group hierarchy.
           </p>
         </div>
 
@@ -333,13 +411,18 @@ export default function ImportXmlPage() {
           <p className="font-semibold text-sm mb-1">What gets imported</p>
           <ul className="list-disc list-inside space-y-1 text-blue-700 dark:text-blue-300">
             <li><strong>Stock Items</strong> — with HSN code, GST rate, and unit of measure</li>
-            <li><strong>Suppliers</strong> — Sundry Creditors with GSTIN</li>
-            <li><strong>Purchase Ledgers</strong> — ledgers under &ldquo;Purchase Accounts&rdquo;</li>
-            <li><strong>Expense Ledgers</strong> — ledgers under expense groups</li>
+            <li><strong>Sundry Creditors</strong> — supplier ledgers with GSTIN</li>
+            <li><strong>Sundry Debtors</strong> — customer ledgers with GSTIN</li>
+            <li><strong>Purchase Ledgers</strong> — ledgers under &ldquo;Purchase Accounts&rdquo; group tree</li>
+            <li><strong>Sales Ledgers</strong> — ledgers under &ldquo;Sales Accounts&rdquo; group tree</li>
+            <li><strong>Expense Ledgers</strong> — ledgers under Indirect/Direct Expenses group tree</li>
             <li><strong>Duties &amp; Taxes</strong> — CGST/SGST/IGST/CESS ledgers with rates</li>
+            <li><strong>Fixed Assets</strong> — ledgers under Fixed Assets group tree</li>
             <li><strong>Voucher Types</strong> — Purchase voucher types</li>
           </ul>
-          <p className="mt-2 text-blue-600 dark:text-blue-400">All other ledger groups are skipped. Existing records are updated, not duplicated.</p>
+          <p className="mt-2 text-blue-600 dark:text-blue-400">
+            Sub-groups are resolved by walking the full Tally group hierarchy. Existing records are updated, not duplicated.
+          </p>
         </div>
 
         {/* Drop zone */}
@@ -392,10 +475,13 @@ export default function ImportXmlPage() {
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 font-mono truncate">{p.fileName}</p>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <Stat label="Stock Items" count={p.stockItems.length} />
-                    <Stat label="Suppliers" count={p.suppliers.length} />
+                    <Stat label="Sundry Creditors" count={p.suppliers.length} />
+                    <Stat label="Sundry Debtors" count={p.customers.length} />
                     <Stat label="Purchase Ledgers" count={p.purchaseLedgers.length} />
+                    <Stat label="Sales Ledgers" count={p.salesLedgers.length} />
                     <Stat label="Expense Ledgers" count={p.expenseLedgers.length} />
                     <Stat label="Duties & Taxes" count={p.dutiesTaxes.length} />
+                    <Stat label="Fixed Assets" count={p.fixedAssets.length} />
                     <Stat label="Voucher Types" count={p.voucherTypes.length} />
                   </div>
                   {p.skipped > 0 && (
@@ -411,10 +497,13 @@ export default function ImportXmlPage() {
                 <p className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-2">Combined total across all files</p>
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <Stat label="Stock Items" count={merged.stockItems.length} />
-                  <Stat label="Suppliers" count={merged.suppliers.length} />
+                  <Stat label="Sundry Creditors" count={merged.suppliers.length} />
+                  <Stat label="Sundry Debtors" count={merged.customers.length} />
                   <Stat label="Purchase Ledgers" count={merged.purchaseLedgers.length} />
+                  <Stat label="Sales Ledgers" count={merged.salesLedgers.length} />
                   <Stat label="Expense Ledgers" count={merged.expenseLedgers.length} />
                   <Stat label="Duties & Taxes" count={merged.dutiesTaxes.length} />
+                  <Stat label="Fixed Assets" count={merged.fixedAssets.length} />
                   <Stat label="Voucher Types" count={merged.voucherTypes.length} />
                 </div>
               </div>
@@ -466,23 +555,31 @@ export default function ImportXmlPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700 text-xs">
                   <ResultRow label="Stock Items" inserted={results.stockItems.inserted} updated={results.stockItems.updated} errors={results.stockItems.errors} />
-                  <ResultRow label="Suppliers" inserted={results.suppliers.inserted} updated={results.suppliers.updated} errors={results.suppliers.errors} />
+                  <ResultRow label="Sundry Creditors" inserted={results.suppliers.inserted} updated={results.suppliers.updated} errors={results.suppliers.errors} />
+                  <ResultRow label="Sundry Debtors" inserted={results.customers.inserted} updated={results.customers.updated} errors={results.customers.errors} />
                   <tr>
                     <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Purchase Ledgers</td>
-                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.purchaseLedgers.added}</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.purchaseLedgers.added || '—'}</td>
                     <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
                     <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">{results.purchaseLedgers.skipped > 0 ? `${results.purchaseLedgers.skipped} dup` : '—'}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Sales Ledgers</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.salesLedgers.added || '—'}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
+                    <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">{results.salesLedgers.skipped > 0 ? `${results.salesLedgers.skipped} dup` : '—'}</td>
                   </tr>
                   <ResultRow label="Expense Ledgers" inserted={results.expenseLedgers.inserted} updated={results.expenseLedgers.updated} errors={results.expenseLedgers.errors} />
                   <tr>
                     <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Duties &amp; Taxes</td>
-                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.dutiesTaxes.added}</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.dutiesTaxes.added || '—'}</td>
                     <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
                     <td className="px-4 py-3 text-right text-red-500 dark:text-red-400">{results.dutiesTaxes.errors || '—'}</td>
                   </tr>
+                  <ResultRow label="Fixed Assets" inserted={results.fixedAssets.inserted} updated={results.fixedAssets.updated} errors={results.fixedAssets.errors} />
                   <tr>
                     <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-300">Voucher Types</td>
-                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.voucherTypes.added}</td>
+                    <td className="px-4 py-3 text-right text-green-700 dark:text-green-400">{results.voucherTypes.added || '—'}</td>
                     <td className="px-4 py-3 text-right text-gray-400 dark:text-gray-500">—</td>
                     <td className="px-4 py-3 text-right text-red-500 dark:text-red-400">{results.voucherTypes.errors || '—'}</td>
                   </tr>

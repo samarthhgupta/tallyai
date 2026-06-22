@@ -198,7 +198,7 @@ export default function SupplierMastersPage() {
     ]);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Supplier Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Creditors');
     XLSX.writeFile(wb, 'TallyAI_Supplier_Master_Template.xlsx');
   };
 
@@ -268,7 +268,7 @@ export default function SupplierMastersPage() {
     const ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 35 }, { wch: 20 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Supplier Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Creditors');
     XLSX.writeFile(wb, `SupplierMaster_${company?.name ?? 'export'}.xlsx`);
   };
 
@@ -291,7 +291,7 @@ export default function SupplierMastersPage() {
             <div>
               <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Sundry Creditors</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                Maps vendor GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
+                Maps supplier GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
               </p>
             </div>
             <div className="flex gap-2">

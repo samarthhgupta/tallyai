@@ -14,10 +14,16 @@ export function normalisePartyName(name: string): string {
 }
 
 // Pooled/generic ledger names that should never be learned as party-specific preferences.
+// normalisePartyName strips non-alphanumeric chars (including hyphens), so any
+// hyphenated variant like "WALK-IN CUSTOMER" normalises to "WALKIN CUSTOMER".
 const POOLED_LEDGER_NAMES = new Set([
   'CASH', 'CASH SALES', 'RETAIL CUSTOMER', 'RETAIL CUSTOMERS',
-  'WALK IN CUSTOMER', 'WALK-IN CUSTOMER', 'MISCELLANEOUS', 'SUNDRY DEBTORS',
-  'SUNDRY CREDITORS', 'CASH PURCHASE', 'CASH PURCHASES',
+  'WALK IN CUSTOMER', 'WALKIN CUSTOMER',
+  'MISCELLANEOUS', 'SUNDRY DEBTORS', 'SUNDRY CREDITORS',
+  'CASH PURCHASE', 'CASH PURCHASES',
+  // Settlement/aggregator pools
+  'B2C DEBTORS', 'PAYTM SETTLEMENTS', 'UPI SETTLEMENTS',
+  'AMAZON SETTLEMENTS', 'FLIPKART SETTLEMENTS', 'MYNTRA SETTLEMENTS',
 ]);
 
 export function isPooledLedger(name: string | null | undefined): boolean {
