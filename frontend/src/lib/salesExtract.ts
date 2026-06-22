@@ -415,14 +415,21 @@ function parseHierarchical(aoa: unknown[][]): ExcelImportResult {
     const raw = aoa[i] as unknown[];
     if (!raw || raw.every((c) => c == null || c === '' || c === 0)) continue;
 
-    // Skip section headers and pure summary rows; reset anchor so totals rows
-    // immediately after a section header don't attach to the previous invoice.
-    if (isSectionOrSummaryRow(raw, profile)) { anchorInvoiceNumber = ''; continue; }
-
+    // Build rec first so we can inspect item-level fields before boundary detection
     const rec: Record<string, unknown> = {};
     Object.entries(profile.fields).forEach(([idx, field]) => { rec[field] = raw[Number(idx)]; });
 
     const invoiceNum = String(rec.invoice_number ?? '').trim();
+    const recHsn     = String(rec.hsn ?? '').trim();
+    const recDesc    = String(rec.item_description ?? '').trim();
+
+    // Only treat as section boundary when the row has no item-level identifier.
+    // Continuation rows with a numeric-looking HSN (e.g. "63041910") are
+    // incorrectly classified as all-numeric by isSectionOrSummaryRow — guard here.
+    if (!invoiceNum && !recHsn && !recDesc && isSectionOrSummaryRow(raw, profile)) {
+      anchorInvoiceNumber = '';
+      continue;
+    }
 
     if (invoiceNum) {
       // ── Anchor row ──

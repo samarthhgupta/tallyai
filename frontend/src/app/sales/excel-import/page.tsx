@@ -6,10 +6,12 @@ import { getSession } from '@/lib/auth';
 import { parseExcelSalesFile } from '@/lib/salesExtract';
 import { createSalesBatch, insertAcceptedSalesExcelInvoices, checkExcelDuplicates, computeSalesReadiness } from '@/lib/salesDb';
 import { learnCustomerName } from '@/lib/customers';
-import type { ExtractedInvoice, LineItem, ExtraCharge } from '@/types/invoice';
-import { formatINR, buildFullTaxSummary } from '@/types/invoice';
+import type { ExtractedInvoice } from '@/types/invoice';
+import { formatINR } from '@/types/invoice';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 import AppLayout from '@/components/AppLayout';
+import { InvoiceEditPanel } from '@/components/InvoiceEditPanel';
+import type { InvoiceEditData } from '@/components/InvoiceEditPanel';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
@@ -29,412 +31,6 @@ function ReadinessBadge({ readiness }: { readiness: 'ready' | 'warning' | 'criti
   if (readiness === 'warning')
     return <span className="text-amber-500 dark:text-amber-400 font-semibold text-xs">⚠</span>;
   return <span className="text-red-600 dark:text-red-400 font-semibold text-xs">✗</span>;
-}
-
-// ─── Full-featured edit drawer (mirrors InvoiceDetailPanel sections) ───────────
-
-interface EditDrawerProps {
-  inv: ExtractedInvoice;
-  onSave: (updated: ExtractedInvoice) => void;
-  onClose: () => void;
-}
-
-function EditDrawer({ inv, onSave, onClose }: EditDrawerProps) {
-  // Header fields
-  const [invoiceNumber, setInvoiceNumber] = useState(inv.invoice_number ?? '');
-  const [invoiceDate, setInvoiceDate] = useState(inv.invoice_date ?? '');
-  const [vendorName, setVendorName] = useState(inv.vendor_name ?? '');
-  const [vendorGstin, setVendorGstin] = useState(inv.vendor_gstin ?? '');
-  const [buyerName, setBuyerName] = useState(inv.buyer_name ?? '');
-  const [buyerGstin, setBuyerGstin] = useState(inv.buyer_gstin ?? '');
-  const [taxType, setTaxType] = useState<'cgst_sgst' | 'igst'>(inv.tax_type ?? 'cgst_sgst');
-  const [billDiscountPercent, setBillDiscountPercent] = useState<number>(inv.bill_discount_percent ?? 0);
-
-  // Line items
-  const [lineItems, setLineItems] = useState<LineItem[]>(
-    inv.line_items?.map((li) => ({ ...li })) ?? [],
-  );
-
-  // Additional charges
-  const [charges, setCharges] = useState<ExtraCharge[]>(
-    (inv.charges ?? []).map((c) => ({ ...c })),
-  );
-
-  // Section open/close
-  const [headerOpen, setHeaderOpen] = useState(true);
-  const [itemsOpen, setItemsOpen] = useState(true);
-  const [chargesOpen, setChargesOpen] = useState(false);
-  const [taxOpen, setTaxOpen] = useState(true);
-
-  const updateLineItem = (i: number, field: keyof LineItem, value: string | number) => {
-    setLineItems((prev) => prev.map((li, idx) => {
-      if (idx !== i) return li;
-      const updated = { ...li, [field]: value };
-      // Recompute amount when relevant fields change
-      if (['qty', 'rate', 'disc_percent'].includes(field as string)) {
-        const qty = field === 'qty' ? Number(value) : (li.qty ?? 1);
-        const rate = field === 'rate' ? Number(value) : (li.rate ?? 0);
-        const disc = field === 'disc_percent' ? Number(value) : (li.disc_percent ?? 0);
-        updated.amount = Math.round(qty * rate * (1 - disc / 100) * 100) / 100;
-      }
-      return updated;
-    }));
-  };
-
-  const addLineItem = () => {
-    setLineItems((prev) => [...prev, {
-      description: '', hsn: '', gst_percent: 0, uom: 'Nos', qty: 1, rate: 0, disc_percent: 0, amount: 0,
-    }]);
-  };
-
-  const removeLineItem = (i: number) => setLineItems((prev) => prev.filter((_, idx) => idx !== i));
-
-  const updateCharge = (i: number, field: keyof ExtraCharge, value: string | number) => {
-    setCharges((prev) => prev.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
-  };
-
-  const addCharge = () => {
-    setCharges((prev) => [...prev, { description: '', amount: 0, gst_percent: 0 }]);
-  };
-
-  const removeCharge = (i: number) => setCharges((prev) => prev.filter((_, idx) => idx !== i));
-
-  // Live financials
-  const draftInv: ExtractedInvoice = {
-    ...inv,
-    invoice_number: invoiceNumber,
-    invoice_date: invoiceDate,
-    vendor_name: vendorName,
-    vendor_gstin: vendorGstin,
-    buyer_name: buyerName,
-    buyer_gstin: buyerGstin,
-    tax_type: taxType as ExtractedInvoice['tax_type'],
-    bill_discount_percent: billDiscountPercent,
-    line_items: lineItems,
-    charges,
-  };
-  const derived = deriveInvoiceFinancials(draftInv);
-  const taxSummary = buildFullTaxSummary(lineItems, [], draftInv.tax_type);
-  const { readiness, flags } = computeSalesReadiness(draftInv);
-
-  const handleSave = () => {
-    onSave({
-      ...draftInv,
-      subtotal: derived.net_goods_taxable,
-      cgst: derived.cgst,
-      sgst: derived.sgst,
-      igst: derived.igst,
-      total: derived.total,
-      round_off: derived.round_off,
-    });
-    onClose();
-  };
-
-  const inputCls = 'w-full px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500';
-  const labelCls = 'block text-xs text-gray-500 dark:text-gray-400 mb-1';
-
-  return (
-    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="flex-1 bg-black/40" />
-      <div
-        className="w-full max-w-2xl bg-white dark:bg-gray-900 shadow-2xl overflow-y-auto flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Drawer header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-900 z-10">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Edit Invoice</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Changes apply to import preview only — not saved to database until you click Import.</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xl leading-none">&times;</button>
-        </div>
-
-        {/* Readiness banner */}
-        {flags.length > 0 && (
-          <div className={`px-5 py-2 flex flex-wrap gap-1.5 border-b ${readiness === 'critical' ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'}`}>
-            {flags.map((f) => (
-              <span key={f} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${readiness === 'critical' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'}`}>
-                {f}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="flex-1 px-5 py-4 space-y-3">
-
-          {/* Invoice Header section */}
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setHeaderOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            >
-              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Invoice Header</span>
-              <svg className={`w-4 h-4 text-gray-400 transition-transform ${headerOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {headerOpen && (
-              <div className="px-4 py-3 grid grid-cols-2 gap-3">
-                <div>
-                  <label className={labelCls}>Invoice Number</label>
-                  <input className={inputCls} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
-                </div>
-                <div>
-                  <label className={labelCls}>Invoice Date</label>
-                  <input className={inputCls} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} placeholder="DD-MM-YYYY or YYYY-MM-DD" />
-                </div>
-                <div>
-                  <label className={labelCls}>Seller (Vendor) Name</label>
-                  <input className={inputCls} value={vendorName} onChange={(e) => setVendorName(e.target.value)} />
-                </div>
-                <div>
-                  <label className={labelCls}>Seller GSTIN</label>
-                  <input className={inputCls} value={vendorGstin} onChange={(e) => setVendorGstin(e.target.value.toUpperCase())} />
-                </div>
-                <div>
-                  <label className={labelCls}>Customer (Buyer) Name</label>
-                  <input className={inputCls} value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
-                </div>
-                <div>
-                  <label className={labelCls}>Customer GSTIN <span className="text-gray-400">(blank for B2C)</span></label>
-                  <input className={inputCls} value={buyerGstin} onChange={(e) => setBuyerGstin(e.target.value.toUpperCase())} />
-                </div>
-                <div>
-                  <label className={labelCls}>Tax Type</label>
-                  <select
-                    className={inputCls}
-                    value={taxType}
-                    onChange={(e) => setTaxType(e.target.value as 'cgst_sgst' | 'igst')}
-                  >
-                    <option value="cgst_sgst">GST (CGST + SGST)</option>
-                    <option value="igst">IGST (Inter-state)</option>
-                    <option value="exempt">Exempt / Zero-rated</option>
-                  </select>
-                </div>
-                <div>
-                  <label className={labelCls}>Bill Discount %</label>
-                  <input type="number" min="0" max="100" step="0.01" className={inputCls} value={billDiscountPercent} onChange={(e) => setBillDiscountPercent(Number(e.target.value))} />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Line Items section */}
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setItemsOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Line Items</span>
-                <span className="text-xs text-gray-400 dark:text-gray-500">({lineItems.length})</span>
-              </div>
-              <svg className={`w-4 h-4 text-gray-400 transition-transform ${itemsOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {itemsOpen && (
-              <div className="px-4 py-3">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs min-w-[600px]">
-                    <thead>
-                      <tr className="border-b border-gray-200 dark:border-gray-700">
-                        <th className="text-left pb-1.5 text-gray-400 font-medium w-[28%]">Description</th>
-                        <th className="text-left pb-1.5 text-gray-400 font-medium w-[10%]">HSN</th>
-                        <th className="text-right pb-1.5 text-gray-400 font-medium w-[8%]">GST %</th>
-                        <th className="text-right pb-1.5 text-gray-400 font-medium w-[7%]">Qty</th>
-                        <th className="text-left pb-1.5 text-gray-400 font-medium w-[7%]">UOM</th>
-                        <th className="text-right pb-1.5 text-gray-400 font-medium w-[10%]">Rate</th>
-                        <th className="text-right pb-1.5 text-gray-400 font-medium w-[8%]">Disc %</th>
-                        <th className="text-right pb-1.5 text-gray-400 font-medium w-[12%]">Amount</th>
-                        <th className="w-6" />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                      {lineItems.map((li, i) => (
-                        <tr key={i}>
-                          <td className="py-1 pr-1">
-                            <input className={inputCls} value={li.description} onChange={(e) => updateLineItem(i, 'description', e.target.value)} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input className={inputCls} value={li.hsn ?? ''} onChange={(e) => updateLineItem(i, 'hsn', e.target.value)} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input type="number" min="0" className={`${inputCls} text-right`} value={li.gst_percent ?? 0} onChange={(e) => updateLineItem(i, 'gst_percent', Number(e.target.value))} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input type="number" min="0" className={`${inputCls} text-right`} value={li.qty ?? 1} onChange={(e) => updateLineItem(i, 'qty', Number(e.target.value))} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input className={inputCls} value={li.uom ?? 'Nos'} onChange={(e) => updateLineItem(i, 'uom', e.target.value)} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input type="number" min="0" className={`${inputCls} text-right`} value={li.rate ?? 0} onChange={(e) => updateLineItem(i, 'rate', Number(e.target.value))} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input type="number" min="0" max="100" className={`${inputCls} text-right`} value={li.disc_percent ?? 0} onChange={(e) => updateLineItem(i, 'disc_percent', Number(e.target.value))} />
-                          </td>
-                          <td className="py-1 pr-1">
-                            <input type="number" className={`${inputCls} text-right`} value={li.amount ?? 0} onChange={(e) => updateLineItem(i, 'amount', Number(e.target.value))} />
-                          </td>
-                          <td className="py-1 pl-1">
-                            <button onClick={() => removeLineItem(i)} className="text-red-400 hover:text-red-600 text-base leading-none" title="Remove">×</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <button onClick={addLineItem} className="mt-2 text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-                  + Add item
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Additional Charges section */}
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setChargesOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Additional Charges</span>
-                {charges.length > 0 && <span className="text-xs text-gray-400 dark:text-gray-500">({charges.length})</span>}
-              </div>
-              <svg className={`w-4 h-4 text-gray-400 transition-transform ${chargesOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {chargesOpen && (
-              <div className="px-4 py-3">
-                {charges.length > 0 && (
-                  <div className="space-y-2 mb-2">
-                    {charges.map((c, i) => (
-                      <div key={i} className="grid grid-cols-12 gap-1.5 items-end text-xs">
-                        <div className="col-span-6">
-                          <label className={labelCls}>Description</label>
-                          <input className={inputCls} value={c.description} onChange={(e) => updateCharge(i, 'description', e.target.value)} />
-                        </div>
-                        <div className="col-span-2">
-                          <label className={labelCls}>GST %</label>
-                          <input type="number" min="0" className={inputCls} value={c.gst_percent ?? 0} onChange={(e) => updateCharge(i, 'gst_percent', Number(e.target.value))} />
-                        </div>
-                        <div className="col-span-3">
-                          <label className={labelCls}>Amount</label>
-                          <input type="number" className={inputCls} value={c.amount} onChange={(e) => updateCharge(i, 'amount', Number(e.target.value))} />
-                        </div>
-                        <div className="col-span-1 flex items-end pb-0.5">
-                          <button onClick={() => removeCharge(i)} className="text-red-400 hover:text-red-600 text-base leading-none" title="Remove">×</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button onClick={addCharge} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-                  + Add charge
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Tax Summary section (live) */}
-          <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setTaxOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            >
-              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tax Summary</span>
-              <svg className={`w-4 h-4 text-gray-400 transition-transform ${taxOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {taxOpen && (
-              <div className="px-4 py-3 space-y-3">
-                {/* Per-rate breakdown */}
-                {taxSummary.length > 0 && (
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200 dark:border-gray-700">
-                        <th className="text-left pb-1 text-gray-400 font-medium">GST Rate</th>
-                        <th className="text-right pb-1 text-gray-400 font-medium">Taxable</th>
-                        {taxType === 'cgst_sgst' && <th className="text-right pb-1 text-gray-400 font-medium">CGST</th>}
-                        {taxType === 'cgst_sgst' && <th className="text-right pb-1 text-gray-400 font-medium">SGST</th>}
-                        {taxType === 'igst' && <th className="text-right pb-1 text-gray-400 font-medium">IGST</th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                      {taxSummary.map((row) => (
-                        <tr key={row.gst_percent}>
-                          <td className="py-1 text-gray-600 dark:text-gray-400">{row.gst_percent}%</td>
-                          <td className="py-1 text-right tabular-nums text-gray-800 dark:text-gray-200">{formatINR(row.taxable)}</td>
-                          {taxType === 'cgst_sgst' && <td className="py-1 text-right tabular-nums text-gray-600 dark:text-gray-400">{formatINR(row.cgst)}</td>}
-                          {taxType === 'cgst_sgst' && <td className="py-1 text-right tabular-nums text-gray-600 dark:text-gray-400">{formatINR(row.sgst)}</td>}
-                          {taxType === 'igst' && <td className="py-1 text-right tabular-nums text-gray-600 dark:text-gray-400">{formatINR(row.igst)}</td>}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {/* Invoice totals */}
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-1 text-xs">
-                  <div className="flex justify-between text-gray-600 dark:text-gray-400">
-                    <span>Taxable (after discount)</span>
-                    <span className="tabular-nums font-medium text-gray-800 dark:text-gray-200">{formatINR(derived.net_goods_taxable)}</span>
-                  </div>
-                  {derived.cgst > 0 && (
-                    <div className="flex justify-between text-gray-600 dark:text-gray-400">
-                      <span>CGST</span>
-                      <span className="tabular-nums">{formatINR(derived.cgst)}</span>
-                    </div>
-                  )}
-                  {derived.sgst > 0 && (
-                    <div className="flex justify-between text-gray-600 dark:text-gray-400">
-                      <span>SGST</span>
-                      <span className="tabular-nums">{formatINR(derived.sgst)}</span>
-                    </div>
-                  )}
-                  {derived.igst > 0 && (
-                    <div className="flex justify-between text-gray-600 dark:text-gray-400">
-                      <span>IGST</span>
-                      <span className="tabular-nums">{formatINR(derived.igst)}</span>
-                    </div>
-                  )}
-                  {derived.round_off !== 0 && (
-                    <div className="flex justify-between text-gray-500 dark:text-gray-400">
-                      <span>Round Off</span>
-                      <span className="tabular-nums">{derived.round_off > 0 ? '+' : ''}{formatINR(derived.round_off)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between font-semibold text-gray-900 dark:text-gray-100 border-t border-gray-200 dark:border-gray-700 pt-1">
-                    <span>Invoice Total</span>
-                    <span className="tabular-nums">₹{formatINR(derived.total)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-        </div>
-
-        {/* Drawer footer */}
-        <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-2 sticky bottom-0 bg-white dark:bg-gray-900">
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
-          >
-            Save Changes
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ─── Over-limit popup ──────────────────────────────────────────────────────────
@@ -500,16 +96,27 @@ export default function SalesExcelImportPage() {
   const [excludedIndices, setExcludedIndices] = useState<Set<number>>(new Set());
 
   const applyParsed = useCallback((all: ExtractedInvoice[], name: string) => {
+    // Enrich vendor fields immediately so the preview and edit drawer show the correct
+    // seller name/GSTIN — company is always the seller for sales invoices.
+    const enriched = all.map((inv) => ({
+      ...inv,
+      vendor_name: inv.vendor_name || company?.name || '',
+      vendor_gstin: inv.vendor_gstin || company?.gstin || '',
+    }));
     setFilename(name);
-    setAllParsedInvoices(all);
-    const capped = all.slice(0, MAX_IMPORT_INVOICES);
-    setInvoices(capped);
-    setExcludedIndices(new Set());
-    if (all.length > MAX_IMPORT_INVOICES) {
-      setPendingAll(all);
+    setAllParsedInvoices(enriched);
+    setInvoices(enriched);
+    // Pre-exclude rows beyond the import cap
+    if (enriched.length > MAX_IMPORT_INVOICES) {
+      const preExcluded = new Set<number>();
+      for (let idx = MAX_IMPORT_INVOICES; idx < enriched.length; idx++) preExcluded.add(idx);
+      setExcludedIndices(preExcluded);
+      setPendingAll(enriched);
       setShowOverLimit(true);
+    } else {
+      setExcludedIndices(new Set());
     }
-  }, []);
+  }, [company]);
 
   const handleFile = useCallback(async (file: File) => {
     setLoading(true);
@@ -550,6 +157,8 @@ export default function SalesExcelImportPage() {
   const someSelected = excludedIndices.size > 0 && excludedIndices.size < invoices.length;
 
   const toggleRow = (i: number) => {
+    // Prevent un-excluding rows beyond the import cap
+    if (i >= MAX_IMPORT_INVOICES) return;
     setExcludedIndices((prev) => {
       const next = new Set(prev);
       if (next.has(i)) next.delete(i); else next.add(i);
@@ -628,7 +237,20 @@ export default function SalesExcelImportPage() {
   };
 
   const handleEditSave = (idx: number, updated: ExtractedInvoice) => {
-    setInvoices((prev) => prev.map((inv, i) => i === idx ? updated : inv));
+    const recomputed = {
+      ...invoices[idx],
+      ...updated,
+    };
+    const financials = deriveInvoiceFinancials(recomputed);
+    setInvoices((prev) => prev.map((inv, i) => i === idx ? {
+      ...recomputed,
+      subtotal: financials.net_goods_taxable,
+      cgst: financials.cgst,
+      sgst: financials.sgst,
+      igst: financials.igst,
+      total: financials.total,
+      round_off: financials.round_off,
+    } : inv));
     setEditingIdx(null);
   };
 
@@ -661,9 +283,10 @@ export default function SalesExcelImportPage() {
       )}
 
       {editingIdx !== null && invoices[editingIdx] && (
-        <EditDrawer
-          inv={invoices[editingIdx]}
-          onSave={(updated) => handleEditSave(editingIdx, updated)}
+        <InvoiceEditPanel
+          perspective="sales"
+          invoice={invoices[editingIdx]}
+          onSave={(updated) => handleEditSave(editingIdx, updated as ExtractedInvoice)}
           onClose={() => setEditingIdx(null)}
         />
       )}
@@ -749,7 +372,7 @@ export default function SalesExcelImportPage() {
                   {invoices.length.toLocaleString()} invoices
                   {isOverLimit && (
                     <span className="ml-2 text-xs text-amber-600 dark:text-amber-400 font-normal">
-                      (of {allParsedInvoices.length.toLocaleString()} detected — capped at {MAX_IMPORT_INVOICES.toLocaleString()})
+                      ({(invoices.length - MAX_IMPORT_INVOICES).toLocaleString()} beyond import cap — highlighted in amber)
                     </span>
                   )}
                   {' '}from{' '}
@@ -780,8 +403,8 @@ export default function SalesExcelImportPage() {
 
             {isOverLimit && (
               <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg text-sm text-amber-700 dark:text-amber-400">
-                <strong>Import cap applied.</strong> Only the first {MAX_IMPORT_INVOICES.toLocaleString()} invoices are shown.
-                Split the file to import the remaining {(allParsedInvoices.length - MAX_IMPORT_INVOICES).toLocaleString()} invoices separately.
+                <strong>Import cap applied.</strong> Only the first {MAX_IMPORT_INVOICES.toLocaleString()} invoices will be imported.
+                The remaining {(invoices.length - MAX_IMPORT_INVOICES).toLocaleString()} invoices (highlighted in amber) are pre-excluded. Split the file to import them separately.
               </div>
             )}
 
@@ -811,12 +434,14 @@ export default function SalesExcelImportPage() {
                     <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">SGST</th>
                     <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">IGST</th>
                     <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Rnd Off</th>
+                    <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Items</th>
                     <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Total</th>
                     <th className="px-2 py-2.5 w-8" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {invoices.map((inv, i) => {
+                    const isOverLimitRow = i >= MAX_IMPORT_INVOICES;
                     const isExcluded = excludedIndices.has(i);
                     const isDupe = duplicates.includes(inv.invoice_number);
                     const { readiness, flags } = computeSalesReadiness(inv);
@@ -828,8 +453,9 @@ export default function SalesExcelImportPage() {
                           key={`row-${i}`}
                           className={[
                             'transition-colors',
-                            isExcluded ? 'opacity-40 bg-gray-50 dark:bg-gray-900/50' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50',
-                            !isExcluded && isDupe ? 'bg-amber-50 dark:bg-amber-900/10' : '',
+                            isOverLimitRow ? 'bg-amber-50 dark:bg-amber-900/10' :
+                              isExcluded ? 'opacity-40 bg-gray-50 dark:bg-gray-900/50' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50',
+                            !isOverLimitRow && !isExcluded && isDupe ? 'bg-amber-50 dark:bg-amber-900/10' : '',
                           ].filter(Boolean).join(' ')}
                         >
                           <td className="px-3 py-2.5">
@@ -837,11 +463,15 @@ export default function SalesExcelImportPage() {
                               type="checkbox"
                               checked={!isExcluded}
                               onChange={() => toggleRow(i)}
-                              className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 cursor-pointer"
+                              disabled={isOverLimitRow}
+                              className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
                             />
                           </td>
                           <td className="px-3 py-2.5 text-center">
-                            <ReadinessBadge readiness={readiness} />
+                            {isOverLimitRow
+                              ? <span className="text-amber-500 dark:text-amber-400 font-semibold text-xs">Excl.</span>
+                              : <ReadinessBadge readiness={readiness} />
+                            }
                           </td>
                           <td className="px-3 py-2.5 text-gray-400 dark:text-gray-500 tabular-nums">{i + 1}</td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
@@ -870,6 +500,7 @@ export default function SalesExcelImportPage() {
                           <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
                             {d.round_off !== 0 ? (d.round_off > 0 ? '+' : '') + formatINR(d.round_off) : <span className="text-gray-200 dark:text-gray-600">0.00</span>}
                           </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{inv.line_items?.length ?? 0}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap">
                             ₹{formatINR(d.total)}
                           </td>
@@ -886,10 +517,10 @@ export default function SalesExcelImportPage() {
                           </td>
                         </tr>
                         {/* Validation warning row */}
-                        {hasWarning && !isExcluded && (
+                        {hasWarning && !isExcluded && !isOverLimitRow && (
                           <tr key={`warn-${i}`} className="border-t-0">
                             <td colSpan={3} />
-                            <td colSpan={11} className="px-3 pb-1.5">
+                            <td colSpan={12} className="px-3 pb-1.5">
                               <div className="flex flex-wrap gap-1.5">
                                 {flags.map((f) => (
                                   <span key={f} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
@@ -925,6 +556,7 @@ export default function SalesExcelImportPage() {
                     <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap text-xs">
                       {totalRoundOff !== 0 ? (totalRoundOff > 0 ? '+' : '') + formatINR(totalRoundOff) : '0.00'}
                     </td>
+                    <td className="px-3 py-2.5" />
                     <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">₹{formatINR(grandTotal)}</td>
                     <td className="px-2 py-2.5" />
                   </tr>
