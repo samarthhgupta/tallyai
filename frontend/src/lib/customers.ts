@@ -305,11 +305,22 @@ export async function lookupCustomerLedger(
 ): Promise<string | null> {
   const normGstin = normaliseCustomerGstin(gstin);
   if (!normGstin) return null;
-  const { data } = await db()
+
+  // 1. Search customer_masters first (primary for sales flow)
+  const { data: custData } = await db()
     .from('customer_masters')
     .select('tally_ledger_name')
     .eq('company_id', companyId)
     .eq('customer_gstin', normGstin)
     .single();
-  return data?.tally_ledger_name ?? null;
+  if (custData?.tally_ledger_name) return custData.tally_ledger_name;
+
+  // 2. Cross-search supplier_masters (same party may appear on purchase side)
+  const { data: suppData } = await db()
+    .from('supplier_masters')
+    .select('tally_ledger_name')
+    .eq('company_id', companyId)
+    .eq('vendor_gstin', normGstin)
+    .single();
+  return suppData?.tally_ledger_name ?? null;
 }

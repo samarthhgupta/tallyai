@@ -7,7 +7,7 @@
 //       Customer ledger : POSITIVE (debit  — customer owes us)
 //       Sales ledger    : NEGATIVE (credit — our income)
 //       CGST/SGST/IGST   : NEGATIVE (credit — output tax liability)
-//   - GSTREGISTRATIONTYPE: "Regular" if customer has GSTIN, else "Consumer".
+//   - GSTREGISTRATIONTYPE: "Regular" (B2B with GSTIN), "Unregistered" (named B2C).
 //   - All ledger/item names output VERBATIM from masters - no trim, no change.
 //   - Encoding handled by the page (UTF-16 LE + BOM).
 
@@ -18,6 +18,7 @@ import type { StockItemMaster } from './stockItems';
 import type { ExpenseLedgerMaster } from './expenseLedgers';
 import { calcLineAmount } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
+import { isPooledLedger } from './partyKey';
 
 const GSTIN_STATE_FULL: Record<string, string> = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
@@ -300,7 +301,8 @@ function fyStartFromString(financialYear?: string): string {
 
 function buildCustomerLedgerBlock(c: CustomerMaster, fyStart: string): string {
   const name = esc(c.tally_ledger_name);
-  const regType = c.is_b2c || !c.customer_gstin ? 'Consumer' : 'Regular';
+  // Regular = B2B with valid GSTIN; Unregistered = named B2C (identifiable person, no GSTIN)
+  const regType = c.customer_gstin ? 'Regular' : 'Unregistered';
   const state = stateFromGstin(c.customer_gstin) || esc(c.state_name ?? '');
   const gstinBlock = c.customer_gstin ? `\n      <PARTYGSTIN>${esc(c.customer_gstin)}</PARTYGSTIN>` : '';
   const regBlock = c.customer_gstin
@@ -370,11 +372,11 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
   const fyStart = fyStartFromString(input.financialYear);
   const messages: string[] = [];
 
-  // Customers referenced by the batch
+  // Customers referenced by the batch — skip pooled/generic ledgers that already exist in Tally
   const seenCustomers = new Set<string>();
   for (const inv of input.invoices) {
     const customer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
-    if (customer && !seenCustomers.has(customer.tally_ledger_name)) {
+    if (customer && !seenCustomers.has(customer.tally_ledger_name) && !isPooledLedger(customer.tally_ledger_name)) {
       seenCustomers.add(customer.tally_ledger_name);
       messages.push(buildCustomerLedgerBlock(customer, fyStart));
     }

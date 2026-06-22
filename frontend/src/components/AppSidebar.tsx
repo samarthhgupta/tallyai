@@ -13,8 +13,8 @@ const NAV = [
     label: 'Masters',
     icon: '📋',
     children: [
-      { label: 'Supplier Master', href: '/masters/suppliers', icon: '👥' },
-      { label: 'Customer Masters', href: '/masters/customers', icon: '🧑‍💼' },
+      { label: 'Sundry Creditors', href: '/masters/suppliers', icon: '👥' },
+      { label: 'Sundry Debtors', href: '/masters/customers', icon: '🧑‍💼' },
       { label: 'Stock Items', href: '/masters/stock-items', icon: '📦' },
       { label: 'Purchase Ledgers', href: '/masters/purchase-ledger', icon: '📒' },
       { label: 'Expense Ledgers', href: '/masters/expense-ledgers', icon: '💸' },

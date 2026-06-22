@@ -344,18 +344,29 @@ export async function bulkUpsertSuppliers(
 }
 
 // Returns the Tally ledger name for a GSTIN within a company, or null.
-// Uses normalised GSTIN for lookup but returns the sacred stored value.
+// Searches supplier_masters first (primary for purchase flow), then
+// cross-searches customer_masters (same party may appear on sales side).
 export async function lookupSupplierLedger(
   companyId: string,
   gstin: string,
 ): Promise<string | null> {
   const normGstin = normaliseGstin(gstin);
   if (!normGstin) return null;
+
   const { data } = await db()
     .from('supplier_masters')
     .select('tally_ledger_name')
     .eq('company_id', companyId)
     .eq('vendor_gstin', normGstin)
     .single();
-  return data?.tally_ledger_name ?? null;
+  if (data?.tally_ledger_name) return data.tally_ledger_name;
+
+  // Cross-search customer_masters as final fallback
+  const { data: custData } = await db()
+    .from('customer_masters')
+    .select('tally_ledger_name')
+    .eq('company_id', companyId)
+    .eq('customer_gstin', normGstin)
+    .single();
+  return custData?.tally_ledger_name ?? null;
 }

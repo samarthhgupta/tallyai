@@ -1,32 +1,17 @@
 import { getSupabase } from './supabase';
-
-// Sales-side ledger learning. Clone of vendorLedgerPreferences.ts but scoped to
-// party_type='customer' in the shared vendor_ledger_preferences table.
-//
-// GSTIN-only learning (same intentional architecture as the purchase side):
-// preferences are durable and a wrong write poisons every future suggestion, so
-// we only learn when a valid GSTIN is present. Name-based learning is disabled.
+import { resolvePartyKey } from './partyKey';
 
 export type SalesLedgerType = 'sales' | 'CGST' | 'SGST' | 'IGST';
-
-function isValidGstin(gstin: string | null | undefined): boolean {
-  if (!gstin?.trim()) return false;
-  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin.trim().toUpperCase());
-}
-
-function normaliseGstin(gstin: string): string {
-  return gstin.trim().toUpperCase();
-}
 
 export async function upsertCustomerLedgerPreference(
   companyId: string,
   customerGstin: string | null | undefined,
-  _customerName: string | null | undefined, // accepted for call-site compatibility but never used
+  customerName: string | null | undefined,
   ledgerType: SalesLedgerType,
   ledgerName: string,
 ): Promise<void> {
-  if (!isValidGstin(customerGstin) || !ledgerName.trim()) return;
-  const key = normaliseGstin(customerGstin!);
+  const key = resolvePartyKey(customerGstin, customerName);
+  if (!key || !ledgerName.trim()) return;
   const sb = getSupabase();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (sb as any)
@@ -48,10 +33,10 @@ export async function upsertCustomerLedgerPreference(
 export async function getCustomerLedgerPreferences(
   companyId: string,
   customerGstin: string | null | undefined,
-  _customerName: string | null | undefined, // accepted for call-site compatibility but never used
+  customerName: string | null | undefined,
 ): Promise<Partial<Record<SalesLedgerType, string>>> {
-  if (!isValidGstin(customerGstin)) return {};
-  const key = normaliseGstin(customerGstin!);
+  const key = resolvePartyKey(customerGstin, customerName);
+  if (!key) return {};
   const sb = getSupabase();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (sb as any)

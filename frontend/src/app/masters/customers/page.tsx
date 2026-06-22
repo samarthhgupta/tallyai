@@ -289,7 +289,7 @@ export default function CustomerMastersPage() {
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Customer Masters</h1>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Sundry Debtors</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 Maps customer GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
               </p>
