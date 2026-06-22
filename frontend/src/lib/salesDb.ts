@@ -55,10 +55,6 @@ export function computeSalesReadiness(
       flags.push(`Low confidence (${Math.round(inv.confidence * 100)}%)`);
       readiness = 'warning';
     }
-    if (!inv.buyer_gstin?.trim()) {
-      flags.push('Missing customer GSTIN (B2C)');
-      if (readiness === 'ready') readiness = 'warning';
-    }
   }
 
   return { readiness, flags };
