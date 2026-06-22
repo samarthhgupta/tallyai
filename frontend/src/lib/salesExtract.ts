@@ -245,7 +245,13 @@ function isSectionOrSummaryRow(row: unknown[], profile: ColumnProfile): boolean 
 
   // Count non-empty cells total
   const nonEmpty = row.filter((c) => c != null && c !== '' && c !== 0);
-  if (nonEmpty.length > 1) return false; // has transactional data — not a pure header
+  // A row with multiple values but no invoice number is either a totals/summary row
+  // (all numeric) or an unrecognised continuation — treat as section boundary either way.
+  if (nonEmpty.length > 1) {
+    const allNumeric = nonEmpty.every((c) => typeof c === 'number' || !isNaN(Number(String(c).replace(/,/g, ''))));
+    if (allNumeric) return true; // totals row — treat as section boundary
+    return false; // has mixed data — genuine continuation row
+  }
 
   // Single-cell row: check if it matches a section marker
   for (const cell of row) {
@@ -295,7 +301,7 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
       const qty = r.quantity || 1;
       const rate = r.rate || (qty > 0 ? r2(taxable / qty) : taxable);
       return {
-        description: r.item_description || '(item)',
+        description: r.item_description || (r.hsn?.trim() ? r.hsn.trim() : 'UNKNOWN ITEM'),
         hsn: r.hsn,
         gst_percent: gstPct,
         uom: 'Nos',
@@ -409,8 +415,9 @@ function parseHierarchical(aoa: unknown[][]): ExcelImportResult {
     const raw = aoa[i] as unknown[];
     if (!raw || raw.every((c) => c == null || c === '' || c === 0)) continue;
 
-    // Skip section headers and pure summary rows
-    if (isSectionOrSummaryRow(raw, profile)) continue;
+    // Skip section headers and pure summary rows; reset anchor so totals rows
+    // immediately after a section header don't attach to the previous invoice.
+    if (isSectionOrSummaryRow(raw, profile)) { anchorInvoiceNumber = ''; continue; }
 
     const rec: Record<string, unknown> = {};
     Object.entries(profile.fields).forEach(([idx, field]) => { rec[field] = raw[Number(idx)]; });

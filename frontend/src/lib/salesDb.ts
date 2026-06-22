@@ -2,6 +2,9 @@ import { getSupabase } from './supabase';
 import type { StoredInvoice, ExtractedInvoice, InvoiceReadiness } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
 
+// PostgREST default max-rows is 1000. Use an explicit high limit for full-register queries.
+const MAX_REGISTER_ROWS = 10000;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
 
@@ -85,7 +88,7 @@ export async function getSalesPendingInvoices(
     .eq('status', 'pending_review')
     .order('created_at', { ascending: true });
   if (batchId) q = q.eq('batch_id', batchId);
-  const { data, error } = await q;
+  const { data, error } = await q.limit(MAX_REGISTER_ROWS);
   if (error) throw error;
   return (data ?? []) as StoredInvoice[];
 }
@@ -107,7 +110,7 @@ export async function getSalesRegister(
   if (filters.financialYear) q = q.eq('financial_year', filters.financialYear);
   if (filters.periodMonth) q = q.eq('period_month', filters.periodMonth);
 
-  const { data, error } = await q;
+  const { data, error } = await q.limit(MAX_REGISTER_ROWS);
   if (error) throw error;
   return (data ?? []) as StoredInvoice[];
 }

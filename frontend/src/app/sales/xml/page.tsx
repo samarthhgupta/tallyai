@@ -136,22 +136,37 @@ function InvoiceRow({ inv, customers, suppliers, dutiesTaxes, salesLedgerOptions
     getCustomerLedgerPreferences(companyId, inv.buyer_gstin, inv.buyer_name).then((prefs) => {
       if (prefs.sales && !salesLedger) setSalesLedger(prefs.sales);
       // Auto-populate tax ledgers from duties/taxes
+      const preferOutput = (list: typeof dutiesTaxes) => {
+        const out = list.find((d) => d.tally_ledger_name.toLowerCase().includes('output'));
+        return out ?? list[0];
+      };
       if (inv.tax_type === 'cgst_sgst') {
-        const cgst = dutiesTaxes.find((d) => d.tax_component === 'CGST');
-        const sgst = dutiesTaxes.find((d) => d.tax_component === 'SGST');
+        const cgst = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'CGST'));
+        const sgst = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'));
         if (cgst && !cgstLedger) setCgstLedger(cgst.tally_ledger_name);
         if (sgst && !sgstLedger) setSgstLedger(sgst.tally_ledger_name);
       } else if (inv.tax_type === 'igst') {
-        const igst = dutiesTaxes.find((d) => d.tax_component === 'IGST');
+        const igst = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'));
         if (igst && !igstLedger) setIgstLedger(igst.tally_ledger_name);
       }
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, inv.buyer_gstin, inv.buyer_name, inv.tax_type]);
 
-  const cgstDt = dutiesTaxes.filter((d) => d.tax_component === 'CGST');
-  const sgstDt = dutiesTaxes.filter((d) => d.tax_component === 'SGST');
-  const igstDt = dutiesTaxes.filter((d) => d.tax_component === 'IGST');
+  // Sales = output tax (credit side). Filter to output ledgers; fall back to all if none found.
+  const cgstAll = dutiesTaxes.filter((d) => d.tax_component === 'CGST');
+  const sgstAll = dutiesTaxes.filter((d) => d.tax_component === 'SGST');
+  const igstAll = dutiesTaxes.filter((d) => d.tax_component === 'IGST');
+  const isOutput = (name: string) => name.toLowerCase().includes('output');
+  const cgstDt = cgstAll.filter((d) => isOutput(d.tally_ledger_name)).length
+    ? cgstAll.filter((d) => isOutput(d.tally_ledger_name))
+    : cgstAll;
+  const sgstDt = sgstAll.filter((d) => isOutput(d.tally_ledger_name)).length
+    ? sgstAll.filter((d) => isOutput(d.tally_ledger_name))
+    : sgstAll;
+  const igstDt = igstAll.filter((d) => isOutput(d.tally_ledger_name)).length
+    ? igstAll.filter((d) => isOutput(d.tally_ledger_name))
+    : igstAll;
 
   const handleSave = async () => {
     if (isBlank(salesLedger)) { setErr('Sales ledger is required'); return; }

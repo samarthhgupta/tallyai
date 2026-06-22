@@ -114,11 +114,17 @@ export default function SalesExcelImportPage() {
 
   const doImport = async (companyId: string) => {
     const batchId = await createSalesBatch(companyId, 1, fy, 'excel_import');
-    const items = invoices.map((inv) => ({ inv, filename }));
+    // For sales invoices the seller IS our company — populate vendor fields from company.
+    const enrichedInvoices = invoices.map((inv) => ({
+      ...inv,
+      vendor_name: company!.name,
+      vendor_gstin: company!.gstin ?? '',
+    }));
+    const items = enrichedInvoices.map((inv) => ({ inv, filename }));
     await insertAcceptedSalesExcelInvoices(companyId, batchId, items, fy);
 
     // Learn customer names for GSTIN-bearing invoices
-    for (const inv of invoices) {
+    for (const inv of enrichedInvoices) {
       if (inv.buyer_gstin && inv.buyer_name) {
         await learnCustomerName(companyId, inv.buyer_gstin, inv.buyer_name).catch(() => {});
       }
