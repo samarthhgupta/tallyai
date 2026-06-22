@@ -13,6 +13,8 @@ interface InvoiceDetailPanelProps {
   onSaved: (updated: StoredInvoice) => void;
   onDeleted: () => void;
   onMovedToRejected: () => void;
+  /** When provided, clicking "Edit Invoice" calls this instead of entering internal edit mode. */
+  onEditRequested?: () => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -192,7 +194,7 @@ const tblInputCls = 'w-full border border-gray-300 dark:border-gray-600 dark:bg-
 // ─── Main Component ────────────────────────────────────────────────────────────
 
 export default function InvoiceDetailPanel({
-  invoice, onClose, onSaved, onDeleted, onMovedToRejected,
+  invoice, onClose, onSaved, onDeleted, onMovedToRejected, onEditRequested,
 }: InvoiceDetailPanelProps) {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [saving, setSaving] = useState(false);
@@ -1120,7 +1122,7 @@ export default function InvoiceDetailPanel({
               <button onClick={() => setShowRejectModal(true)} className="px-4 py-2 border border-amber-400 text-amber-700 dark:text-amber-400 text-sm font-medium rounded-lg hover:bg-amber-50 transition-colors">
                 Move to Rejected
               </button>
-              <button onClick={() => { setSaveError(''); setMode('edit'); }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors">
+              <button onClick={() => { if (onEditRequested) { onEditRequested(); } else { setSaveError(''); setMode('edit'); } }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors">
                 Edit Invoice
               </button>
             </div>

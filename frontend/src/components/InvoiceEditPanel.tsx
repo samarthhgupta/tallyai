@@ -100,7 +100,7 @@ export function InvoiceEditPanel({ invoice, perspective, onSave, onClose }: Invo
     charges,
   };
   const derived = deriveInvoiceFinancials(draftInv);
-  const taxSummary = buildFullTaxSummary(lineItems, [], taxType);
+  const taxSummary = buildFullTaxSummary(lineItems, charges, taxType, billDiscountAmount);
 
   const handleSave = () => {
     onSave({

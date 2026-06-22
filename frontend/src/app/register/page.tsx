@@ -14,6 +14,7 @@ import { getFYList, currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
 import InvoiceDetailPanel from '@/components/InvoiceDetailPanel';
+import { InvoiceEditPanel, type InvoiceEditData } from '@/components/InvoiceEditPanel';
 import { getSupabase } from '@/lib/supabase';
 import { detectDuplicates, type DuplicateGroup } from '@/lib/duplicateDetection';
 
@@ -428,6 +429,7 @@ export default function PurchaseRegisterPage() {
 
   // Detail panel
   const [detailInvoice, setDetailInvoice] = useState<StoredInvoice | null>(null);
+  const [editingInvoice, setEditingInvoice] = useState<StoredInvoice | null>(null);
 
   // ITC Review modal
   const [reviewTarget, setReviewTarget] = useState<StoredInvoice | null>(null);
@@ -655,6 +657,45 @@ export default function PurchaseRegisterPage() {
           onMovedToRejected={() => {
             setInvoices((prev) => prev.filter((i) => i.id !== detailInvoice.id));
             setDetailInvoice(null);
+          }}
+          onEditRequested={() => setEditingInvoice(detailInvoice)}
+        />
+      )}
+
+      {editingInvoice && (
+        <InvoiceEditPanel
+          invoice={editingInvoice}
+          perspective="purchase"
+          onClose={() => setEditingInvoice(null)}
+          onSave={async (data: InvoiceEditData) => {
+            const { deriveInvoiceFinancials } = await import('@/lib/invoiceCalculations');
+            const { computeReadiness } = await import('@/lib/db');
+            const d = deriveInvoiceFinancials(data);
+            const r = computeReadiness({ ...editingInvoice, ...data, ...d } as Parameters<typeof computeReadiness>[0]);
+            const patch = {
+              invoice_number:       data.invoice_number ?? undefined,
+              invoice_date:         data.invoice_date ?? null,
+              vendor_name:          data.vendor_name ?? undefined,
+              vendor_gstin:         data.vendor_gstin ?? null,
+              buyer_name:           data.buyer_name ?? null,
+              buyer_gstin:          data.buyer_gstin ?? null,
+              tax_type:             data.tax_type,
+              bill_discount_amount: data.bill_discount_amount ?? 0,
+              round_off:            d.round_off,
+              cgst:                 d.cgst,
+              sgst:                 d.sgst,
+              igst:                 d.igst,
+              total:                d.total,
+              line_items:           data.line_items,
+              charges:              data.charges,
+              readiness:            r.readiness,
+              readiness_flags:      r.flags,
+            };
+            await import('@/lib/db').then(({ updateAcceptedInvoice }) => updateAcceptedInvoice(editingInvoice.id, patch));
+            const updated: StoredInvoice = { ...editingInvoice, ...patch } as StoredInvoice;
+            setInvoices((prev) => prev.map((i) => i.id === updated.id ? updated : i));
+            if (detailInvoice?.id === updated.id) setDetailInvoice(updated);
+            setEditingInvoice(null);
           }}
         />
       )}

@@ -22,6 +22,7 @@ import AppLayout from '@/components/AppLayout';
 import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
+import { InvoiceEditPanel, type InvoiceEditData } from '@/components/InvoiceEditPanel';
 
 function getErrMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -447,6 +448,7 @@ export default function SalesXmlPage() {
   const [expandedIds,       setExpandedIds]        = useState<Set<string>>(new Set());
   const [filterStatus,      setFilterStatus]       = useState<'all' | 'mapped' | 'unmapped'>('all');
   const [search,            setSearch]             = useState('');
+  const [editingInvoice,    setEditingInvoice]     = useState<StoredInvoice | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -767,8 +769,19 @@ export default function SalesXmlPage() {
                       )}
                     </div>
 
-                    {/* Expand chevron */}
-                    <div className="text-center text-gray-400 text-xs">{expanded ? '▲' : '▼'}</div>
+                    {/* Edit + expand */}
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setEditingInvoice(inv); }}
+                        title="Edit invoice"
+                        className="p-1 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900/30 text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6.5-6.5a2 2 0 012.828 2.828L11.828 13.83A4 4 0 019.172 15H8v-1.172A4 4 0 019 11z" />
+                        </svg>
+                      </button>
+                      <span className="text-gray-400 text-xs">{expanded ? '▲' : '▼'}</span>
+                    </div>
                   </div>
 
                   {/* Expanded mapping panel */}
@@ -804,6 +817,44 @@ export default function SalesXmlPage() {
           </div>
         )}
       </div>
+
+      {editingInvoice && (
+        <InvoiceEditPanel
+          invoice={editingInvoice}
+          perspective="sales"
+          onClose={() => setEditingInvoice(null)}
+          onSave={async (data: InvoiceEditData) => {
+            const { deriveInvoiceFinancials: derive } = await import('@/lib/invoiceCalculations');
+            const { computeSalesReadiness } = await import('@/lib/salesDb');
+            const { updateAcceptedInvoice } = await import('@/lib/db');
+            const d = derive(data);
+            const r = computeSalesReadiness({ ...editingInvoice, ...data } as import('@/types/invoice').ExtractedInvoice);
+            const patch = {
+              invoice_number:       data.invoice_number ?? undefined,
+              invoice_date:         data.invoice_date ?? null,
+              vendor_name:          data.vendor_name ?? undefined,
+              vendor_gstin:         data.vendor_gstin ?? null,
+              buyer_name:           data.buyer_name ?? null,
+              buyer_gstin:          data.buyer_gstin ?? null,
+              tax_type:             data.tax_type,
+              bill_discount_amount: data.bill_discount_amount ?? 0,
+              round_off:            d.round_off,
+              cgst:                 d.cgst,
+              sgst:                 d.sgst,
+              igst:                 d.igst,
+              total:                d.total,
+              line_items:           data.line_items,
+              charges:              data.charges,
+              readiness:            r.readiness,
+              readiness_flags:      r.flags,
+            };
+            await updateAcceptedInvoice(editingInvoice.id, patch);
+            const updated: StoredInvoice = { ...editingInvoice, ...patch } as StoredInvoice;
+            setInvoices((prev) => prev.map((i) => i.id === updated.id ? updated : i));
+            setEditingInvoice(null);
+          }}
+        />
+      )}
     </AppLayout>
   );
 }
