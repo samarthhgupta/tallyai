@@ -10,6 +10,7 @@ import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems } from '@/lib/stockItems';
 import { loadExpenseLedgers } from '@/lib/expenseLedgers';
 import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
+import { loadSalesLedgers } from '@/lib/salesLedgerConfig';
 import { generateSalesVouchersXml, generateSalesMastersXml } from '@/lib/salesXmlGenerator';
 import type { CustomerMaster } from '@/lib/customers';
 import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
@@ -333,11 +334,12 @@ export default function SalesXmlPage() {
       if (!session) { router.push('/login'); return; }
       if (!company) { router.push('/select-company'); return; }
       try {
-        const [invData, custData, dtData, comp] = await Promise.all([
+        const [invData, custData, dtData, comp, importedSalesLedgers] = await Promise.all([
           getSalesRegister(company.id, { financialYear: fy }),
           loadCustomers(company.id),
           loadDutiesTaxes(company.id),
           getCompany(company.id),
+          loadSalesLedgers(company.id),
         ]);
         setInvoices(invData);
         setCustomers(custData);
@@ -345,8 +347,8 @@ export default function SalesXmlPage() {
         setTallyCompanyName(comp.tally_company_name ?? comp.name);
         setCompanyGstin(comp.gstin ?? '');
 
-        // Build sales ledger options from learned preferences
-        const salesLedgers = new Set<string>();
+        // Sales ledger options: imported masters first, then any learned from prior acceptances.
+        const salesLedgers = new Set<string>(importedSalesLedgers.map((l) => l.tally_ledger_name));
         for (const inv of invData) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const acc = inv.tally_ledger_acceptance as any;
