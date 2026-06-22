@@ -15,8 +15,7 @@ BEGIN
   -- Records imported before the code fix have vendor_name = NULL / ''.
   UPDATE invoices i
   SET    vendor_name  = c.name,
-         vendor_gstin = COALESCE(NULLIF(c.gstin, ''), ''),
-         updated_at   = now()
+         vendor_gstin = COALESCE(NULLIF(c.gstin, ''), '')
   FROM   companies c
   WHERE  i.company_id      = c.id
     AND  i.voucher_class   = 'sales'
@@ -37,8 +36,7 @@ BEGIN
              END
            )
            FROM jsonb_array_elements(line_items) AS item
-         ),
-         updated_at = now()
+         )
   WHERE  voucher_class  = 'sales'
     AND  line_items      IS NOT NULL
     AND  line_items      != 'null'::jsonb
