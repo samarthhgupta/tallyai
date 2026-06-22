@@ -104,15 +104,15 @@ function outputOnly(all: DutiesTaxesMaster[], component: string): DutiesTaxesMas
   return out.length ? out : comp;
 }
 
-// ─── Ledger type badge colors (mirrors purchase preview) ─────────────────────
+// ─── Ledger type badge ────────────────────────────────────────────────────────
 
 const BADGE: Record<string, string> = {
-  Customer:   'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-  Sales:      'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  CGST:       'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
-  SGST:       'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
-  IGST:       'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
-  'Round Off':'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+  Customer:    'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  Sales:       'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  CGST:        'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+  SGST:        'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+  IGST:        'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
+  'Round Off': 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
 };
 
 function LedgerBadge({ type }: { type: string }) {
@@ -123,7 +123,161 @@ function LedgerBadge({ type }: { type: string }) {
   );
 }
 
-// ─── Mapping panel (expanded inline below each invoice row) ───────────────────
+// ─── Readiness badge ──────────────────────────────────────────────────────────
+
+function ReadinessBadge({ readiness, flags }: { readiness?: string | null; flags?: string[] | null }) {
+  if (!readiness || readiness === 'ready') return null;
+  const isCritical = readiness === 'critical';
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded font-medium ${
+        isCritical
+          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+      }`}
+      title={(flags ?? []).join('\n') || readiness}
+    >
+      {isCritical ? '⛔' : '⚠'} {isCritical ? 'Critical' : 'Warning'}
+    </span>
+  );
+}
+
+// ─── InlineCreateInput ────────────────────────────────────────────────────────
+
+function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
+  placeholder: string;
+  onConfirm: (value: string) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      autoFocus
+      type="text"
+      placeholder={placeholder}
+      className="border border-indigo-300 dark:border-indigo-800 rounded px-2 py-0.5 text-xs bg-indigo-50 dark:bg-indigo-900/30 dark:text-gray-100 w-full font-mono"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { const v = e.currentTarget.value.trim(); if (v) onConfirm(v); else onCancel(); }
+        if (e.key === 'Escape') onCancel();
+      }}
+      onBlur={(e) => {
+        const v = e.currentTarget.value.trim();
+        if (v) onConfirm(v);
+      }}
+    />
+  );
+}
+
+// ─── CreatableLedgerDropdown (matches purchase preview component exactly) ─────
+
+function CreatableLedgerDropdown({
+  value, options, pendingOptions, suggested,
+  freetext, createLabel,
+  onSelect, onStartCreate, onConfirmCreate, onCancelCreate,
+}: {
+  value: string;
+  options: string[];
+  pendingOptions: string[];
+  suggested: boolean;
+  freetext: boolean;
+  createLabel: string;
+  onSelect: (v: string) => void;
+  onStartCreate: () => void;
+  onConfirmCreate: (v: string) => void;
+  onCancelCreate: () => void;
+}) {
+  const allOpts = [...options, ...pendingOptions];
+  const isGhost = value !== '' && !allOpts.includes(value);
+  const cls = `border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
+    suggested
+      ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+      : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
+  }`;
+
+  if (freetext) {
+    return (
+      <InlineCreateInput
+        placeholder={createLabel}
+        onConfirm={onConfirmCreate}
+        onCancel={onCancelCreate}
+      />
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={value}
+        onChange={(e) => {
+          if (e.target.value === '__new__') { onStartCreate(); return; }
+          if (!e.target.value) return;
+          onSelect(e.target.value);
+        }}
+        className={cls}
+      >
+        {isGhost && <option value={value}>{value}{suggested ? ' ✦' : ''}</option>}
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        {pendingOptions.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
+        <option value="__new__">+ Create new…</option>
+      </select>
+    </div>
+  );
+}
+
+// ─── Locked mapping summary (read-only display after acceptance) ───────────────
+
+function LockedMappingView({
+  acc, inv, isCgstSgst, isIgst, onEdit, onUnmap,
+}: {
+  acc: SalesTallyAcceptance;
+  inv: StoredInvoice;
+  isCgstSgst: boolean;
+  isIgst: boolean;
+  onEdit: () => void;
+  onUnmap: () => void;
+}) {
+  const d = deriveInvoiceFinancials(inv);
+  return (
+    <div className="bg-green-50/60 dark:bg-green-900/10 border-t border-green-200 dark:border-green-800/50 px-5 py-3">
+      <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
+        <span className="font-medium text-green-700 dark:text-green-400">✓ Mapping accepted</span>
+        <span className="text-gray-500 dark:text-gray-400">Total: <strong className="text-gray-900 dark:text-gray-100">{formatINR(d.total)}</strong></span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
+        {[
+          { label: 'Customer', value: acc.customerLedger },
+          { label: 'Sales', value: acc.salesLedger },
+          isCgstSgst ? { label: 'CGST', value: acc.cgstLedger } : null,
+          isCgstSgst ? { label: 'SGST', value: acc.sgstLedger } : null,
+          isIgst     ? { label: 'IGST', value: acc.igstLedger } : null,
+          acc.roLedger ? { label: 'Round Off', value: acc.roLedger } : null,
+        ].filter(Boolean).map((item) => (
+          <div key={item!.label}>
+            <div className="mb-0.5"><LedgerBadge type={item!.label} /></div>
+            <div className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono" title={item!.value}>
+              {item!.value || <span className="text-gray-400 italic">—</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={onEdit}
+          className="px-3 py-1 text-xs border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+        >
+          Edit Mapping
+        </button>
+        <button
+          onClick={onUnmap}
+          className="px-3 py-1 text-xs border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+        >
+          Unmap
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Mapping panel ────────────────────────────────────────────────────────────
 
 interface MappingPanelProps {
   inv: StoredInvoice;
@@ -131,17 +285,21 @@ interface MappingPanelProps {
   suppliers: SupplierMaster[];
   dutiesTaxes: DutiesTaxesMaster[];
   salesLedgerOptions: string[];
+  pendingSalesLedgers: string[];
   companyId: string;
   companyState: string;
   initialAcc: SalesTallyAcceptance | null;
-  onSave: (id: string, acc: SalesTallyAcceptance) => void;
+  onSave: (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => void;
+  onUnmapRequest: () => void;
 }
 
 function MappingPanel({
-  inv, customers, suppliers, dutiesTaxes, salesLedgerOptions,
-  companyId, companyState, initialAcc, onSave,
+  inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, pendingSalesLedgers,
+  companyId, companyState, initialAcc, onSave, onUnmapRequest,
 }: MappingPanelProps) {
   const d = deriveInvoiceFinancials(inv);
+  const isCgstSgst = inv.tax_type === 'cgst_sgst';
+  const isIgst     = inv.tax_type === 'igst';
 
   const resolvedLedger = useMemo(
     () => resolveCustomerLedger(inv, customers, suppliers),
@@ -151,42 +309,56 @@ function MappingPanel({
   const [customerLedger, setCustomerLedger] = useState(
     initialAcc?.customerLedger || resolvedLedger || inv.buyer_name || '',
   );
-  const [salesLedger, setSalesLedger]   = useState(initialAcc?.salesLedger ?? '');
-  const [cgstLedger,  setCgstLedger]    = useState(initialAcc?.cgstLedger ?? '');
-  const [sgstLedger,  setSgstLedger]    = useState(initialAcc?.sgstLedger ?? '');
-  const [igstLedger,  setIgstLedger]    = useState(initialAcc?.igstLedger ?? '');
-  const [roLedger,    setRoLedger]      = useState(initialAcc?.roLedger ?? '');
-  const [saving,      setSaving]        = useState(false);
-  const [saved,       setSaved]         = useState(!!initialAcc);
-  const [err,         setErr]           = useState<string | null>(null);
+  const [salesLedger, setSalesLedger] = useState(initialAcc?.salesLedger ?? '');
+  const [cgstLedger,  setCgstLedger]  = useState(initialAcc?.cgstLedger ?? '');
+  const [sgstLedger,  setSgstLedger]  = useState(initialAcc?.sgstLedger ?? '');
+  const [igstLedger,  setIgstLedger]  = useState(initialAcc?.igstLedger ?? '');
+  const [roLedger,    setRoLedger]    = useState(initialAcc?.roLedger ?? '');
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState<string | null>(null);
 
-  // Load per-customer preferences + auto-fill tax ledgers from masters
+  // Freetext create state (one per field)
+  const [customerFree, setCustomerFree] = useState(false);
+  const [salesFree,    setSalesFree]    = useState(false);
+  const [roFree,       setRoFree]       = useState(false);
+
+  // Pending new options created in this session
+  const [pendingCustomers,  setPendingCustomers]  = useState<string[]>([]);
+  const [pendingRoLedgers,  setPendingRoLedgers]  = useState<string[]>([]);
+
+  // Lock state: start locked if already accepted, then user can click "Edit Mapping"
+  const [editing, setEditing] = useState(!initialAcc);
+
+  // Auto-fill from preferences on first open
   useEffect(() => {
-    if (saved) return;
+    if (!editing) return;
     getCustomerLedgerPreferences(companyId, inv.buyer_gstin, inv.buyer_name).then((prefs) => {
       if (prefs.sales && !salesLedger) setSalesLedger(prefs.sales);
       if (prefs.CGST  && !cgstLedger)  setCgstLedger(prefs.CGST);
       if (prefs.SGST  && !sgstLedger)  setSgstLedger(prefs.SGST);
       if (prefs.IGST  && !igstLedger)  setIgstLedger(prefs.IGST);
-      // Fall back to masters if no persisted preference
-      if (inv.tax_type === 'cgst_sgst') {
+      // Fall back to masters
+      if (isCgstSgst) {
         const cgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'CGST'));
         const sgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'SGST'));
         if (cgst && !cgstLedger) setCgstLedger(cgst.tally_ledger_name);
         if (sgst && !sgstLedger) setSgstLedger(sgst.tally_ledger_name);
-      } else if (inv.tax_type === 'igst') {
+      } else if (isIgst) {
         const igst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'IGST'));
         if (igst && !igstLedger) setIgstLedger(igst.tally_ledger_name);
       }
     }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId, inv.buyer_gstin, inv.buyer_name, inv.tax_type]);
+  }, [editing, companyId, inv.buyer_gstin, inv.buyer_name, inv.tax_type]);
 
-  const cgstOptions = outputOnly(dutiesTaxes, 'CGST');
-  const sgstOptions = outputOnly(dutiesTaxes, 'SGST');
-  const igstOptions = outputOnly(dutiesTaxes, 'IGST');
-  const isCgstSgst  = inv.tax_type === 'cgst_sgst';
-  const isIgst      = inv.tax_type === 'igst';
+  const cgstOptions = outputOnly(dutiesTaxes, 'CGST').map((x) => x.tally_ledger_name);
+  const sgstOptions = outputOnly(dutiesTaxes, 'SGST').map((x) => x.tally_ledger_name);
+  const igstOptions = outputOnly(dutiesTaxes, 'IGST').map((x) => x.tally_ledger_name);
+  const customerOptions = customers.map((c) => c.tally_ledger_name);
+
+  // Suggest if not yet accepted
+  const isSuggestedSales    = !initialAcc && salesLedgerOptions.length > 0;
+  const isSuggestedCustomer = !initialAcc && !!resolvedLedger;
 
   const handleSave = async () => {
     if (isBlank(salesLedger)) { setErr('Sales ledger is required'); return; }
@@ -195,8 +367,7 @@ function MappingPanel({
       const acc: SalesTallyAcceptance = { customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger };
       await saveSalesTallyAcceptance(companyId, inv.id, acc as unknown as Record<string, unknown>);
 
-      // ── Master writes (mirrors purchase acceptance) ──────────────────────
-      // 1. Customer master: ensure the customer exists
+      // Customer master
       if (!isBlank(customerLedger)) {
         await addCustomer(companyId, {
           tally_ledger_name: customerLedger,
@@ -205,11 +376,11 @@ function MappingPanel({
           companyState,
         }).catch(() => {});
       }
-      // 2. Sales ledger master
+      // Sales ledger master
       if (!isBlank(salesLedger)) {
         await addSalesLedger(companyId, salesLedger).catch(() => {});
       }
-      // 3. Duties & Taxes master (output tax ledgers)
+      // Tax ledger masters
       const taxWrites: Array<[TaxComponent, string]> = [];
       if (isCgstSgst && !isBlank(cgstLedger)) taxWrites.push(['CGST', cgstLedger]);
       if (isCgstSgst && !isBlank(sgstLedger)) taxWrites.push(['SGST', sgstLedger]);
@@ -218,18 +389,33 @@ function MappingPanel({
         await addDutiesTaxes(companyId, { tax_component: comp, tax_rate: null, tally_ledger_name: ledger }).catch(() => {});
       }
 
-      // ── Preference learning ──────────────────────────────────────────────
+      // Learning: persist preferences per customer
       await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'sales', salesLedger).catch(() => {});
       if (!isBlank(cgstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'CGST', cgstLedger).catch(() => {});
       if (!isBlank(sgstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'SGST', sgstLedger).catch(() => {});
       if (!isBlank(igstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'IGST', igstLedger).catch(() => {});
 
-      setSaved(true);
-      onSave(inv.id, acc);
+      setEditing(false);
+      onSave(inv.id, acc, pendingCustomers.includes(salesLedger) ? salesLedger : undefined);
     } catch (e) { setErr(getErrMsg(e)); }
     finally { setSaving(false); }
   };
 
+  // ── Locked view ────────────────────────────────────────────────────────────
+  if (!editing && initialAcc) {
+    return (
+      <LockedMappingView
+        acc={initialAcc}
+        inv={inv}
+        isCgstSgst={isCgstSgst}
+        isIgst={isIgst}
+        onEdit={() => setEditing(true)}
+        onUnmap={onUnmapRequest}
+      />
+    );
+  }
+
+  // ── Editable form ──────────────────────────────────────────────────────────
   return (
     <div className="bg-gray-50 dark:bg-gray-800/50 border-t border-indigo-100 dark:border-indigo-900/40 px-5 py-4">
       {/* Summary line */}
@@ -260,16 +446,21 @@ function MappingPanel({
               Customer Ledger{!resolvedLedger && ' ⚠'}
             </label>
           </div>
-          <input
+          <CreatableLedgerDropdown
             value={customerLedger}
-            onChange={(e) => { setCustomerLedger(e.target.value); setSaved(false); }}
-            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            placeholder="Customer ledger in Tally"
+            options={customerOptions}
+            pendingOptions={pendingCustomers}
+            suggested={isSuggestedCustomer}
+            freetext={customerFree}
+            createLabel="New customer ledger name…"
+            onSelect={(v) => { setCustomerLedger(v); }}
+            onStartCreate={() => setCustomerFree(true)}
+            onConfirmCreate={(v) => { setCustomerLedger(v); setPendingCustomers((p) => [...p, v]); setCustomerFree(false); }}
+            onCancelCreate={() => setCustomerFree(false)}
           />
           {!resolvedLedger && (
             <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-              Not found in customer or supplier master — verify ledger name.
-              Saving will add this customer to master.
+              Not found in master — saving will add this customer.
             </p>
           )}
         </div>
@@ -282,23 +473,18 @@ function MappingPanel({
               Sales Ledger <span className="text-red-500">*</span>
             </label>
           </div>
-          {salesLedgerOptions.length > 0 ? (
-            <select
-              value={salesLedger}
-              onChange={(e) => { setSalesLedger(e.target.value); setSaved(false); }}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">— select —</option>
-              {salesLedgerOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          ) : (
-            <input
-              value={salesLedger}
-              onChange={(e) => { setSalesLedger(e.target.value); setSaved(false); }}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              placeholder="e.g. Sales @ 5%"
-            />
-          )}
+          <CreatableLedgerDropdown
+            value={salesLedger}
+            options={salesLedgerOptions}
+            pendingOptions={pendingSalesLedgers}
+            suggested={isSuggestedSales}
+            freetext={salesFree}
+            createLabel="New sales ledger name…"
+            onSelect={(v) => setSalesLedger(v)}
+            onStartCreate={() => setSalesFree(true)}
+            onConfirmCreate={(v) => { setSalesLedger(v); setSalesFree(false); }}
+            onCancelCreate={() => setSalesFree(false)}
+          />
         </div>
 
         {/* Round-Off Ledger */}
@@ -307,11 +493,17 @@ function MappingPanel({
             <LedgerBadge type="Round Off" />
             <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Round-Off Ledger</label>
           </div>
-          <input
+          <CreatableLedgerDropdown
             value={roLedger}
-            onChange={(e) => { setRoLedger(e.target.value); setSaved(false); }}
-            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            placeholder="Round Off (optional)"
+            options={[]}
+            pendingOptions={pendingRoLedgers}
+            suggested={false}
+            freetext={roFree}
+            createLabel="Round off ledger name…"
+            onSelect={(v) => setRoLedger(v)}
+            onStartCreate={() => setRoFree(true)}
+            onConfirmCreate={(v) => { setRoLedger(v); setPendingRoLedgers((p) => [...p, v]); setRoFree(false); }}
+            onCancelCreate={() => setRoFree(false)}
           />
         </div>
 
@@ -321,16 +513,16 @@ function MappingPanel({
             <div className="flex items-center gap-1.5 mb-1">
               <LedgerBadge type="CGST" />
               <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output CGST Ledger ({formatINR(d.cgst)})
+                Output CGST ({formatINR(d.cgst)})
               </label>
             </div>
             <select
               value={cgstLedger}
-              onChange={(e) => { setCgstLedger(e.target.value); setSaved(false); }}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              onChange={(e) => setCgstLedger(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">— select —</option>
-              {cgstOptions.map((x) => <option key={x.id} value={x.tally_ledger_name}>{x.tally_ledger_name}</option>)}
+              {cgstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
         )}
@@ -341,16 +533,16 @@ function MappingPanel({
             <div className="flex items-center gap-1.5 mb-1">
               <LedgerBadge type="SGST" />
               <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output SGST Ledger ({formatINR(d.sgst)})
+                Output SGST ({formatINR(d.sgst)})
               </label>
             </div>
             <select
               value={sgstLedger}
-              onChange={(e) => { setSgstLedger(e.target.value); setSaved(false); }}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              onChange={(e) => setSgstLedger(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">— select —</option>
-              {sgstOptions.map((x) => <option key={x.id} value={x.tally_ledger_name}>{x.tally_ledger_name}</option>)}
+              {sgstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
         )}
@@ -361,16 +553,16 @@ function MappingPanel({
             <div className="flex items-center gap-1.5 mb-1">
               <LedgerBadge type="IGST" />
               <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output IGST Ledger ({formatINR(d.igst)})
+                Output IGST ({formatINR(d.igst)})
               </label>
             </div>
             <select
               value={igstLedger}
-              onChange={(e) => { setIgstLedger(e.target.value); setSaved(false); }}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              onChange={(e) => setIgstLedger(e.target.value)}
+              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">— select —</option>
-              {igstOptions.map((x) => <option key={x.id} value={x.tally_ledger_name}>{x.tally_ledger_name}</option>)}
+              {igstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
         )}
@@ -378,13 +570,23 @@ function MappingPanel({
 
       {err && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{err}</p>}
 
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-      >
-        {saving ? 'Saving…' : saved ? '✓ Update Mapping' : 'Save Mapping'}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+        >
+          {saving ? 'Saving…' : 'Accept Mapping'}
+        </button>
+        {initialAcc && (
+          <button
+            onClick={() => setEditing(false)}
+            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -431,24 +633,27 @@ export default function SalesXmlPage() {
   const { company } = useCompany();
   const [fy, setFy] = useState(currentFY());
 
-  const [invoices,          setInvoices]          = useState<StoredInvoice[]>([]);
-  const [customers,         setCustomers]          = useState<CustomerMaster[]>([]);
-  const [suppliers,         setSuppliers]          = useState<SupplierMaster[]>([]);
-  const [dutiesTaxes,       setDutiesTaxes]        = useState<DutiesTaxesMaster[]>([]);
-  const [tallyCompanyName,  setTallyCompanyName]   = useState('');
-  const [companyGstin,      setCompanyGstin]       = useState('');
-  const [companyState,      setCompanyState]       = useState('');
-  const [loading,           setLoading]            = useState(true);
-  const [bulkMapping,       setBulkMapping]        = useState(false);
-  const [error,             setError]              = useState<string | null>(null);
-  const [exportMsg,         setExportMsg]          = useState<string | null>(null);
+  const [invoices,           setInvoices]           = useState<StoredInvoice[]>([]);
+  const [customers,          setCustomers]           = useState<CustomerMaster[]>([]);
+  const [suppliers,          setSuppliers]           = useState<SupplierMaster[]>([]);
+  const [dutiesTaxes,        setDutiesTaxes]         = useState<DutiesTaxesMaster[]>([]);
+  const [tallyCompanyName,   setTallyCompanyName]    = useState('');
+  const [companyGstin,       setCompanyGstin]        = useState('');
+  const [companyState,       setCompanyState]        = useState('');
+  const [loading,            setLoading]             = useState(true);
+  const [bulkMapping,        setBulkMapping]         = useState(false);
+  const [bulkSaving,         setBulkSaving]          = useState(false);
+  const [error,              setError]               = useState<string | null>(null);
+  const [exportMsg,          setExportMsg]           = useState<string | null>(null);
 
-  const [acceptedMap,       setAcceptedMap]        = useState<Record<string, SalesTallyAcceptance>>({});
-  const [salesLedgerOptions,setSalesLedgerOptions] = useState<string[]>([]);
-  const [expandedIds,       setExpandedIds]        = useState<Set<string>>(new Set());
-  const [filterStatus,      setFilterStatus]       = useState<'all' | 'mapped' | 'unmapped'>('all');
-  const [search,            setSearch]             = useState('');
-  const [editingInvoice,    setEditingInvoice]     = useState<StoredInvoice | null>(null);
+  const [acceptedMap,        setAcceptedMap]         = useState<Record<string, SalesTallyAcceptance>>({});
+  const [salesLedgerOptions, setSalesLedgerOptions]  = useState<string[]>([]);
+  const [pendingSalesLedgers,setPendingSalesLedgers]  = useState<string[]>([]);
+  const [expandedIds,        setExpandedIds]         = useState<Set<string>>(new Set());
+  const [filterStatus,       setFilterStatus]        = useState<'all' | 'accepted' | 'pending'>('all');
+  const [search,             setSearch]              = useState('');
+  const [selectedInvoices,   setSelectedInvoices]    = useState<Set<string>>(new Set());
+  const [editingInvoice,     setEditingInvoice]      = useState<StoredInvoice | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -497,11 +702,24 @@ export default function SalesXmlPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [company, fy]);
 
-  const handleSave = (id: string, acc: SalesTallyAcceptance) => {
+  const handleSave = (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => {
     setAcceptedMap((prev) => ({ ...prev, [id]: acc }));
-    if (!isBlank(acc.salesLedger) && !salesLedgerOptions.includes(acc.salesLedger)) {
+    if (newSalesLedger && !salesLedgerOptions.includes(newSalesLedger)) {
+      setSalesLedgerOptions((prev) => [...prev, newSalesLedger]);
+      setPendingSalesLedgers((prev) => [...prev, newSalesLedger]);
+    } else if (acc.salesLedger && !salesLedgerOptions.includes(acc.salesLedger)) {
       setSalesLedgerOptions((prev) => [...prev, acc.salesLedger]);
     }
+    // Collapse after accepting
+    setExpandedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  };
+
+  const handleUnmap = async (invId: string) => {
+    if (!company) return;
+    try {
+      await saveSalesTallyAcceptance(company.id, invId, null);
+      setAcceptedMap((prev) => { const next = { ...prev }; delete next[invId]; return next; });
+    } catch (e) { setError(getErrMsg(e)); }
   };
 
   const toggleExpand = (id: string) => {
@@ -520,17 +738,16 @@ export default function SalesXmlPage() {
     let mapped = 0;
     try {
       for (const inv of invoices) {
-        if (acceptedMap[inv.id]) continue; // skip already mapped
+        if (acceptedMap[inv.id]) continue;
         const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
         const resolved = resolveCustomerLedger(inv, customers, suppliers);
         const custLedger = resolved || inv.buyer_name || '';
         const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
-        if (!salesL) continue; // can't auto-map without a sales ledger
+        if (!salesL) continue;
 
         let cgstL = (prefs as Record<string, string>).CGST || '';
         let sgstL = (prefs as Record<string, string>).SGST || '';
         let igstL = (prefs as Record<string, string>).IGST || '';
-        // Fall back to first output ledger from masters
         if (!cgstL) cgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'CGST'))?.tally_ledger_name ?? '';
         if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
         if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
@@ -548,6 +765,58 @@ export default function SalesXmlPage() {
     }
   };
 
+  // Bulk accept selected (uses same auto-map logic but only for selected)
+  const handleBulkAcceptSelected = async () => {
+    if (!company || selectedInvoices.size === 0) return;
+    setBulkSaving(true);
+    setError(null);
+    let mapped = 0;
+    try {
+      const toMap = invoices.filter((inv) => selectedInvoices.has(inv.id) && !acceptedMap[inv.id]);
+      for (const inv of toMap) {
+        const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
+        const resolved = resolveCustomerLedger(inv, customers, suppliers);
+        const custLedger = resolved || inv.buyer_name || '';
+        const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
+        if (!salesL) continue;
+
+        let cgstL = (prefs as Record<string, string>).CGST || '';
+        let sgstL = (prefs as Record<string, string>).SGST || '';
+        let igstL = (prefs as Record<string, string>).IGST || '';
+        if (!cgstL) cgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'CGST'))?.tally_ledger_name ?? '';
+        if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
+        if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
+
+        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '' };
+        await saveSalesTallyAcceptance(company.id, inv.id, acc as unknown as Record<string, unknown>).catch(() => {});
+        setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
+        mapped++;
+      }
+      setSelectedInvoices(new Set());
+      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoices.`);
+    } catch (e) {
+      setError(getErrMsg(e));
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  // Bulk unmap selected accepted invoices
+  const handleBulkUnmapSelected = async () => {
+    if (!company) return;
+    const toUnmap = invoices.filter((inv) => selectedInvoices.has(inv.id) && acceptedMap[inv.id]);
+    if (!toUnmap.length) return;
+    setBulkSaving(true);
+    try {
+      for (const inv of toUnmap) {
+        await saveSalesTallyAcceptance(company.id, inv.id, null).catch(() => {});
+        setAcceptedMap((prev) => { const next = { ...prev }; delete next[inv.id]; return next; });
+      }
+      setSelectedInvoices(new Set());
+    } catch (e) { setError(getErrMsg(e)); }
+    finally { setBulkSaving(false); }
+  };
+
   const mappedInvoices = useMemo(
     () => invoices.filter((inv) => { const a = acceptedMap[inv.id]; return a && !isBlank(a.salesLedger); }),
     [invoices, acceptedMap],
@@ -555,8 +824,8 @@ export default function SalesXmlPage() {
 
   const filteredInvoices = useMemo(() => {
     let list = invoices;
-    if (filterStatus === 'mapped') list = list.filter((inv) => acceptedMap[inv.id] && !isBlank(acceptedMap[inv.id].salesLedger));
-    if (filterStatus === 'unmapped') list = list.filter((inv) => !acceptedMap[inv.id] || isBlank(acceptedMap[inv.id].salesLedger));
+    if (filterStatus === 'accepted') list = list.filter((inv) => acceptedMap[inv.id] && !isBlank(acceptedMap[inv.id].salesLedger));
+    if (filterStatus === 'pending')  list = list.filter((inv) => !acceptedMap[inv.id] || isBlank(acceptedMap[inv.id].salesLedger));
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((inv) =>
@@ -567,6 +836,39 @@ export default function SalesXmlPage() {
     }
     return list;
   }, [invoices, acceptedMap, filterStatus, search]);
+
+  // Invoices eligible for select/accept (unmapped in current filter)
+  const selectableIds = useMemo(
+    () => filteredInvoices.filter((inv) => !acceptedMap[inv.id]).map((inv) => inv.id),
+    [filteredInvoices, acceptedMap],
+  );
+  const selectedAccepted = useMemo(
+    () => new Set(Array.from(selectedInvoices).filter((id) => !!acceptedMap[id])),
+    [selectedInvoices, acceptedMap],
+  );
+  const allPendingSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedInvoices.has(id));
+
+  const toggleSelectAll = () => {
+    if (allPendingSelected) {
+      setSelectedInvoices((prev) => { const next = new Set(prev); selectableIds.forEach((id) => next.delete(id)); return next; });
+    } else {
+      setSelectedInvoices((prev) => new Set([...Array.from(prev), ...selectableIds]));
+    }
+  };
+  const toggleSelect = (id: string) => {
+    setSelectedInvoices((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  };
+
+  const totalCount    = invoices.length;
+  const mappedCount   = mappedInvoices.length;
+  const unmappedCount = totalCount - mappedCount;
+
+  const totalTaxable = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.net_goods_taxable + d.taxable_charges_total; }, 0), [filteredInvoices]);
+  const totalTax     = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.cgst + d.sgst + d.igst; }, 0), [filteredInvoices]);
+  const grandTotal   = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.total; }, 0), [filteredInvoices]);
+
+  const selectedPending   = useMemo(() => Array.from(selectedInvoices).filter((id) => !acceptedMap[id]).length,  [selectedInvoices, acceptedMap]);
+  const selectedAccepted2 = useMemo(() => Array.from(selectedInvoices).filter((id) => !!acceptedMap[id]).length, [selectedInvoices, acceptedMap]);
 
   const handleExportVouchers = () => {
     if (!mappedInvoices.length) { setExportMsg('No invoices with complete mapping to export.'); return; }
@@ -592,14 +894,6 @@ export default function SalesXmlPage() {
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
   };
 
-  const totalCount   = invoices.length;
-  const mappedCount  = mappedInvoices.length;
-  const unmappedCount = totalCount - mappedCount;
-
-  const totalTaxable = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.net_goods_taxable + d.taxable_charges_total; }, 0), [filteredInvoices]);
-  const totalTax     = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.cgst + d.sgst + d.igst; }, 0), [filteredInvoices]);
-  const grandTotal   = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.total; }, 0), [filteredInvoices]);
-
   return (
     <AppLayout>
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -614,7 +908,6 @@ export default function SalesXmlPage() {
         {error && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">{error}</div>
         )}
-
         {exportMsg && (
           <div className={`mb-4 p-3 rounded-lg text-sm ${exportMsg.startsWith('✓')
             ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400'
@@ -626,25 +919,30 @@ export default function SalesXmlPage() {
         {/* Dashboard stat cards */}
         {!loading && totalCount > 0 && (
           <div className="flex flex-wrap gap-3 mb-6">
-            <StatCard label="Total"   value={totalCount.toLocaleString()}   color="gray"   onClick={() => setFilterStatus('all')}     active={filterStatus === 'all'} />
-            <StatCard label="Mapped"  value={mappedCount.toLocaleString()}  color="green"  onClick={() => setFilterStatus('mapped')}   active={filterStatus === 'mapped'}
-              sub={mappedCount > 0 ? `${formatINR(mappedInvoices.reduce((s, i) => { const d = deriveInvoiceFinancials(i); return s + d.total; }, 0))} total` : undefined} />
-            <StatCard label="Unmapped" value={unmappedCount.toLocaleString()} color="amber" onClick={() => setFilterStatus('unmapped')} active={filterStatus === 'unmapped'} />
+            <StatCard label="Total Invoices"          value={totalCount.toLocaleString()}    color="gray"  onClick={() => setFilterStatus('all')}      active={filterStatus === 'all'} />
+            <StatCard
+              label="Accepted – Ready for Export"
+              value={mappedCount.toLocaleString()}
+              color="green"
+              onClick={() => setFilterStatus('accepted')}
+              active={filterStatus === 'accepted'}
+              sub={mappedCount > 0 ? `${formatINR(mappedInvoices.reduce((s, i) => { const d = deriveInvoiceFinancials(i); return s + d.total; }, 0))} total` : undefined}
+            />
+            {unmappedCount > 0 && (
+              <StatCard label="Pending Mapping" value={unmappedCount.toLocaleString()} color="amber" onClick={() => setFilterStatus('pending')} active={filterStatus === 'pending'} />
+            )}
           </div>
         )}
 
         {/* Controls row */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
           <FYPeriodSelector value={fy} onChange={(v) => { setFy(v); setError(null); setExportMsg(null); }} />
-
-          {/* Search */}
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search invoice # / customer / GSTIN…"
             className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 w-64 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
-
           <div className="flex gap-2 ml-auto">
             <button
               onClick={handleAutoMapAll}
@@ -670,6 +968,50 @@ export default function SalesXmlPage() {
           </div>
         </div>
 
+        {/* Bulk action bar */}
+        {!loading && totalCount > 0 && (
+          <div className="flex items-center gap-3 mb-3 min-h-[32px]">
+            {/* Select all checkbox */}
+            {selectableIds.length > 0 && (
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allPendingSelected}
+                  onChange={toggleSelectAll}
+                  className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                />
+                Select All Pending
+              </label>
+            )}
+
+            {selectedPending > 0 && (
+              <button
+                onClick={handleBulkAcceptSelected}
+                disabled={bulkSaving}
+                className="px-3 py-1 text-xs bg-indigo-600 text-white font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {bulkSaving ? 'Accepting…' : `Accept ${selectedPending} invoice${selectedPending === 1 ? '' : 's'}`}
+              </button>
+            )}
+
+            {selectedAccepted2 > 0 && (
+              <button
+                onClick={handleBulkUnmapSelected}
+                disabled={bulkSaving}
+                className="px-3 py-1 text-xs border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 font-medium rounded hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+              >
+                {bulkSaving ? 'Unmapping…' : `Unmap ${selectedAccepted2} invoice${selectedAccepted2 === 1 ? '' : 's'}`}
+              </button>
+            )}
+
+            {selectedInvoices.size === 0 && unmappedCount > 0 && (
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                Select invoices to accept in bulk, or click a row to map manually.
+              </span>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-16 text-gray-400">Loading…</div>
         ) : invoices.length === 0 ? (
@@ -681,14 +1023,15 @@ export default function SalesXmlPage() {
         ) : (
           <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
             {/* Table header */}
-            <div className="grid grid-cols-[32px_1fr_100px_60px_120px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400">
+            <div className="grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400">
+              <span />
               <span />
               <span>Customer · Invoice #</span>
               <span className="text-center">Date</span>
               <span className="text-center">Type</span>
+              <span className="text-center">Status</span>
               <span className="text-right">Taxable</span>
               <span className="text-right">Tax</span>
-              <span className="text-right">Total</span>
               <span className="text-center">Sales Ledger</span>
               <span />
             </div>
@@ -700,20 +1043,31 @@ export default function SalesXmlPage() {
               const isMapped = acc && !isBlank(acc.salesLedger);
               const expanded = expandedIds.has(inv.id);
               const hasTax   = d.cgst + d.sgst + d.igst > 0;
+              const isSelected = selectedInvoices.has(inv.id);
 
               return (
                 <React.Fragment key={inv.id}>
                   <div
                     className={[
-                      'grid grid-cols-[32px_1fr_100px_60px_120px_120px_120px_120px_32px]',
+                      'grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px]',
                       'items-center gap-2 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800',
                       'cursor-pointer select-none transition-colors',
-                      expanded   ? 'bg-indigo-50/70 dark:bg-indigo-900/10'    : '',
-                      isMapped   ? 'bg-green-50/30 dark:bg-green-900/5'       : '',
+                      expanded ? 'bg-indigo-50/70 dark:bg-indigo-900/10' : '',
+                      isMapped && !expanded ? 'bg-green-50/30 dark:bg-green-900/5' : '',
                       !isMapped && !expanded ? 'hover:bg-gray-50 dark:hover:bg-gray-800/50' : '',
                     ].join(' ')}
                     onClick={() => toggleExpand(inv.id)}
                   >
+                    {/* Checkbox */}
+                    <div onClick={(e) => { e.stopPropagation(); toggleSelect(inv.id); }}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(inv.id)}
+                        className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </div>
+
                     {/* Status dot */}
                     <div className="text-center text-base leading-none">
                       {isMapped ? '✅' : '🟡'}
@@ -733,12 +1087,20 @@ export default function SalesXmlPage() {
                     {/* Tax type badge */}
                     <div className="text-center">
                       <span className={`text-xs px-1.5 py-0.5 rounded font-mono font-medium ${
-                        inv.tax_type === 'igst'     ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' :
+                        inv.tax_type === 'igst'      ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' :
                         inv.tax_type === 'cgst_sgst' ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400' :
                         'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
                       }`}>
                         {inv.tax_type === 'igst' ? 'IGST' : inv.tax_type === 'cgst_sgst' ? 'C+S' : 'NIL'}
                       </span>
+                    </div>
+
+                    {/* Readiness badge */}
+                    <div className="text-center">
+                      {inv.readiness && inv.readiness !== 'ready'
+                        ? <ReadinessBadge readiness={inv.readiness} flags={inv.readiness_flags as string[] | null} />
+                        : <span className="text-xs text-green-600 dark:text-green-400">✓</span>
+                      }
                     </div>
 
                     {/* Taxable */}
@@ -751,12 +1113,7 @@ export default function SalesXmlPage() {
                       {hasTax ? formatINR(d.cgst + d.sgst + d.igst) : '—'}
                     </div>
 
-                    {/* Total */}
-                    <div className="text-xs text-right font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
-                      {formatINR(d.total)}
-                    </div>
-
-                    {/* Sales ledger badge or Map button */}
+                    {/* Sales ledger badge or pending indicator */}
                     <div className="text-center">
                       {acc?.salesLedger ? (
                         <span className="inline-block text-xs text-green-700 dark:text-green-400 font-medium truncate max-w-[108px]" title={acc.salesLedger}>
@@ -792,10 +1149,12 @@ export default function SalesXmlPage() {
                       suppliers={suppliers}
                       dutiesTaxes={dutiesTaxes}
                       salesLedgerOptions={salesLedgerOptions}
+                      pendingSalesLedgers={pendingSalesLedgers}
                       companyId={company!.id}
                       companyState={companyState}
                       initialAcc={acc ?? null}
                       onSave={handleSave}
+                      onUnmapRequest={() => handleUnmap(inv.id)}
                     />
                   )}
                 </React.Fragment>
@@ -804,13 +1163,12 @@ export default function SalesXmlPage() {
 
             {/* Footer totals */}
             {filteredInvoices.length > 0 && (
-              <div className="grid grid-cols-[32px_1fr_100px_60px_120px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300">
-                <div />
+              <div className="grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300">
+                <div /><div />
                 <div>Total ({filteredInvoices.length.toLocaleString()} invoices)</div>
-                <div className="col-span-2" />
+                <div className="col-span-3" />
                 <div className="text-right tabular-nums">{formatINR(totalTaxable)}</div>
                 <div className="text-right tabular-nums">{formatINR(totalTax)}</div>
-                <div className="text-right tabular-nums">{formatINR(grandTotal)}</div>
                 <div className="col-span-2" />
               </div>
             )}
@@ -848,8 +1206,8 @@ export default function SalesXmlPage() {
               readiness:            r.readiness,
               readiness_flags:      r.flags,
             };
-            await updateAcceptedInvoice(editingInvoice.id, patch);
-            const updated: StoredInvoice = { ...editingInvoice, ...patch } as StoredInvoice;
+            await updateAcceptedInvoice(editingInvoice!.id, patch);
+            const updated: StoredInvoice = { ...editingInvoice!, ...patch } as StoredInvoice;
             setInvoices((prev) => prev.map((i) => i.id === updated.id ? updated : i));
             setEditingInvoice(null);
           }}
