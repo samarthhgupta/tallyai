@@ -49,6 +49,7 @@ function generateGuid(): string {
 export interface XmlGeneratorInput {
   invoices: StoredInvoice[];
   suppliers: SupplierMaster[];
+  customers?: import('./customers').CustomerMaster[];  // cross-role: debtors that also appear as creditors
   dutiesTaxes: DutiesTaxesMaster[];
   stockItems: StockItemMaster[];
   expenseLedgers: ExpenseLedgerMaster[];
@@ -147,21 +148,33 @@ export function suggestStockItem(stockItems: StockItemMaster[], description: str
 
 // ─── Master lookups (in-memory, no async) ────────────────────────────────────
 
-function findSupplier(suppliers: SupplierMaster[], gstin: string | null, vendorName: string): SupplierMaster | null {
+function findSupplier(
+  suppliers: SupplierMaster[],
+  gstin: string | null,
+  vendorName: string,
+  customers?: import('./customers').CustomerMaster[],
+): SupplierMaster | null {
   if (gstin) {
     const g = norm(gstin);
+    // 1. Sundry Creditors by GSTIN
     const byGstin = suppliers.find((s) => norm(s.vendor_gstin ?? '') === g);
     if (byGstin) return byGstin;
-    // Invoice has a GSTIN but it didn't match any supplier - do NOT fuzzy-name-match.
-    // GSTIN is the definitive identifier; a name-based guess with an unmatched GSTIN would
-    // map the invoice to the wrong Tally ledger (e.g. "SHRI VINAYAK TRADERS" wrongly matched
-    // to "Shri Ganesh Traders" because both names share the words "Shri" and "Traders").
+    // 2. Sundry Debtors by GSTIN (cross-role: Lakshmi Textile as both supplier and customer)
+    if (customers) {
+      const debtor = customers.find((c) => norm(c.customer_gstin ?? '') === g);
+      if (debtor) return { tally_ledger_name: debtor.tally_ledger_name, vendor_gstin: debtor.customer_gstin ?? '', vendor_name: debtor.tally_ledger_name } as SupplierMaster;
+    }
+    // Invoice has a GSTIN but no match — do NOT fuzzy-name-match across either table.
     return null;
   }
-  // No GSTIN on invoice - exact name match then fuzzy
+  // No GSTIN on invoice — exact name match in Sundry Creditors first, then Sundry Debtors
   const vn = norm(vendorName);
   const exact = suppliers.find((s) => norm(s.vendor_name) === vn || norm(s.tally_ledger_name) === vn);
   if (exact) return exact;
+  if (customers) {
+    const debtorByName = customers.find((c) => norm(c.tally_ledger_name) === vn || norm(c.customer_name ?? '') === vn);
+    if (debtorByName) return { tally_ledger_name: debtorByName.tally_ledger_name, vendor_gstin: debtorByName.customer_gstin ?? '', vendor_name: debtorByName.tally_ledger_name } as SupplierMaster;
+  }
   // Fuzzy match only for invoices without a GSTIN (e.g. unregistered suppliers)
   return suggestSupplier(suppliers, gstin, vendorName);
 }
@@ -614,7 +627,7 @@ interface VoucherResult { xml: string | null; skip?: string; warnings: string[];
 function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const d = deriveInvoiceFinancials(inv);
-  const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+  const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
   const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
@@ -876,7 +889,7 @@ function buildAllInventoryEntry(
 function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const d = deriveInvoiceFinancials(inv);
-  const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+  const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
   const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
@@ -1780,7 +1793,7 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
   if (includeSuppliers) {
     const seenSuppliers = new Set<string>();
     for (const inv of input.invoices) {
-      const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+      const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
       if (supplier && !seenSuppliers.has(supplier.tally_ledger_name)) {
         seenSuppliers.add(supplier.tally_ledger_name);
         messages.push(buildSupplierMasterBlock(supplier, fyStart));
@@ -2015,7 +2028,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     const d = deriveInvoiceFinancials(inv);
     const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
-    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
@@ -2094,7 +2107,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     const d = deriveInvoiceFinancials(inv);
     const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
-    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name);
+    const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);

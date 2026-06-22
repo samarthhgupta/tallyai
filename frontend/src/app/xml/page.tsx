@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
 import { getPurchaseRegister, getCompany, updateCompany, saveInvoiceTallyAcceptance } from '@/lib/db';
 import { loadSuppliers, addSupplier } from '@/lib/suppliers';
+import { loadCustomers } from '@/lib/customers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger, getExpenseDefaults } from '@/lib/expenseLedgers';
@@ -1658,15 +1659,16 @@ function SuggestionsPanel({
 // ─── Shared master loader ─────────────────────────────────────────────────────
 
 async function loadMasters(companyId: string) {
-  const [suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters] = await Promise.all([
+  const [suppliers, customers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters] = await Promise.all([
     loadSuppliers(companyId),
+    loadCustomers(companyId),
     loadDutiesTaxes(companyId),
     loadStockItems(companyId),
     loadExpenseLedgers(companyId),
     loadVoucherTypes(companyId),
     loadPurchaseLedgers(companyId),
   ]);
-  return { suppliers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters };
+  return { suppliers, customers, dutiesTaxes, stockItems, expenseLedgers, voucherTypes, purchaseLedgerMasters };
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -1842,6 +1844,7 @@ export default function XmlGeneratorPage() {
     const fresh = await getCompany(company!.id);
     return {
       invoices, ...masters,
+      customers: masters.customers,
       purchaseLedgers: masters.purchaseLedgerMasters.map((l) => ({ gst_percent: null as null, tally_ledger_name: l.tally_ledger_name })),
       tallyCompanyName: company!.tally_company_name!,
       financialYear: selectedFY,

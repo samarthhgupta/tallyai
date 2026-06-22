@@ -6,6 +6,7 @@ import { getSession } from '@/lib/auth';
 import { getCompany } from '@/lib/db';
 import { getSalesRegister, saveSalesTallyAcceptance } from '@/lib/salesDb';
 import { loadCustomers } from '@/lib/customers';
+import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems } from '@/lib/stockItems';
 import { loadExpenseLedgers } from '@/lib/expenseLedgers';
@@ -13,6 +14,7 @@ import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/
 import { loadSalesLedgers } from '@/lib/salesLedgerConfig';
 import { generateSalesVouchersXml, generateSalesMastersXml } from '@/lib/salesXmlGenerator';
 import type { CustomerMaster } from '@/lib/customers';
+import type { SupplierMaster } from '@/lib/suppliers';
 import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
 import type { StoredInvoice } from '@/types/invoice';
 import { formatINR } from '@/types/invoice';
@@ -84,23 +86,37 @@ function isExported(acc: SalesTallyAcceptance | null): boolean {
 interface InvoiceRowProps {
   inv: StoredInvoice;
   customers: CustomerMaster[];
+  suppliers: SupplierMaster[];
   dutiesTaxes: DutiesTaxesMaster[];
   salesLedgerOptions: string[];
   companyId: string;
   onSave: (id: string, acc: SalesTallyAcceptance) => void;
 }
 
-function InvoiceRow({ inv, customers, dutiesTaxes, salesLedgerOptions, companyId, onSave }: InvoiceRowProps) {
+function InvoiceRow({ inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, companyId, onSave }: InvoiceRowProps) {
   const d = deriveInvoiceFinancials(inv);
   const existing = parseSalesAcceptance(inv);
 
-  // Find the customer master record
+  // Find the customer ledger name.
+  // Resolution order: Sundry Debtors by GSTIN → Sundry Debtors by name →
+  //                   Sundry Creditors by GSTIN → Sundry Creditors by name (cross-role).
   const customerMaster = useMemo(() => {
     const g = (inv.buyer_gstin ?? '').toLowerCase().trim();
-    if (g) return customers.find((c) => (c.customer_gstin ?? '').toLowerCase() === g) ?? null;
     const n = (inv.buyer_name ?? '').toLowerCase().trim();
-    return customers.find((c) => c.tally_ledger_name.toLowerCase() === n || c.customer_name.toLowerCase() === n) ?? null;
-  }, [inv, customers]);
+    if (g) {
+      const byGstin = customers.find((c) => (c.customer_gstin ?? '').toLowerCase() === g);
+      if (byGstin) return { tally_ledger_name: byGstin.tally_ledger_name };
+      // Cross-role: buyer is in Sundry Creditors (e.g. Lakshmi Textile)
+      const creditor = suppliers.find((s) => (s.vendor_gstin ?? '').toLowerCase() === g);
+      if (creditor) return { tally_ledger_name: creditor.tally_ledger_name };
+      return null;
+    }
+    const byName = customers.find((c) => c.tally_ledger_name.toLowerCase() === n || (c.customer_name ?? '').toLowerCase() === n);
+    if (byName) return { tally_ledger_name: byName.tally_ledger_name };
+    const creditorByName = suppliers.find((s) => s.tally_ledger_name.toLowerCase() === n || (s.vendor_name ?? '').toLowerCase() === n);
+    if (creditorByName) return { tally_ledger_name: creditorByName.tally_ledger_name };
+    return null;
+  }, [inv, customers, suppliers]);
 
   const defaultCustomerLedger = customerMaster?.tally_ledger_name ?? (inv.buyer_name ?? '');
 
@@ -316,6 +332,7 @@ export default function SalesXmlPage() {
 
   const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
   const [customers, setCustomers] = useState<CustomerMaster[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierMaster[]>([]);
   const [dutiesTaxes, setDutiesTaxes] = useState<DutiesTaxesMaster[]>([]);
   const [tallyCompanyName, setTallyCompanyName] = useState('');
   const [companyGstin, setCompanyGstin] = useState('');
@@ -334,15 +351,17 @@ export default function SalesXmlPage() {
       if (!session) { router.push('/login'); return; }
       if (!company) { router.push('/select-company'); return; }
       try {
-        const [invData, custData, dtData, comp, importedSalesLedgers] = await Promise.all([
+        const [invData, custData, suppData, dtData, comp, importedSalesLedgers] = await Promise.all([
           getSalesRegister(company.id, { financialYear: fy }),
           loadCustomers(company.id),
+          loadSuppliers(company.id),
           loadDutiesTaxes(company.id),
           getCompany(company.id),
           loadSalesLedgers(company.id),
         ]);
         setInvoices(invData);
         setCustomers(custData);
+        setSuppliers(suppData);
         setDutiesTaxes(dtData);
         setTallyCompanyName(comp.tally_company_name ?? comp.name);
         setCompanyGstin(comp.gstin ?? '');
@@ -518,6 +537,7 @@ export default function SalesXmlPage() {
                 key={inv.id}
                 inv={inv}
                 customers={customers}
+                suppliers={suppliers}
                 dutiesTaxes={dutiesTaxes}
                 salesLedgerOptions={salesLedgerOptions}
                 companyId={company!.id}

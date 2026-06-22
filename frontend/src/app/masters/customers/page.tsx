@@ -198,7 +198,7 @@ export default function CustomerMastersPage() {
     ]);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Customer Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Debtors');
     XLSX.writeFile(wb, 'TallyAI_Customer_Master_Template.xlsx');
   };
 
@@ -268,7 +268,7 @@ export default function CustomerMastersPage() {
     const ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [{ wch: 40 }, { wch: 20 }, { wch: 35 }, { wch: 20 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Customer Master');
+    XLSX.utils.book_append_sheet(wb, ws, 'Sundry Debtors');
     XLSX.writeFile(wb, `CustomerMaster_${company?.name ?? 'export'}.xlsx`);
   };
 
@@ -289,7 +289,7 @@ export default function CustomerMastersPage() {
           {/* Header */}
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Customer Masters</h1>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Sundry Debtors</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                 Maps customer GSTIN to Tally party ledger name. State is auto-derived from GSTIN.
               </p>
