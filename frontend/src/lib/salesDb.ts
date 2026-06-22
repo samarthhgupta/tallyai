@@ -2,8 +2,24 @@ import { getSupabase } from './supabase';
 import type { StoredInvoice, ExtractedInvoice, InvoiceReadiness } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
 
-// PostgREST default max-rows is 1000. Use an explicit high limit for full-register queries.
-const MAX_REGISTER_ROWS = 10000;
+// PostgREST hosted Supabase enforces max-rows = 1000 as a server-side hard cap.
+// .limit() cannot override it. Use paginated range fetching instead.
+const PAGE_SIZE = 1000;
+
+// Paginate through all rows using .range(), collecting until a page returns fewer than PAGE_SIZE.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllRows(buildQuery: () => any): Promise<StoredInvoice[]> {
+  const all: StoredInvoice[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    all.push(...(data ?? []));
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => getSupabase() as any;
@@ -80,17 +96,17 @@ export async function getSalesPendingInvoices(
   companyId: string,
   batchId?: string,
 ): Promise<StoredInvoice[]> {
-  let q = db()
-    .from('invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('voucher_class', 'sales')
-    .eq('status', 'pending_review')
-    .order('created_at', { ascending: true });
-  if (batchId) q = q.eq('batch_id', batchId);
-  const { data, error } = await q.limit(MAX_REGISTER_ROWS);
-  if (error) throw error;
-  return (data ?? []) as StoredInvoice[];
+  return fetchAllRows(() => {
+    let q = db()
+      .from('invoices')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('voucher_class', 'sales')
+      .eq('status', 'pending_review')
+      .order('created_at', { ascending: true });
+    if (batchId) q = q.eq('batch_id', batchId);
+    return q;
+  });
 }
 
 // ─── Sales Register (accepted) ────────────────────────────────────────────────
@@ -98,21 +114,19 @@ export async function getSalesRegister(
   companyId: string,
   filters: { financialYear?: string; periodMonth?: string } = {},
 ): Promise<StoredInvoice[]> {
-  let q = db()
-    .from('invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('voucher_class', 'sales')
-    .eq('status', 'accepted')
-    .order('invoice_date', { ascending: false })
-    .order('accepted_at', { ascending: false });
-
-  if (filters.financialYear) q = q.eq('financial_year', filters.financialYear);
-  if (filters.periodMonth) q = q.eq('period_month', filters.periodMonth);
-
-  const { data, error } = await q.limit(MAX_REGISTER_ROWS);
-  if (error) throw error;
-  return (data ?? []) as StoredInvoice[];
+  return fetchAllRows(() => {
+    let q = db()
+      .from('invoices')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('voucher_class', 'sales')
+      .eq('status', 'accepted')
+      .order('invoice_date', { ascending: false })
+      .order('accepted_at', { ascending: false });
+    if (filters.financialYear) q = q.eq('financial_year', filters.financialYear);
+    if (filters.periodMonth) q = q.eq('period_month', filters.periodMonth);
+    return q;
+  });
 }
 
 // ─── Shared row builder ───────────────────────────────────────────────────────
