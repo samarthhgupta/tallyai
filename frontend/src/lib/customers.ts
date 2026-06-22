@@ -288,8 +288,22 @@ export async function bulkUpsertCustomers(
   });
 
   if (toInsert.length) {
-    const { error } = await db().from('customer_masters').insert(toInsert);
-    if (error) throw new Error(`Insert failed: ${error.message}`);
+    // B2B rows: conflict on (company_id, customer_gstin)
+    const b2bRows = toInsert.filter((r: any) => (r as any).customer_gstin);
+    if (b2bRows.length) {
+      const { error } = await db()
+        .from('customer_masters')
+        .upsert(b2bRows, { onConflict: 'company_id,customer_gstin' });
+      if (error) throw new Error(`Insert failed: ${error.message}`);
+    }
+    // B2C rows (no GSTIN): conflict on (company_id, tally_ledger_name)
+    const b2cRows = toInsert.filter((r: any) => !(r as any).customer_gstin);
+    if (b2cRows.length) {
+      const { error } = await db()
+        .from('customer_masters')
+        .upsert(b2cRows, { onConflict: 'company_id,tally_ledger_name' });
+      if (error) throw new Error(`Insert failed: ${error.message}`);
+    }
   }
   for (const { id, payload } of toUpdate) {
     const { error } = await db().from('customer_masters').update(payload).eq('id', id);
