@@ -1,5 +1,6 @@
 import { getSupabase } from './supabase';
 import type { StoredInvoice, ExtractedInvoice, InvoiceReadiness } from '@/types/invoice';
+import { normalizeLineItem } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
 
 // PostgREST hosted Supabase enforces max-rows = 1000 as a server-side hard cap.
@@ -54,6 +55,17 @@ export function computeSalesReadiness(
     if (inv.confidence < 0.70) {
       flags.push(`Low confidence (${Math.round(inv.confidence * 100)}%)`);
       readiness = 'warning';
+    }
+    // Validate return-line sign consistency: sign must be on qty, never on rate.
+    for (const li of (inv.line_items ?? [])) {
+      if ((li.qty ?? 0) < 0 && (li.amount ?? 0) > 0) {
+        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity negative but amount positive`);
+        if (readiness === 'ready') readiness = 'warning';
+      }
+      if ((li.qty ?? 0) > 0 && (li.amount ?? 0) < 0) {
+        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity positive but amount negative`);
+        if (readiness === 'ready') readiness = 'warning';
+      }
     }
   }
 
@@ -138,8 +150,10 @@ function buildSalesRow(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   p: { financial_year: string; period_month: string; period_label: string },
 ): Record<string, unknown> {
-  const r = computeSalesReadiness(inv);
-  const d = deriveInvoiceFinancials(inv);
+  // Normalize line items before any financial derivation so rates are never negative.
+  const nInv: ExtractedInvoice = { ...inv, line_items: (inv.line_items ?? []).map(normalizeLineItem) };
+  const r = computeSalesReadiness(nInv);
+  const d = deriveInvoiceFinancials(nInv);
   return {
     batch_id: batchId,
     company_id: companyId,
@@ -173,7 +187,7 @@ function buildSalesRow(
     total: d.total,
     confidence: inv.confidence,
     confidence_reasons: inv.confidence_reasons ?? [],
-    line_items: inv.line_items,
+    line_items: nInv.line_items,
     bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
     status: 'accepted',
     readiness: r.readiness,

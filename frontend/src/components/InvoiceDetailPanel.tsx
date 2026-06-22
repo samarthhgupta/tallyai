@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { updateAcceptedInvoice, moveAcceptedToRejected, deleteInvoice, computeReadiness } from '@/lib/db';
 import type { StoredInvoice, LineItem, ExtraCharge } from '@/types/invoice';
-import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary, getStateFromGstin } from '@/types/invoice';
+import { formatINR, calcLineAmount, buildHsnSummary, buildFullTaxSummary, getStateFromGstin, normalizeLineItem } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 
@@ -225,7 +225,7 @@ export default function InvoiceDetailPanel({
   const [editTaxType, setEditTaxType] = useState<'cgst_sgst' | 'igst'>(invoice.tax_type);
   const [editRoundOff, setEditRoundOff] = useState(invoice.round_off ?? 0);
   const [editBillDiscount, setEditBillDiscount] = useState(invoice.bill_discount_amount ?? 0);
-  const [editLineItems, setEditLineItems] = useState<LineItem[]>((invoice.line_items ?? []).map((it) => ({ ...it })));
+  const [editLineItems, setEditLineItems] = useState<LineItem[]>((invoice.line_items ?? []).map(normalizeLineItem));
   const [editCharges, setEditCharges] = useState<ExtraCharge[]>(
     (invoice.charges ?? []).map((c) => ({ ...c, sac: resolveChargeSac(c.description, c.sac) })),
   );
@@ -437,14 +437,19 @@ export default function InvoiceDetailPanel({
     setEditTaxType(invoice.tax_type);
     setEditRoundOff(invoice.round_off ?? 0);
     setEditBillDiscount(invoice.bill_discount_amount ?? 0);
-    setEditLineItems((invoice.line_items ?? []).map((it) => ({ ...it })));
+    setEditLineItems((invoice.line_items ?? []).map(normalizeLineItem));
     setEditCharges((invoice.charges ?? []).map((c) => ({ ...c, sac: resolveChargeSac(c.description, c.sac) })));
     setSaveError('');
     setMode('view');
   }, [invoice]);
 
   const updLI = (idx: number, field: keyof LineItem, val: string | number) =>
-    setEditLineItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
+    setEditLineItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it;
+      // Rate must never be negative — sign belongs to qty only.
+      const safeVal = field === 'rate' ? Math.abs(Number(val)) : val;
+      return normalizeLineItem({ ...it, [field]: safeVal });
+    }));
 
   const updCh = (idx: number, field: keyof ExtraCharge, val: string | number) =>
     setEditCharges(prev => prev.map((c, i) => i === idx ? { ...c, [field]: val } : c));

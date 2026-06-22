@@ -7,6 +7,7 @@ import type {
   ITCStatus,
 } from '@/types/invoice';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
+import { normalizeLineItem } from '@/types/invoice';
 import { resolveChargeSac } from '@/lib/expenseLedgers';
 import type { FYPeriod } from '@/lib/fyPeriod';
 
@@ -161,9 +162,11 @@ export async function saveBatch(
     .single();
   if (batchErr) throw batchErr;
 
-  // Insert all invoices
+  // Insert all invoices — normalize line items so rates are never negative before storage.
   const rows = fileResults.flatMap((fr) =>
-    fr.invoices.map((inv: ExtractedInvoice) => ({
+    fr.invoices.map((rawInv: ExtractedInvoice) => {
+      const inv: ExtractedInvoice = { ...rawInv, line_items: (rawInv.line_items ?? []).map(normalizeLineItem) };
+      return ({
       batch_id: batch.id,
       company_id: companyId,
       filename: fr.filename,
@@ -191,7 +194,8 @@ export async function saveBatch(
       ) > 1,
       bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
       line_items: inv.line_items,
-    }))
+    });
+    })
   );
 
   if (rows.length > 0) {
@@ -335,6 +339,18 @@ export function computeReadiness(
     if (missingHsn) {
       flags.push('One or more line items missing HSN/SAC');
       if (readiness === 'ready') readiness = 'warning';
+    }
+
+    // Return-line sign validation: sign must be on qty, never on rate.
+    for (const li of (inv.line_items ?? [])) {
+      if ((li.qty ?? 0) < 0 && (li.amount ?? 0) > 0) {
+        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity negative but amount positive`);
+        if (readiness === 'ready') readiness = 'warning';
+      }
+      if ((li.qty ?? 0) > 0 && (li.amount ?? 0) < 0) {
+        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity positive but amount negative`);
+        if (readiness === 'ready') readiness = 'warning';
+      }
     }
   }
 

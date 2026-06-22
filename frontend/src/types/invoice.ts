@@ -148,6 +148,17 @@ export function calcLineAmount(item: LineItem): number {
   return r2(item.qty * item.rate * (1 - item.disc_percent / 100));
 }
 
+/**
+ * Normalize a line item so that:
+ *  - rate is always ≥ 0 (sign belongs to qty, never to rate)
+ *  - amount is recomputed from qty × rate × (1 − disc/100)
+ * Call this at every import/save boundary before storing or displaying.
+ */
+export function normalizeLineItem(item: LineItem): LineItem {
+  const rate = Math.abs(item.rate ?? 0);
+  return { ...item, rate, amount: r2(item.qty * rate * (1 - (item.disc_percent ?? 0) / 100)) };
+}
+
 function cleanHsn(hsn: string): string {
   return (hsn || '').replace(/[\s.]/g, '') || '-';
 }
@@ -163,12 +174,14 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
     map[key].taxable += calcLineAmount(item);
   }
 
-  // Pro-rate bill discount across HSN rows proportional to each row's share of total taxable,
-  // then compute GST on the reduced (post-discount) taxable per row.
+  // Pro-rate bill discount across HSN rows proportional to each row's share of total taxable.
+  // Use Math.abs for the denominator so return invoices (negative totalTaxable) still apply
+  // discount correctly — discount shares subtract from the absolute taxable value.
   const totalTaxable = Object.values(map).reduce((s, r) => s + r.taxable, 0);
+  const absTotalTaxable = Math.abs(totalTaxable);
   for (const row of Object.values(map)) {
-    const discountShare = totalTaxable > 0 && billDiscount > 0
-      ? billDiscount * (row.taxable / totalTaxable)
+    const discountShare = absTotalTaxable > 0 && billDiscount > 0
+      ? billDiscount * (row.taxable / totalTaxable)  // preserves sign; proportional to signed share
       : 0;
     row.taxable = r2(row.taxable - discountShare);
     const tax = r2(row.taxable * row.gst_percent / 100);

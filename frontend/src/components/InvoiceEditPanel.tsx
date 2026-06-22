@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { LineItem, ExtraCharge } from '@/types/invoice';
-import { formatINR, buildFullTaxSummary } from '@/types/invoice';
+import { formatINR, buildFullTaxSummary, normalizeLineItem } from '@/types/invoice';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 
 export interface InvoiceEditData {
@@ -37,9 +37,9 @@ export function InvoiceEditPanel({ invoice, perspective, onSave, onClose }: Invo
   const [taxType, setTaxType] = useState<'cgst_sgst' | 'igst'>(invoice.tax_type ?? 'cgst_sgst');
   const [billDiscountAmount, setBillDiscountAmount] = useState<number>(invoice.bill_discount_amount ?? 0);
 
-  // Line items
+  // Line items — normalize on load so legacy records with negative rate are healed immediately.
   const [lineItems, setLineItems] = useState<LineItem[]>(
-    invoice.line_items?.map((li) => ({ ...li })) ?? [],
+    invoice.line_items?.map(normalizeLineItem) ?? [],
   );
 
   // Additional charges
@@ -58,9 +58,11 @@ export function InvoiceEditPanel({ invoice, perspective, onSave, onClose }: Invo
       if (idx !== i) return li;
       const updated = { ...li, [field]: value };
       if (['qty', 'rate', 'disc_percent'].includes(field as string)) {
-        const qty = field === 'qty' ? Number(value) : (li.qty ?? 1);
-        const rate = field === 'rate' ? Number(value) : (li.rate ?? 0);
-        const disc = field === 'disc_percent' ? Number(value) : (li.disc_percent ?? 0);
+        // Rate must never be negative — sign belongs to qty only.
+        const qty  = field === 'qty'          ? Number(value) : (li.qty          ?? 1);
+        const rate = Math.abs(field === 'rate' ? Number(value) : (li.rate         ?? 0));
+        const disc = field === 'disc_percent'  ? Number(value) : (li.disc_percent ?? 0);
+        updated.rate   = rate;
         updated.amount = Math.round(qty * rate * (1 - disc / 100) * 100) / 100;
       }
       return updated;

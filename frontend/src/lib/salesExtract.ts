@@ -297,9 +297,16 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
     const line_items: LineItem[] = rows.map((r) => {
       const taxable = r.taxable_amount || r2(r.quantity * r.rate);
       const rowTax = r.cgst_amount + r.sgst_amount + r.igst_amount;
-      const gstPct = taxable > 0 ? Math.round((rowTax / taxable) * 100) : 0;
+      // Use abs(taxable) so return lines (negative taxable) still yield the correct GST %.
+      const gstPct = taxable !== 0 ? Math.round((Math.abs(rowTax) / Math.abs(taxable)) * 100) : 0;
       const qty = r.quantity || 1;
-      const rate = r.rate || (qty > 0 ? r2(taxable / qty) : taxable);
+      // Rate must always be non-negative. Sign belongs to qty.
+      // taxable / qty gives the correct positive rate for both regular and return lines:
+      //   normal:  taxable=100, qty=2  → rate=50   ✓
+      //   return:  taxable=-100, qty=-1 → rate=100  ✓
+      // Fall back to abs(taxable) when qty is zero (degenerate row).
+      const rawRate = r.rate || (qty !== 0 ? r2(taxable / qty) : Math.abs(taxable));
+      const rate = Math.abs(rawRate); // guard: rate is never negative
       return {
         description: r.item_description || (r.hsn?.trim() ? r.hsn.trim() : 'UNKNOWN ITEM'),
         hsn: r.hsn,

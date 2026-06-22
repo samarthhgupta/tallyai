@@ -767,7 +767,10 @@ function buildAllInventoryEntry(
 ): string {
   const itemNet = calcLineAmount(item);
   const uom = resolveUom(stockItem.unit, item.uom);
-  const negAmt = -Math.abs(itemNet);
+  // Purchase voucher: inventory entry amount is always the negative of the line amount.
+  // Normal: itemNet=+100 → negAmt=-100 (credit, stock in)
+  // Return: itemNet=-100 (qty=-1, rate=100) → negAmt=+100 (debit, stock out)
+  const negAmt = -itemNet;
   const discLine = item.disc_percent > 0 ? `\n        <DISCOUNT> ${fmt2(item.disc_percent)}</DISCOUNT>` : '';
   const hsnCode = item.hsn ? item.hsn.replace(/[\s.]/g, '') : '';
   const hsnBlock = hsnCode
@@ -801,7 +804,7 @@ function buildAllInventoryEntry(
     `\n        <ISTRACKPRODUCTION>No</ISTRACKPRODUCTION>` +
     `\n        <ISPRIMARYITEM>No</ISPRIMARYITEM>` +
     `\n        <ISSCRAP>No</ISSCRAP>` +
-    `\n        <RATE>${fmt2(item.rate)}/${esc(uom)}</RATE>` +
+    `\n        <RATE>${fmt2(Math.abs(item.rate))}/${esc(uom)}</RATE>` +
     discLine +
     `\n        <AMOUNT>${fmt2(negAmt)}</AMOUNT>` +
     `\n        <ACTUALQTY> ${fmt2(item.qty)} ${esc(uom)}</ACTUALQTY>` +
