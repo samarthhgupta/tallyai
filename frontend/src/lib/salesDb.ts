@@ -188,14 +188,18 @@ export async function insertAcceptedSalesInvoices(
   companyName?: string | null,
 ): Promise<void> {
   if (!items.length) return;
-  void companyGstin; void companyName;
   const user = (await getSupabase().auth.getUser()).data.user;
   const now = new Date().toISOString();
   const { periodFromInvoiceDate } = await import('./fyPeriod');
 
   const rows = items.map(({ inv, filename }) => {
-    const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
-    return buildSalesRow(inv, filename, companyId, batchId, financialYear, 'pdf_extraction', now, user?.id ?? null, p);
+    // For sales, the seller is always our company. Populate vendor fields if the
+    // extraction did not produce them (common for PDF/image sources).
+    const enrichedInv: ExtractedInvoice = companyName
+      ? { ...inv, vendor_name: inv.vendor_name || companyName, vendor_gstin: inv.vendor_gstin || (companyGstin ?? '') }
+      : inv;
+    const p = periodFromInvoiceDate(enrichedInv.invoice_date ?? '', financialYear);
+    return buildSalesRow(enrichedInv, filename, companyId, batchId, financialYear, 'pdf_extraction', now, user?.id ?? null, p);
   });
 
   const { error } = await db().from('invoices').insert(rows);
