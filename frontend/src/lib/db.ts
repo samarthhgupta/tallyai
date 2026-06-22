@@ -407,7 +407,8 @@ export async function insertAcceptedInvoices(
   const { periodFromInvoiceDate } = await import('./fyPeriod');
 
   const rows = items.map(({ inv, filename, itcStatusOverride, itcRemarkOverride, convertedToNonGst, convertedNonGstLedger }) => {
-    const r = computeReadiness(inv, companyGstin, companyName);
+    const nInv: ExtractedInvoice = { ...inv, line_items: (inv.line_items ?? []).map(normalizeLineItem) };
+    const r = computeReadiness(nInv, companyGstin, companyName);
     const finalItcStatus = itcStatusOverride ?? r.itcStatus;
     const finalItcRemark = itcRemarkOverride ?? r.itcRemark;
     // Derive period from invoice date - not from user-selected month
@@ -426,7 +427,7 @@ export async function insertAcceptedInvoices(
     // All operational screens derive values at runtime, so those rows are safe
     // operationally, but their stored derived columns should not be trusted for
     // raw-column reporting without re-deriving from line_items + charges.
-    const d = deriveInvoiceFinancials(inv);
+    const d = deriveInvoiceFinancials(nInv);
 
     return {
       batch_id: batchId,
@@ -464,7 +465,7 @@ export async function insertAcceptedInvoices(
       total:     d.total,
       confidence: inv.confidence,
       confidence_reasons: inv.confidence_reasons ?? [],
-      line_items: inv.line_items,
+      line_items: nInv.line_items,
       bill_discount_auto_detected: inv.bill_discount_auto_detected ?? false,
       status: 'accepted',
       readiness: r.readiness,
@@ -607,7 +608,8 @@ export async function saveBatchWithPeriod(
   if (batchErr) throw batchErr;
 
   const rows = fileResults.flatMap((fr) =>
-    fr.invoices.map((inv: ExtractedInvoice) => {
+    fr.invoices.map((rawInv: ExtractedInvoice) => {
+      const inv: ExtractedInvoice = { ...rawInv, line_items: (rawInv.line_items ?? []).map(normalizeLineItem) };
       const r = computeReadiness(inv, companyGstin, companyName);
       return {
         batch_id: batch.id,
