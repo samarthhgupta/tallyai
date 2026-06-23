@@ -56,14 +56,12 @@ export function computeSalesReadiness(
       flags.push(`Low confidence (${Math.round(inv.confidence * 100)}%)`);
       readiness = 'warning';
     }
-    // Validate return-line sign consistency: sign must be on qty, never on rate.
-    for (const li of (inv.line_items ?? [])) {
+    // Validate return-line sign consistency on normalized items.
+    // normalizeLineItem ensures qty<0 when amount<0, so after normalization the only
+    // remaining sign mismatch is qty<0 + amount>0 (a genuine data error).
+    for (const li of (inv.line_items ?? []).map(normalizeLineItem)) {
       if ((li.qty ?? 0) < 0 && (li.amount ?? 0) > 0) {
         flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity negative but amount positive`);
-        if (readiness === 'ready') readiness = 'warning';
-      }
-      if ((li.qty ?? 0) > 0 && (li.amount ?? 0) < 0) {
-        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity positive but amount negative`);
         if (readiness === 'ready') readiness = 'warning';
       }
     }
@@ -247,8 +245,13 @@ export async function insertAcceptedSalesExcelInvoices(
     return buildSalesRow(inv, filename, companyId, batchId, financialYear, 'excel_import', now, user?.id ?? null, p);
   });
 
-  const { error } = await db().from('invoices').insert(rows);
-  if (error) throw new Error(`insertAcceptedSalesExcelInvoices failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
+  // Insert in chunks of 50 to avoid Supabase body-size limits and statement timeouts.
+  const CHUNK = 50;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const { error } = await db().from('invoices').insert(chunk);
+    if (error) throw new Error(`insertAcceptedSalesExcelInvoices failed at chunk ${Math.floor(i / CHUNK) + 1}: ${error.message} (code: ${error.code}, details: ${error.details})`);
+  }
 }
 
 // ─── Save Tally ledger acceptance by invoice ID (safer than invoice_number) ───
@@ -303,15 +306,22 @@ export async function checkExcelDuplicates(
   financialYear: string,
 ): Promise<string[]> {
   if (!invoiceNumbers.length) return [];
-  const { data, error } = await db()
-    .from('invoices')
-    .select('invoice_number')
-    .eq('company_id', companyId)
-    .eq('voucher_class', 'sales')
-    .eq('financial_year', financialYear)
-    .in('invoice_number', invoiceNumbers);
-  if (error) throw new Error(error.message);
-  return (data ?? []).map((r: { invoice_number: string }) => r.invoice_number);
+  // Batch the .in() query in chunks of 100 to avoid URL length limits in PostgREST.
+  const CHUNK = 100;
+  const dupes: string[] = [];
+  for (let i = 0; i < invoiceNumbers.length; i += CHUNK) {
+    const chunk = invoiceNumbers.slice(i, i + CHUNK);
+    const { data, error } = await db()
+      .from('invoices')
+      .select('invoice_number')
+      .eq('company_id', companyId)
+      .eq('voucher_class', 'sales')
+      .eq('financial_year', financialYear)
+      .in('invoice_number', chunk);
+    if (error) throw new Error(error.message);
+    for (const r of (data ?? []) as Array<{ invoice_number: string }>) dupes.push(r.invoice_number);
+  }
+  return dupes;
 }
 
 /** Delete ALL sales invoices for a company. Scoped to voucher_class='sales' only — never touches purchase data. */

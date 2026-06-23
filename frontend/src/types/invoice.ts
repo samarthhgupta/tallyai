@@ -155,8 +155,29 @@ export function calcLineAmount(item: LineItem): number {
  * Call this at every import/save boundary before storing or displaying.
  */
 export function normalizeLineItem(item: LineItem): LineItem {
-  const rate = Math.abs(item.rate ?? 0);
-  return { ...item, rate, amount: r2(item.qty * rate * (1 - (item.disc_percent ?? 0) / 100)) };
+  const disc = item.disc_percent ?? 0;
+  let qty = item.qty ?? 0;
+  const rawAmount = item.amount ?? 0;
+
+  // Rate must always be non-negative.
+  let rate = Math.abs(item.rate ?? 0);
+
+  // If amount is negative but qty is non-negative (zero or positive), this is a
+  // return/credit adjustment: the sign must live on qty, never on rate.
+  if (rawAmount < 0 && qty >= 0) {
+    if (qty === 0) {
+      // No physical movement — model as -1 unit.
+      qty = -1;
+      // Derive rate from |amount| if rate is missing/zero.
+      if (rate === 0) rate = r2(Math.abs(rawAmount) / Math.max(1 - disc / 100, 0.001));
+    } else {
+      // Positive qty with negative amount — flip qty sign.
+      qty = -qty;
+    }
+  }
+
+  const amount = r2(qty * rate * (1 - disc / 100));
+  return { ...item, qty, rate, amount };
 }
 
 function cleanHsn(hsn: string): string {

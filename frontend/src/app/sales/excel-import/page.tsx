@@ -227,10 +227,15 @@ export default function SalesExcelImportPage() {
       vendor_gstin: company!.gstin ?? '',
     }));
     await insertAcceptedSalesExcelInvoices(companyId, batchId, enriched.map((inv) => ({ inv, filename })), fy);
+    // Deduplicate by GSTIN so we make at most one learnCustomerName call per customer.
+    const seenGstins = new Map<string, string>();
     for (const inv of enriched) {
-      if (inv.buyer_gstin && inv.buyer_name) {
-        await learnCustomerName(companyId, inv.buyer_gstin, inv.buyer_name).catch(() => {});
+      if (inv.buyer_gstin && inv.buyer_name && !seenGstins.has(inv.buyer_gstin)) {
+        seenGstins.set(inv.buyer_gstin, inv.buyer_name);
       }
+    }
+    for (const [gstin, name] of Array.from(seenGstins.entries())) {
+      await learnCustomerName(companyId, gstin, name).catch(() => {});
     }
     setSuccess(true);
     setTimeout(() => router.push('/sales/register'), 1200);

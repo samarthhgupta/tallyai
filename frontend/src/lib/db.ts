@@ -341,14 +341,12 @@ export function computeReadiness(
       if (readiness === 'ready') readiness = 'warning';
     }
 
-    // Return-line sign validation: sign must be on qty, never on rate.
-    for (const li of (inv.line_items ?? [])) {
+    // Return-line sign validation on normalized items.
+    // normalizeLineItem ensures qty<0 when amount<0, so after normalization the only
+    // remaining sign mismatch is qty<0 + amount>0 (a genuine data error).
+    for (const li of (inv.line_items ?? []).map(normalizeLineItem)) {
       if ((li.qty ?? 0) < 0 && (li.amount ?? 0) > 0) {
         flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity negative but amount positive`);
-        if (readiness === 'ready') readiness = 'warning';
-      }
-      if ((li.qty ?? 0) > 0 && (li.amount ?? 0) < 0) {
-        flags.push(`Sign mismatch on line "${li.description || li.hsn}": quantity positive but amount negative`);
         if (readiness === 'ready') readiness = 'warning';
       }
     }
@@ -482,8 +480,13 @@ export async function insertAcceptedInvoices(
     };
   });
 
-  const { error } = await db().from('invoices').insert(rows);
-  if (error) throw new Error(`insertAcceptedInvoices failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
+  // Insert in chunks of 50 to avoid Supabase body-size limits and statement timeouts.
+  const CHUNK = 50;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const { error } = await db().from('invoices').insert(chunk);
+    if (error) throw new Error(`insertAcceptedInvoices failed at chunk ${Math.floor(i / CHUNK) + 1}: ${error.message} (code: ${error.code}, details: ${error.details})`);
+  }
 }
 
 // ─── Insert rejected invoices (+ archive) ────────────────────────────────────
