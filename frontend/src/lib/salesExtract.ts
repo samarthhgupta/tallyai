@@ -24,7 +24,10 @@ function normHeader(h: string): string {
   return String(h ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+// Sign-consistent rounding: always rounds half away from zero, matching accounting conventions.
+// Math.round alone is asymmetric: Math.round(-25.9525 * 100) = -2595 → -25.95
+// but Math.round(25.9525 * 100) = 2596 → 25.96. Fix: operate on |n| then restore sign.
+const r2 = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100);
 
 function toNum(v: unknown): number {
   if (v == null || v === '') return 0;
@@ -144,6 +147,23 @@ function detectFormat(aoa: unknown[][]): ParseFormat {
       if (SECTION_MARKERS.some((m) => s.includes(m))) { sectionMarkerFound = true; break; }
     }
     if (sectionMarkerFound) break;
+  }
+
+  // Also detect repeat-invoice-number format (Tally exports):
+  // Each data row carries the invoice number (no continuation rows), but multiple rows
+  // share the same invoice number for multi-item invoices.
+  if (!sectionMarkerFound && continuationCount === 0) {
+    const seenNumbers = new Map<string, number>();
+    const detectLimit = Math.min(aoa.length, profile.dataStartRow + 50);
+    for (let i = profile.dataStartRow; i < detectLimit; i++) {
+      const row = aoa[i];
+      if (!row) continue;
+      const v = String(row[invCol] ?? '').trim();
+      if (!v) continue;
+      seenNumbers.set(v, (seenNumbers.get(v) ?? 0) + 1);
+    }
+    const hasDuplicates = Array.from(seenNumbers.values()).some((c) => c > 1);
+    if (hasDuplicates) return 'hierarchical';
   }
 
   return continuationCount >= 3 || sectionMarkerFound ? 'hierarchical' : 'flat';
@@ -287,7 +307,7 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
     const cgst = r2(rows.reduce((s, r) => s + r.cgst_amount, 0));
     const sgst = r2(rows.reduce((s, r) => s + r.sgst_amount, 0));
     const igst = r2(rows.reduce((s, r) => s + r.igst_amount, 0));
-    const tax_type: 'cgst_sgst' | 'igst' = igst > 0 && cgst === 0 && sgst === 0 ? 'igst' : 'cgst_sgst';
+    const tax_type: 'cgst_sgst' | 'igst' = Math.abs(igst) > 0 && cgst === 0 && sgst === 0 ? 'igst' : 'cgst_sgst';
 
     const subtotal = r2(rows.reduce((s, r) => {
       const taxable = r.taxable_amount || r2(r.quantity * r.rate);
@@ -299,7 +319,10 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
       const rowTax = r.cgst_amount + r.sgst_amount + r.igst_amount;
       // Use abs(taxable) so return lines (negative taxable) still yield the correct GST %.
       const gstPct = taxable !== 0 ? Math.round((Math.abs(rowTax) / Math.abs(taxable)) * 100) : 0;
-      const qty = r.quantity || 1;
+      // Preserve zero qty — normalizeLineItem (called at insert time) converts qty=0 with
+      // negative amount into qty=-1 (return with no physical movement).
+      // Substituting 1 here is incorrect for credit-note rows.
+      const qty = r.quantity;
       // Rate must always be non-negative. Sign belongs to qty.
       // taxable / qty gives the correct positive rate for both regular and return lines:
       //   normal:  taxable=100, qty=2  → rate=50   ✓
@@ -321,8 +344,8 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
 
     const explicitTotal = r2(rows.reduce((s, r) => s + r.total_amount, 0));
     const computedTotal = r2(subtotal + cgst + sgst + igst);
-    const total = explicitTotal > 0 ? explicitTotal : computedTotal;
-    const round_off = explicitTotal > 0 ? r2(explicitTotal - computedTotal) : 0;
+    const total = explicitTotal !== 0 ? explicitTotal : computedTotal;
+    const round_off = explicitTotal !== 0 ? r2(explicitTotal - computedTotal) : 0;
 
     invoices.push({
       vendor_name: '',
@@ -354,14 +377,13 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
 function parseFlat(aoa: unknown[][]): ExcelImportResult {
   if (aoa.length < 2) return { invoices: [], errors: [{ row: 0, reason: 'File has no data rows' }], rowCount: 0 };
 
-  const headerRow = (aoa[0] as unknown[]).map((h) => normHeader(String(h)));
-  const colMap: Record<number, string> = {};
-  headerRow.forEach((h, idx) => { const f = HEADER_MAP[h]; if (f) colMap[idx] = f; });
+  const profile = findHeaderRow(aoa);
+  const colMap = profile.fields;
 
   const errors: ExcelImportResult['errors'] = [];
   const parsedRows: InvoiceRow[] = [];
 
-  for (let i = 1; i < aoa.length; i++) {
+  for (let i = profile.dataStartRow; i < aoa.length; i++) {
     const raw = aoa[i] as unknown[];
     if (!raw || raw.every((c) => c == null || c === '')) continue;
     const rowNum = i + 1;
