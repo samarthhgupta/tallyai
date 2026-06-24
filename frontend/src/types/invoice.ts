@@ -142,7 +142,7 @@ export interface HsnRow {
   igst: number;
 }
 
-const r2 = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100);
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export function calcLineAmount(item: LineItem): number {
   return r2(item.qty * item.rate * (1 - item.disc_percent / 100));
@@ -205,12 +205,11 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
       ? billDiscount * (row.taxable / totalTaxable)  // preserves sign; proportional to signed share
       : 0;
     row.taxable = r2(row.taxable - discountShare);
-    const tax = r2(row.taxable * row.gst_percent / 100);
     if (taxType === 'cgst_sgst') {
-      row.cgst = r2(tax / 2);
-      row.sgst = r2(tax / 2);
+      row.cgst = r2(row.taxable * row.gst_percent / 200);
+      row.sgst = r2(row.taxable * row.gst_percent / 200);
     } else {
-      row.igst = tax;
+      row.igst = r2(row.taxable * row.gst_percent / 100);
     }
   }
 

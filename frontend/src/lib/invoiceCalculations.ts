@@ -33,7 +33,7 @@ export interface InvoiceFinancials {
   total: number;                     // derived: net_goods + all_charges + gst + round_off
 }
 
-const r2 = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100);
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export function deriveInvoiceFinancials(inv: InvoiceForDerivation): InvoiceFinancials {
   const lineItems = inv.line_items ?? [];
