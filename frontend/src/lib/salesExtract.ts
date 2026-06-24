@@ -235,6 +235,37 @@ function findHeaderRow(aoa: unknown[][]): ColumnProfile {
     return buildProfileFromNormed(merged, bestRow + 2);
   }
 
+  // Check if the row BEFORE bestRow is a tax-label prefix row.
+  // Handles the reversed layout: row 0 = SGST/CGST/IGST, row 1 = real column names.
+  // (findHeaderRow picks row 1 as best; we must detect and merge row 0 into it.)
+  if (bestRow > 0) {
+    const prefixRow = aoa[bestRow - 1];
+    const taxNames2 = ['sgst', 'cgst', 'igst', 'cess'];
+    const hasTaxPrefix = prefixRow && prefixRow.some((c) => taxNames2.includes(normHeader(String(c ?? ''))));
+    if (hasTaxPrefix) {
+      const headerCells = aoa[bestRow] as unknown[];
+      const merged: string[] = headerCells.map(() => '');
+      let lastTaxName = '';
+
+      for (let idx = 0; idx < headerCells.length; idx++) {
+        const prefix = normHeader(String(prefixRow[idx] ?? ''));
+        const header = normHeader(String(headerCells[idx] ?? ''));
+
+        if (taxNames2.includes(prefix)) {
+          lastTaxName = prefix;
+          merged[idx] = ''; // %age column under the tax label — skip
+        } else if (!prefix && header === 'amount' && lastTaxName) {
+          merged[idx] = `${lastTaxName} amount`;
+          lastTaxName = '';
+        } else {
+          lastTaxName = '';
+          merged[idx] = header;
+        }
+      }
+      return buildProfileFromNormed(merged, bestRow + 1);
+    }
+  }
+
   return buildProfile(aoa, bestRow);
 }
 

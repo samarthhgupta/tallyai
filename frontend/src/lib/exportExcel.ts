@@ -3,7 +3,7 @@ import type { ExtractedInvoice, FileResult } from '@/types/invoice';
 import { calcLineAmount, buildHsnSummary, GSTIN_STATE_MAP } from '@/types/invoice';
 
 function r2(n: number) {
-  return Math.round(n * 100) / 100;
+  return n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100;
 }
 
 // SAC mapping for additional charges (mirrors InvoiceCard CHARGE_TYPES)

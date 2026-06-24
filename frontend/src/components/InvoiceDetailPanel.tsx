@@ -301,7 +301,7 @@ export default function InvoiceDetailPanel({
   // Auto-recompute round_off whenever financials change (user may override manually)
   useEffect(() => {
     const subtotalBeforeRoundOff = editNetTaxable + editNonGstChargesTotal + editCGST + editSGST + editIGST;
-    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const r2 = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100);
     const autoRoundOff = r2(Math.round(subtotalBeforeRoundOff) - subtotalBeforeRoundOff);
     setEditRoundOff(autoRoundOff);
   // eslint-disable-next-line react-hooks/exhaustive-deps

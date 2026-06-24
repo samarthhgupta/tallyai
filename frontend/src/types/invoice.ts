@@ -142,7 +142,7 @@ export interface HsnRow {
   igst: number;
 }
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
+const r2 = (n: number) => (n === 0 ? 0 : Math.sign(n) * Math.round(Math.abs(n) * 100) / 100);
 
 export function calcLineAmount(item: LineItem): number {
   return r2(item.qty * item.rate * (1 - item.disc_percent / 100));
