@@ -894,13 +894,13 @@ export default function SalesRegisterPage() {
                         {formatINR(f.netTaxable)}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                        {f.cgst > 0 ? formatINR(f.cgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
+                        {f.cgst !== 0 ? formatINR(f.cgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                        {f.sgst > 0 ? formatINR(f.sgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
+                        {f.sgst !== 0 ? formatINR(f.sgst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                        {f.igst > 0 ? formatINR(f.igst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
+                        {f.igst !== 0 ? formatINR(f.igst) : <span className="text-gray-300 dark:text-gray-600">0.00</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
                         {f.roundOff !== 0 ? (f.roundOff > 0 ? '+' : '') + formatINR(f.roundOff) : <span className="text-gray-200 dark:text-gray-600">0.00</span>}
@@ -940,13 +940,13 @@ export default function SalesRegisterPage() {
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">{formatINR(totalTaxable)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                    {totalCGST > 0 ? formatINR(totalCGST) : '0.00'}
+                    {totalCGST !== 0 ? formatINR(totalCGST) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                    {totalSGST > 0 ? formatINR(totalSGST) : '0.00'}
+                    {totalSGST !== 0 ? formatINR(totalSGST) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                    {totalIGST > 0 ? formatINR(totalIGST) : '0.00'}
+                    {totalIGST !== 0 ? formatINR(totalIGST) : '0.00'}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums font-bold text-gray-900 dark:text-gray-100 whitespace-nowrap text-xs">
                     {totalRoundOff !== 0 ? (totalRoundOff > 0 ? '+' : '') + formatINR(totalRoundOff) : '0.00'}
