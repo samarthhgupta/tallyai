@@ -236,13 +236,18 @@ function findSalesStockItem(
   if (mode === 'hsn_driven') {
     if (!hsn) return null;
     const cleanHsn = hsn.replace(/[\s.]/g, '');
+    // Require exact HSN + rate match; no rate-agnostic fallback (would map wrong rate items)
     if (gstRate != null) {
       const byHsn = stockItems.find(
         (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === gstRate,
       );
-      if (byHsn) return byHsn;
+      if (byHsn) {
+        // Sanity-check: name must not encode a different rate
+        const nameRate = byHsn.tally_item_name.match(/@\s*(\d+(?:\.\d+)?)\s*%/i);
+        if (!nameRate || Number(nameRate[1]) === gstRate) return byHsn;
+      }
     }
-    return stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn) ?? null;
+    return null;
   }
   const q = norm(description);
   const byAlias = stockItems.find((s) => s.alias_name && norm(s.alias_name) === q);
@@ -385,6 +390,7 @@ function buildSalesAllInventoryEntry(
   return (
     `\n      <ALLINVENTORYENTRIES.LIST>` +
     `\n        <STOCKITEMNAME>${esc(stockItem.tally_item_name)}</STOCKITEMNAME>` +
+    `\n        <TRACKINGNO> Not Applicable</TRACKINGNO>` +
     `\n        <GSTOVRDNINELIGIBLEITC> Not Applicable</GSTOVRDNINELIGIBLEITC>` +
     `\n        <GSTOVRDNISREVCHARGEAPPL> Not Applicable</GSTOVRDNISREVCHARGEAPPL>` +
     `\n        <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>` +
@@ -820,35 +826,50 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     }
   }
 
-  // 4. Round-off
-  let roundOffAmount = 0;
+  // 4. Round-off — track debit/credit separately (mirrors purchase buildInventoryVoucher)
+  let roundOffDebit = 0;
+  let roundOffCredit = 0;
   if (d.round_off && Math.abs(d.round_off) > 0.001) {
     const roLedger = ((acc?.roLedger as string | undefined)?.trim())
       || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
       || 'Round Off';
-    roundOffAmount = d.round_off;
     if (d.round_off > 0) {
-      // Round-off income → credit
+      // Round-off income for seller → CREDIT
+      roundOffCredit = d.round_off;
       ledgerEntries.push(invSalesIncomeLedgerEntry(roLedger, -d.round_off));
     } else {
-      // Round-off expense → debit
+      // Round-off expense for seller → DEBIT
+      roundOffDebit = Math.abs(d.round_off);
       ledgerEntries.push(invSalesLedgerEntry({
         ledgerName: roLedger,
         isdeemedpositive: 'Yes',
         isPartyledger: 'No',
         islastdeemedpositive: 'Yes',
-        amount: Math.abs(d.round_off),
+        amount: roundOffDebit,
       }));
     }
   }
 
-  // 5. Balance catch-up: any remaining gap goes to sales ledger
+  // 5. Balance catch-up — mirrors purchase buildInventoryVoucher gap formula exactly
   const taxes = d.cgst + d.sgst + d.igst;
-  const totalCredits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + Math.abs(roundOffAmount);
-  const gap = parseFloat((d.total - totalCredits).toFixed(2));
+  const totalCreditSide = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + roundOffCredit;
+  const totalDebitSide = d.total + roundOffDebit;
+  const gap = parseFloat((totalDebitSide - totalCreditSide).toFixed(2));
   const netSalesLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netSalesLedgerAdj) > 0.01) {
-    ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, -netSalesLedgerAdj));
+    if (netSalesLedgerAdj > 0) {
+      ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, -netSalesLedgerAdj));
+    } else {
+      // Excess credit (e.g. bill discount absorbed into total) — debit sales ledger to balance
+      warnings.push(`Balance gap ₹${fmt2(Math.abs(netSalesLedgerAdj))} in "${inv.invoice_number}" - debited to sales ledger`);
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: salesLedger,
+        isdeemedpositive: 'Yes',
+        isPartyledger: 'No',
+        islastdeemedpositive: 'Yes',
+        amount: Math.abs(netSalesLedgerAdj),
+      }));
+    }
   }
 
   return {
@@ -1155,7 +1176,8 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
     (inv) => (inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only') === 'inventory'
   );
   if (includeStockItems && anyInvoiceIsInventory && input.stockItems.length > 0) {
-    const invoiceRateMap = new Map<string, number>();
+    // Map: tally_item_name → { rate, hsn } from invoice line items (used when master record has nulls)
+    const invoiceItemInfo = new Map<string, { rate: number; hsn: string }>();
     for (const inv of input.invoices) {
       const stockMap = (inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined ?? {};
       for (const item of inv.line_items ?? []) {
@@ -1164,20 +1186,29 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
         let si: StockItemMaster | null = null;
         if (mappedName) si = input.stockItems.find((s) => s.tally_item_name === mappedName) ?? null;
         if (!si) si = findSalesStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
-        if (si && !invoiceRateMap.has(si.tally_item_name)) {
-          invoiceRateMap.set(si.tally_item_name, item.gst_percent ?? 0);
+        if (si && !invoiceItemInfo.has(si.tally_item_name)) {
+          invoiceItemInfo.set(si.tally_item_name, {
+            rate: item.gst_percent ?? 0,
+            hsn: item.hsn ?? '',
+          });
         }
       }
     }
-    const itemsToExport = input.stockItems.filter((s) => invoiceRateMap.has(s.tally_item_name));
+    const itemsToExport = input.stockItems.filter((s) => invoiceItemInfo.has(s.tally_item_name));
     const seenUnits = new Set<string>();
     for (const s of itemsToExport) {
       const unit = resolveUom(s.unit, null);
       if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitMasterBlock(unit, fyStart)); }
     }
     for (const stockItem of itemsToExport) {
-      const rate = stockItem.gst_percent ?? invoiceRateMap.get(stockItem.tally_item_name) ?? 0;
-      messages.push(buildStockItemMasterBlock(stockItem, rate, fyStart));
+      const info = invoiceItemInfo.get(stockItem.tally_item_name)!;
+      // Rate: prefer master DB value; fall back to invoice line item; last resort: extract from name (e.g. "4601 @ 5%" → 5)
+      const nameRateMatch = stockItem.tally_item_name.match(/@\s*(\d+(?:\.\d+)?)\s*%/i);
+      const nameRate = nameRateMatch ? Number(nameRateMatch[1]) : null;
+      const rate = stockItem.gst_percent ?? (info.rate > 0 ? info.rate : null) ?? nameRate ?? 0;
+      // HSN: prefer master DB value; fall back to invoice line item HSN
+      const enriched: StockItemMaster = stockItem.hsn_code ? stockItem : { ...stockItem, hsn_code: info.hsn || null };
+      messages.push(buildStockItemMasterBlock(enriched, rate, fyStart));
     }
   }
 
