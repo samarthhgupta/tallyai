@@ -201,10 +201,13 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
     }
     const lineAmt = calcLineAmount(item);
     map[key].taxable += lineAmt;
-    // Accumulate GST per-line to match supplier billing methodology.
+    // Accumulate GST per-line using HalfTotal methodology:
+    // total_line_gst = r2(T × rate/100), then cgst = r2(total/2).
+    // Matches supplier billing software rounding at half-paisa boundaries.
     if (taxType === 'cgst_sgst') {
-      map[key].cgst += r2(lineAmt * item.gst_percent / 200);
-      map[key].sgst += r2(lineAmt * item.gst_percent / 200);
+      const lineGst = r2(lineAmt * item.gst_percent / 100);
+      map[key].cgst += r2(lineGst / 2);
+      map[key].sgst += r2(lineGst / 2);
     } else {
       map[key].igst += r2(lineAmt * item.gst_percent / 100);
     }
