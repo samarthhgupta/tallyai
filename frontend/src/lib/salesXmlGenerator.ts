@@ -390,7 +390,6 @@ function buildSalesAllInventoryEntry(
   return (
     `\n      <ALLINVENTORYENTRIES.LIST>` +
     `\n        <STOCKITEMNAME>${esc(stockItem.tally_item_name)}</STOCKITEMNAME>` +
-    `\n        <TRACKINGNO> Not Applicable</TRACKINGNO>` +
     `\n        <GSTOVRDNINELIGIBLEITC> Not Applicable</GSTOVRDNINELIGIBLEITC>` +
     `\n        <GSTOVRDNISREVCHARGEAPPL> Not Applicable</GSTOVRDNISREVCHARGEAPPL>` +
     `\n        <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>` +
