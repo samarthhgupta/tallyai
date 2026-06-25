@@ -12,6 +12,7 @@ import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { loadExpenseLedgers, addExpenseLedger, type ExpenseLedgerMaster } from '@/lib/expenseLedgers';
 import { loadSalesLedgers, addSalesLedger, getBatchHistoricalSalesLedgers, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
 import { generateSalesVouchers, generateSalesMastersXml, buildSalesPreview, type SalesMasterType } from '@/lib/salesXmlGenerator';
+import { findExpenseLedger } from '@/lib/xmlGenerator';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 import type { StoredInvoice } from '@/types/invoice';
 import { calcLineAmount } from '@/types/invoice';
@@ -366,9 +367,7 @@ function SalesFlatTable({
     const sgstAmt = invFinancials.sgst;
     const igstAmt = invFinancials.igst;
     const roAmt = invFinancials.round_off;
-    const defaultRoLedger = expenseLedgers.find(
-      (e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off'
-    )?.tally_ledger_name ?? '';
+    const defaultRoLedger = findExpenseLedger(expenseLedgers, 'Round Off') ?? findExpenseLedger(expenseLedgers, 'Rounding Off') ?? '';
     const roLedger = lockedInv?.roLedger ?? defaultRoLedger;
     const roSuggested = !lockedInv && !!defaultRoLedger;
 
@@ -1245,7 +1244,7 @@ function SalesFlatTable({
                     <td className="px-3 py-2 min-w-[160px]">
                       {row.isFirst && row.roAmt !== 0 && (() => {
                         const roOpts = expenseLedgers
-                          .filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off')
+                          .filter((e) => e.expense_keyword && ['round off', 'rounding off'].includes(e.expense_keyword.toLowerCase().trim()))
                           .map((e) => e.tally_ledger_name);
                         return isLocked
                           ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>

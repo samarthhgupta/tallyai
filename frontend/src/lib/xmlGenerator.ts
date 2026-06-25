@@ -192,7 +192,7 @@ function findTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string, rate
 }
 
 
-function findExpenseLedger(
+export function findExpenseLedger(
   expenseLedgers: ExpenseLedgerMaster[],
   description: string,
   gstRate?: number,
