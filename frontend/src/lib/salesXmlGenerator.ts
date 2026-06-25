@@ -773,7 +773,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
         isdeemedpositive: 'No',
         isPartyledger: 'No',
         islastdeemedpositive: 'No',
-        amount: -d.cgst,
+        amount: d.cgst,
         rateOfInvoiceTax: rate || undefined,
       }));
     }
@@ -788,7 +788,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
         isdeemedpositive: 'No',
         isPartyledger: 'No',
         islastdeemedpositive: 'No',
-        amount: -d.sgst,
+        amount: d.sgst,
         rateOfInvoiceTax: rate || undefined,
       }));
     }
@@ -803,7 +803,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
       isdeemedpositive: 'No',
       isPartyledger: 'No',
       islastdeemedpositive: 'No',
-      amount: -d.igst,
+      amount: d.igst,
       rateOfInvoiceTax: rate || undefined,
     }));
   }
@@ -822,7 +822,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
         continue;
       }
       mappedChargesTotal += charge.amount;
-      ledgerEntries.push(invSalesIncomeLedgerEntry(el.tally_ledger_name, -Math.abs(charge.amount)));
+      ledgerEntries.push(invSalesIncomeLedgerEntry(el.tally_ledger_name, Math.abs(charge.amount)));
     }
   }
 
@@ -836,7 +836,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     if (d.round_off > 0) {
       // Round-off income for seller → CREDIT
       roundOffCredit = d.round_off;
-      ledgerEntries.push(invSalesIncomeLedgerEntry(roLedger, -d.round_off));
+      ledgerEntries.push(invSalesIncomeLedgerEntry(roLedger, d.round_off));
     } else {
       // Round-off expense for seller → DEBIT
       roundOffDebit = Math.abs(d.round_off);
@@ -858,7 +858,7 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
   const netSalesLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
   if (Math.abs(netSalesLedgerAdj) > 0.01) {
     if (netSalesLedgerAdj > 0) {
-      ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, -netSalesLedgerAdj));
+      ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, netSalesLedgerAdj));
     } else {
       // Excess credit (e.g. bill discount absorbed into total) — debit sales ledger to balance
       warnings.push(`Balance gap ₹${fmt2(Math.abs(netSalesLedgerAdj))} in "${inv.invoice_number}" - debited to sales ledger`);
