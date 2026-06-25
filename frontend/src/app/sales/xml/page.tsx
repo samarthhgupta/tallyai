@@ -10,7 +10,7 @@ import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
 import { addExpenseLedger } from '@/lib/expenseLedgers';
-import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
+import { loadSalesLedgers, addSalesLedger, getBatchHistoricalSalesLedgers, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
 import { generateSalesVouchers, generateSalesMastersXml, buildSalesPreview, type SalesMasterType } from '@/lib/salesXmlGenerator';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
 import type { StoredInvoice } from '@/types/invoice';
@@ -270,8 +270,10 @@ function SalesFlatTable({
   const [stockConfirm, setStockConfirm] = React.useState<{
     invoiceNo: string; itemDesc: string; lineIdx: number; hsn: string; gstPct: number | null; chosenName: string;
   } | null>(null);
+  const [visibleInvoiceCount, setVisibleInvoiceCount] = React.useState(100);
 
-  // ── Build invoice index ──
+  // ── Build invoice index + display rows (memoized — avoids recompute on every render) ──
+  const { invoiceOrder, byInvoice, displayRows } = React.useMemo(() => {
   const invoiceOrder: string[] = [];
   const byInvoice = new Map<string, StoredInvoice>();
   for (const inv of invoices) {
@@ -452,6 +454,11 @@ function SalesFlatTable({
       });
     });
   }
+
+  return { invoiceOrder, byInvoice, displayRows };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices, lockedInvoices, customers, suppliers, dutiesTaxes, stockItems, stockItemMode,
+      salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger, voucherMode]);
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
@@ -862,8 +869,16 @@ function SalesFlatTable({
               </tr>
             </thead>
             <tbody>
-              {displayRows.map((row, i) => {
-                if (!filteredInvoiceNos.has(row.invoiceNo)) return null;
+              {(() => {
+                // Paginate: only render rows for the first N unique invoices that pass the filter.
+                // This prevents the browser from building 1000+ DOM rows at once.
+                const visibleInvoiceNos = new Set(
+                  invoiceOrder
+                    .filter((invNo) => filteredInvoiceNos.has(invNo))
+                    .slice(0, visibleInvoiceCount)
+                );
+                return displayRows.map((row, i) => {
+                if (!visibleInvoiceNos.has(row.invoiceNo)) return null;
                 const prevRow = displayRows[i - 1];
                 const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
                 const locked = lockedInvoices[row.invoiceNo];
@@ -1245,10 +1260,24 @@ function SalesFlatTable({
                     </td>
                   </tr>
                 );
-              })}
+              });
+              })()}
             </tbody>
           </table>
         </div>
+        {(() => {
+          const totalVisible = invoiceOrder.filter((invNo) => filteredInvoiceNos.has(invNo)).length;
+          return totalVisible > visibleInvoiceCount ? (
+            <div className="flex justify-center mt-4">
+              <button
+                onClick={() => setVisibleInvoiceCount((c) => c + 100)}
+                className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                Show 100 more (showing {visibleInvoiceCount} of {totalVisible})
+              </button>
+            </div>
+          ) : null;
+        })()}
 
         {/* Stock item naming pattern popup */}
         {stockConfirm && (() => {
@@ -1464,25 +1493,7 @@ export default function SalesXmlPage() {
       ]);
       const salesLedgerMasters = salesLedgerRaw.map((l) => l.tally_ledger_name);
 
-      const buyerKeySet: Record<string, true> = {};
-      for (const inv of invoices) {
-        const k = inv.buyer_gstin ? inv.buyer_gstin : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
-        if (k) buyerKeySet[k] = true;
-      }
-      const uniqueBuyerKeys = Object.keys(buyerKeySet);
-      const historicalEntries = await Promise.all(
-        uniqueBuyerKeys.map(async (key) => {
-          const isGstin = !key.startsWith('name:');
-          const result = await getHistoricalSalesLedger(
-            company.id,
-            isGstin ? key : null,
-            isGstin ? null : key.slice(5),
-          );
-          return [key, result] as [string, string | null];
-        })
-      );
-      const historicalSL: Record<string, string> = {};
-      for (const [key, val] of historicalEntries) { if (val) historicalSL[key] = val; }
+      const historicalSL = await getBatchHistoricalSalesLedgers(company.id);
 
       const companyWideSL = salesLedgerMasters.length > 1
         ? await getCompanyWideMostUsedSalesLedger(company.id, salesLedgerMasters)
