@@ -506,7 +506,9 @@ function FlatPreviewTable({
           const match = stockItems.find((s) =>
             s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
           );
-          if (match) { resolvedStockItem = match.tally_item_name; resolvedSuggested = false; }
+          const rateInName = match ? match.tally_item_name.match(/@\s*(\d+(?:\.\d+)?)\s*%/i) : null;
+          const nameRateOk = !rateInName || Number(rateInName[1]) === (item.gst_percent ?? 0);
+          if (match && nameRateOk) { resolvedStockItem = match.tally_item_name; resolvedSuggested = false; }
         }
         const itemAmt = calcLineAmount(item);
         displayRows.push({

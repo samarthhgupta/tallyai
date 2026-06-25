@@ -415,7 +415,10 @@ function SalesFlatTable({
 
       if (isInventoryMode) {
         const lockedStockName = lockedInv?.stock?.[desc];
-        if (lockedStockName) {
+        // If locked name encodes a different rate than the line item, ignore the stale lock
+        const lockedRateMatch = lockedStockName ? lockedStockName.match(/@\s*(\d+(?:\.\d+)?)\s*%/i) : null;
+        const lockedRateOk = !lockedRateMatch || Number(lockedRateMatch[1]) === (item.gst_percent ?? 0);
+        if (lockedStockName && lockedRateOk) {
           stockItemName = lockedStockName;
           stockItemSuggested = false;
         } else if (stockItemMode === 'hsn_driven' && item.hsn) {
@@ -423,7 +426,11 @@ function SalesFlatTable({
           const match = stockItems.find(
             (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
           );
-          if (match) { stockItemName = match.tally_item_name; stockItemSuggested = false; }
+          // Sanity-check: if master name encodes a different rate (e.g. "@5%" but item is 18%),
+          // the entry is corrupted from a prior buggy acceptance — treat as no-match.
+          const rateInName = match ? match.tally_item_name.match(/@\s*(\d+(?:\.\d+)?)\s*%/i) : null;
+          const nameRateOk = !rateInName || Number(rateInName[1]) === (item.gst_percent ?? 0);
+          if (match && nameRateOk) { stockItemName = match.tally_item_name; stockItemSuggested = false; }
           else { stockItemName = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : desc; stockItemSuggested = true; }
         } else {
           const n = desc.toLowerCase().trim();
