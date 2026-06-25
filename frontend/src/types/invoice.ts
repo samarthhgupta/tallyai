@@ -201,13 +201,16 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
     }
     const lineAmt = calcLineAmount(item);
     map[key].taxable += lineAmt;
-    // Accumulate GST per-line using HalfTotal methodology:
-    // total_line_gst = r2(T × rate/100), then cgst = r2(total/2).
-    // Matches supplier billing software rounding at half-paisa boundaries.
+    // Compute GST in integer paisa to avoid IEEE 754 float64 representation errors.
+    // Supplier billing software uses exact decimal arithmetic: total_gst = r2(T × rate/100),
+    // cgst = r2(total_gst / 2). Reproducing this in JS requires integer-paisa arithmetic:
+    // totalGstPaisa = Math.round(T × rate) gives exact-decimal r2(T × rate/100) in paisa,
+    // then Math.round(paisa / 2) correctly rounds the half-paisa boundary upward.
     if (taxType === 'cgst_sgst') {
-      const lineGst = r2(lineAmt * item.gst_percent / 100);
-      map[key].cgst += r2(lineGst / 2);
-      map[key].sgst += r2(lineGst / 2);
+      const totalGstPaisa = Math.round(lineAmt * item.gst_percent);
+      const cgstPaisa = Math.round(totalGstPaisa / 2);
+      map[key].cgst += cgstPaisa / 100;
+      map[key].sgst += cgstPaisa / 100;
     } else {
       map[key].igst += r2(lineAmt * item.gst_percent / 100);
     }
