@@ -369,7 +369,8 @@ function SalesFlatTable({
     const roAmt = invFinancials.round_off;
     const defaultRoLedger = findExpenseLedger(expenseLedgers, 'Round Off') ?? findExpenseLedger(expenseLedgers, 'Rounding Off') ?? '';
     const roLedger = lockedInv?.roLedger ?? defaultRoLedger;
-    const roSuggested = !lockedInv && !!defaultRoLedger;
+    // defaultRoLedger came from findExpenseLedger → it's in the master → not "suggested" (no ✦)
+    const roSuggested = false;
 
     const charges: SalesFlatDisplayRow['charges'] = (inv.charges ?? []).map((ch) => {
       const keyword = ch.description ?? '';
