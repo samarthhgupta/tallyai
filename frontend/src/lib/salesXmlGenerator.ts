@@ -1104,42 +1104,55 @@ function buildUnitMasterBlock(unitName: string, fyStart: string): string {
     </TALLYMESSAGE>`;
 }
 
-export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
+export type SalesMasterType = 'all' | 'stock_items' | 'sales_ledgers' | 'duties_taxes' | 'customers' | 'ledgers_only';
+
+export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: SalesMasterType = 'all'): string {
   const fyStart = fyStartFromString(input.financialYear);
   const messages: string[] = [];
 
+  const includeCustomers   = type === 'all' || type === 'customers'    || type === 'ledgers_only';
+  const includeSalesLedgers = type === 'all' || type === 'sales_ledgers' || type === 'ledgers_only';
+  const includeDuties      = type === 'all' || type === 'duties_taxes'  || type === 'ledgers_only';
+  const includeStockItems  = type === 'all' || type === 'stock_items';
+
   // Customers referenced by the batch — skip pooled/generic ledgers that already exist in Tally
-  const seenCustomers = new Set<string>();
-  for (const inv of input.invoices) {
-    const customer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
-    if (customer && !seenCustomers.has(customer.tally_ledger_name) && !isPooledLedger(customer.tally_ledger_name)) {
-      seenCustomers.add(customer.tally_ledger_name);
-      messages.push(buildCustomerLedgerBlock(customer, fyStart));
+  if (includeCustomers) {
+    const seenCustomers = new Set<string>();
+    for (const inv of input.invoices) {
+      const customer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+      if (customer && !seenCustomers.has(customer.tally_ledger_name) && !isPooledLedger(customer.tally_ledger_name)) {
+        seenCustomers.add(customer.tally_ledger_name);
+        messages.push(buildCustomerLedgerBlock(customer, fyStart));
+      }
     }
   }
 
   // Sales ledgers from per-invoice acceptance
-  const seenSales = new Set<string>();
-  for (const inv of input.invoices) {
-    const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
-    const sl = acc?.salesLedger as string | undefined;
-    if (sl && !seenSales.has(sl)) {
-      seenSales.add(sl);
-      messages.push(buildSalesLedgerBlock(sl, fyStart));
+  if (includeSalesLedgers) {
+    const seenSales = new Set<string>();
+    for (const inv of input.invoices) {
+      const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
+      const sl = acc?.salesLedger as string | undefined;
+      if (sl && !seenSales.has(sl)) {
+        seenSales.add(sl);
+        messages.push(buildSalesLedgerBlock(sl, fyStart));
+      }
     }
   }
 
   // Duties & Taxes
-  const seenDuties = new Set<string>();
-  for (const dt of input.dutiesTaxes) {
-    if (!seenDuties.has(dt.tally_ledger_name)) {
-      seenDuties.add(dt.tally_ledger_name);
-      messages.push(buildTaxLedgerBlock(dt));
+  if (includeDuties) {
+    const seenDuties = new Set<string>();
+    for (const dt of input.dutiesTaxes) {
+      if (!seenDuties.has(dt.tally_ledger_name)) {
+        seenDuties.add(dt.tally_ledger_name);
+        messages.push(buildTaxLedgerBlock(dt));
+      }
     }
   }
 
   // Stock items (inventory mode only)
-  if (input.voucherMode === 'inventory' && input.stockItems.length > 0) {
+  if (includeStockItems && input.voucherMode === 'inventory' && input.stockItems.length > 0) {
     const invoiceRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       const stockMap = (inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined ?? {};
