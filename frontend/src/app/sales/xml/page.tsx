@@ -3,30 +3,33 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession } from '@/lib/auth';
-import { getCompany } from '@/lib/db';
+import { getCompany, updateCompany } from '@/lib/db';
 import { getSalesRegister, saveSalesTallyAcceptance } from '@/lib/salesDb';
 import { loadCustomers, addCustomer } from '@/lib/customers';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
-import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
-import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
-import type { StockItemMaster } from '@/lib/stockItems';
-import * as XLSX from 'xlsx';
-import { generateSalesVouchersXml, generateSalesMastersXml, generateSalesVouchers, buildSalesPreview } from '@/lib/salesXmlGenerator';
-import type { SalesPreviewRow } from '@/lib/salesXmlGenerator';
-import type { CustomerMaster } from '@/lib/customers';
-import type { SupplierMaster } from '@/lib/suppliers';
-import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
-import type { TaxComponent } from '@/lib/dutiesTaxes';
-import type { StoredInvoice } from '@/types/invoice';
-import { formatINR } from '@/types/invoice';
+import { addExpenseLedger } from '@/lib/expenseLedgers';
+import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
+import { generateSalesVouchers, generateSalesMastersXml, buildSalesPreview, type SalesMasterType } from '@/lib/salesXmlGenerator';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
+import type { StoredInvoice } from '@/types/invoice';
+import { calcLineAmount } from '@/types/invoice';
 import AppLayout from '@/components/AppLayout';
 import { currentFY } from '@/lib/fyPeriod';
 import { useCompany } from '@/lib/companyContext';
 import FYPeriodSelector from '@/components/FYPeriodSelector';
-import { InvoiceEditPanel, type InvoiceEditData } from '@/components/InvoiceEditPanel';
+import { normalizeUom } from '@/lib/uomRegistry';
+import type { CustomerMaster } from '@/lib/customers';
+import type { SupplierMaster } from '@/lib/suppliers';
+import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
+import type { StockItemMaster } from '@/lib/stockItems';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function isBlank(v?: string | null): boolean {
+  return !v || v.trim().length === 0 || v === '-';
+}
 
 function getErrMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -34,121 +37,58 @@ function getErrMsg(e: unknown): string {
   return 'Unknown error';
 }
 
-function isBlank(v?: string | null) { return !v || v.trim() === '' || v === '-'; }
-
-function downloadXmlFile(xml: string, filename: string) {
-  const bom = '﻿';
-  const content = bom + xml;
-  const bytes = new Uint8Array(content.length * 2 + 2);
-  const view = new DataView(bytes.buffer);
-  view.setUint16(0, 0xFEFF, true);
-  for (let i = 0; i < content.length; i++) {
-    view.setUint16((i + 1) * 2, content.charCodeAt(i), true);
-  }
-  const blob = new Blob([bytes], { type: 'text/xml;charset=utf-16le' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
+const normalizeUomDisplay = (raw: string | null | undefined): string =>
+  normalizeUom(raw).canonical;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface SalesTallyAcceptance {
+interface SalesAcceptPayload {
+  invoiceNo: string;
+  invoiceId: string;
+  customerName: string;
+  customerGstin: string;
+  customerLedger: string;
+  salesLedger: string;
+  stockItems: Array<{ desc: string; hsn: string; uom: string; gst_percent?: number; tallyName: string }>;
+  charges: Array<{ keyword: string; tallyName: string }>;
+  cgstLedger: string;
+  sgstLedger: string;
+  igstLedger: string;
+  roLedger: string;
+  taxType: 'cgst_sgst' | 'igst' | 'none';
+  lockedStock: Record<string, string>;
+}
+
+interface LockedSalesInvoice {
   customerLedger: string;
   salesLedger: string;
   cgstLedger: string;
   sgstLedger: string;
   igstLedger: string;
   roLedger: string;
-  stock?: Record<string, string>;  // desc → tally_item_name (inventory mode)
+  stock: Record<string, string>;
+  charges: Record<string, string>;
 }
 
-function parseSalesAcceptance(inv: StoredInvoice): SalesTallyAcceptance | null {
-  if (!inv.tally_ledger_acceptance) return null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const a = inv.tally_ledger_acceptance as any;
-  if (!a.salesLedger && !a.customerLedger) return null;
-  return {
-    customerLedger: a.customerLedger ?? '',
-    salesLedger:    a.salesLedger ?? '',
-    cgstLedger:     a.cgstLedger ?? '',
-    sgstLedger:     a.sgstLedger ?? '',
-    igstLedger:     a.igstLedger ?? '',
-    roLedger:       a.roLedger ?? '',
-    stock:          a.stock ?? undefined,
-  };
+// ─── LedgerWarning ────────────────────────────────────────────────────────────
+
+interface LedgerWarning {
+  reason: string;
+  meaning: string;
+  action: string;
 }
 
-// ─── Master resolution ────────────────────────────────────────────────────────
-
-function resolveCustomerLedger(inv: StoredInvoice, customers: CustomerMaster[], suppliers: SupplierMaster[]): string | null {
-  const g = (inv.buyer_gstin ?? '').trim().toUpperCase();
-  const n = (inv.buyer_name ?? '').toLowerCase().trim();
-  if (g) {
-    const c = customers.find((x) => (x.customer_gstin ?? '').toUpperCase() === g);
-    if (c) return c.tally_ledger_name;
-    const s = suppliers.find((x) => (x.vendor_gstin ?? '').toUpperCase() === g);
-    if (s) return s.tally_ledger_name;
-  }
-  const c2 = customers.find((x) => x.tally_ledger_name.toLowerCase() === n || (x.customer_name ?? '').toLowerCase() === n);
-  if (c2) return c2.tally_ledger_name;
-  const s2 = suppliers.find((x) => x.tally_ledger_name.toLowerCase() === n || (x.vendor_name ?? '').toLowerCase() === n);
-  if (s2) return s2.tally_ledger_name;
-  return null;
-}
-
-// ─── Output GST helpers ───────────────────────────────────────────────────────
-
-function preferOutput(list: DutiesTaxesMaster[]): DutiesTaxesMaster | undefined {
-  return list.find((d) => d.tally_ledger_name.toLowerCase().includes('output')) ?? list[0];
-}
-
-function outputOnly(all: DutiesTaxesMaster[], component: string): DutiesTaxesMaster[] {
-  const comp = all.filter((d) => d.tax_component === component);
-  const out = comp.filter((d) => d.tally_ledger_name.toLowerCase().includes('output'));
-  return out.length ? out : comp;
-}
-
-// ─── Ledger type badge ────────────────────────────────────────────────────────
-
-const BADGE: Record<string, string> = {
-  Customer:    'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-  Sales:       'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  CGST:        'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
-  SGST:        'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
-  IGST:        'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
-  'Round Off': 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
-};
-
-function LedgerBadge({ type }: { type: string }) {
-  return (
-    <span className={`inline-block text-xs font-medium px-1.5 py-0.5 rounded ${BADGE[type] ?? 'bg-gray-100 text-gray-600'}`}>
-      {type}
-    </span>
-  );
-}
-
-// ─── Readiness badge ──────────────────────────────────────────────────────────
-
-function ReadinessBadge({ readiness, flags }: { readiness?: string | null; flags?: string[] | null }) {
-  if (!readiness || readiness === 'ready') return null;
-  const isCritical = readiness === 'critical';
+function InfoIcon({ warning }: { warning: LedgerWarning }) {
+  const tip = `Reason: ${warning.reason}\n\nMeaning: ${warning.meaning}\n\nAction Required: ${warning.action}`;
   return (
     <span
-      className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded font-medium ${
-        isCritical
-          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-      }`}
-      title={(flags ?? []).join('\n') || readiness}
+      className="shrink-0 text-amber-500 dark:text-amber-400 cursor-help text-sm select-none"
+      title={tip}
     >
-      {isCritical ? '⛔' : '⚠'} {isCritical ? 'Critical' : 'Warning'}
+      ⓘ
     </span>
   );
 }
-
-// ─── InlineCreateInput ────────────────────────────────────────────────────────
 
 function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
   placeholder: string;
@@ -173,10 +113,8 @@ function InlineCreateInput({ placeholder, onConfirm, onCancel }: {
   );
 }
 
-// ─── CreatableLedgerDropdown (matches purchase preview component exactly) ─────
-
 function CreatableLedgerDropdown({
-  value, options, pendingOptions, suggested,
+  value, options, pendingOptions, suggested, warning,
   freetext, createLabel,
   onSelect, onStartCreate, onConfirmCreate, onCancelCreate,
 }: {
@@ -184,6 +122,7 @@ function CreatableLedgerDropdown({
   options: string[];
   pendingOptions: string[];
   suggested: boolean;
+  warning?: LedgerWarning;
   freetext: boolean;
   createLabel: string;
   onSelect: (v: string) => void;
@@ -220,1307 +159,1724 @@ function CreatableLedgerDropdown({
         }}
         className={cls}
       >
-        {isGhost && <option value={value}>{value}{suggested ? ' ✦' : ''}</option>}
+        {isGhost && (
+          <option value={value}>{value}{suggested && !warning ? ' ✦' : ''}</option>
+        )}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
         {pendingOptions.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
         <option value="__new__">+ Create new…</option>
       </select>
+      {warning && suggested && !isGhost && <InfoIcon warning={warning} />}
     </div>
   );
 }
 
-// ─── Locked mapping summary (read-only display after acceptance) ───────────────
+// ─── SalesFlatDisplayRow ──────────────────────────────────────────────────────
 
-function LockedMappingView({
-  acc, inv, isCgstSgst, isIgst, onEdit, onUnmap,
+interface SalesFlatDisplayRow {
+  invoiceDate: string;
+  invoiceNo: string;
+  invoiceId: string;
+  buyerName: string;
+  gstin: string;
+  taxType: 'cgst_sgst' | 'igst' | 'none';
+  customerLedger: string;
+  customerSuggested: boolean;
+  salesLedger: string;
+  salesLedgerSuggested: boolean;
+  salesLedgerCase: 1 | 2 | 3 | 4;
+  cgstLedger: string; cgstSuggested: boolean;
+  sgstLedger: string; sgstSuggested: boolean;
+  igstLedger: string; igstSuggested: boolean;
+  itemDesc: string;
+  lineIdx: number;
+  hsn: string;
+  stockItem: string;
+  stockItemSuggested: boolean;
+  taxRate: number | null;
+  qty: number | null;
+  uom: string;
+  rate: number | null;
+  disc: number | null;
+  amount: number;
+  cgstAmt: number;
+  sgstAmt: number;
+  igstAmt: number;
+  isFirst: boolean;
+  charges: Array<{ desc: string; ledger: string; suggested: boolean; amount: number }>;
+  roLedger: string; roSuggested: boolean; roAmt: number;
+}
+
+// ─── SalesFlatTable ───────────────────────────────────────────────────────────
+
+function SalesFlatTable({
+  invoices, customers, suppliers, dutiesTaxes, stockItems, stockItemMode,
+  salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger,
+  initialLockedInvoices, companyId, voucherMode,
+  onAcceptInvoices, onDownloadExcel,
 }: {
-  acc: SalesTallyAcceptance;
-  inv: StoredInvoice;
-  isCgstSgst: boolean;
-  isIgst: boolean;
-  onEdit: () => void;
-  onUnmap: () => void;
-}) {
-  const d = deriveInvoiceFinancials(inv);
-  return (
-    <div className="bg-green-50/60 dark:bg-green-900/10 border-t border-green-200 dark:border-green-800/50 px-5 py-3">
-      <div className="flex flex-wrap items-center gap-3 mb-3 text-xs">
-        <span className="font-medium text-green-700 dark:text-green-400">✓ Mapping accepted</span>
-        <span className="text-gray-500 dark:text-gray-400">Total: <strong className="text-gray-900 dark:text-gray-100">{formatINR(d.total)}</strong></span>
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
-        {[
-          { label: 'Customer', value: acc.customerLedger },
-          { label: 'Sales', value: acc.salesLedger },
-          isCgstSgst ? { label: 'CGST', value: acc.cgstLedger } : null,
-          isCgstSgst ? { label: 'SGST', value: acc.sgstLedger } : null,
-          isIgst     ? { label: 'IGST', value: acc.igstLedger } : null,
-          acc.roLedger ? { label: 'Round Off', value: acc.roLedger } : null,
-        ].filter(Boolean).map((item) => (
-          <div key={item!.label}>
-            <div className="mb-0.5"><LedgerBadge type={item!.label} /></div>
-            <div className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono" title={item!.value}>
-              {item!.value || <span className="text-gray-400 italic">—</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <button
-          onClick={onEdit}
-          className="px-3 py-1 text-xs border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
-        >
-          Edit Mapping
-        </button>
-        <button
-          onClick={onUnmap}
-          className="px-3 py-1 text-xs border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-        >
-          Unmap
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Mapping panel ────────────────────────────────────────────────────────────
-
-interface MappingPanelProps {
-  inv: StoredInvoice;
+  invoices: StoredInvoice[];
   customers: CustomerMaster[];
   suppliers: SupplierMaster[];
   dutiesTaxes: DutiesTaxesMaster[];
-  salesLedgerOptions: string[];
-  pendingSalesLedgers: string[];
-  companyId: string;
-  companyState: string;
-  initialAcc: SalesTallyAcceptance | null;
+  stockItems: StockItemMaster[];
+  stockItemMode?: 'hsn_driven' | null;
+  salesLedgerMasters: string[];
   historicalSalesLedgers: Record<string, string>;
   companyWideSalesLedger: string | null;
+  initialLockedInvoices: Record<string, LockedSalesInvoice>;
+  companyId: string;
   voucherMode: 'accounting_only' | 'inventory';
-  stockItems: StockItemMaster[];
-  onSave: (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => void;
-  onUnmapRequest: () => void;
-}
+  onAcceptInvoices: (payloads: SalesAcceptPayload[]) => Promise<void>;
+  onDownloadExcel: () => void;
+}) {
+  const isInventoryMode = voucherMode === 'inventory';
 
-function MappingPanel({
-  inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, pendingSalesLedgers,
-  companyId, companyState, initialAcc, historicalSalesLedgers, companyWideSalesLedger,
-  voucherMode, stockItems,
-  onSave, onUnmapRequest,
-}: MappingPanelProps) {
-  const d = deriveInvoiceFinancials(inv);
-  const isCgstSgst = inv.tax_type === 'cgst_sgst';
-  const isIgst     = inv.tax_type === 'igst';
+  const [customerEdits, setCustomerEdits] = React.useState<Record<string, string>>({});
+  const [salesLedgerEdits, setSalesLedgerEdits] = React.useState<Record<string, string>>({});
+  const [stockItemEdits, setStockItemEdits] = React.useState<Record<string, string>>({});
+  const [chargeEdits, setChargeEdits] = React.useState<Record<string, string>>({});
+  const [chargeFreetext, setChargeFreetext] = React.useState<Record<string, boolean>>({});
+  const [taxLedgerEdits, setTaxLedgerEdits] = React.useState<{ cgst?: string; sgst?: string; igst?: string }>({});
+  const [roLedgerEdits, setRoLedgerEdits] = React.useState<Record<string, string>>({});
+  const [pendingSalesLedgers, setPendingSalesLedgers] = React.useState<string[]>([]);
+  const [salesLedgerCreating, setSalesLedgerCreating] = React.useState<Record<string, boolean>>({});
+  const [customerFreetext, setCustomerFreetext] = React.useState<Record<string, boolean>>({});
+  const [pendingCustomers, setPendingCustomers] = React.useState<string[]>([]);
+  const [stockItemFreetext, setStockItemFreetext] = React.useState<Record<string, boolean>>({});
+  const [pendingStockItems, setPendingStockItems] = React.useState<string[]>([]);
+  const [cgstFreetext, setCgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [sgstFreetext, setSgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [igstFreetext, setIgstFreetext] = React.useState<Record<string, boolean>>({});
+  const [pendingCgst, setPendingCgst] = React.useState<string[]>([]);
+  const [pendingSgst, setPendingSgst] = React.useState<string[]>([]);
+  const [pendingIgst, setPendingIgst] = React.useState<string[]>([]);
+  const [roFreetext, setRoFreetext] = React.useState<Record<string, boolean>>({});
+  const [pendingRo, setPendingRo] = React.useState<string[]>([]);
 
-  const resolvedLedger = useMemo(
-    () => resolveCustomerLedger(inv, customers, suppliers),
-    [inv, customers, suppliers],
-  );
+  const [cardFilter, setCardFilter] = React.useState<'accepted' | 'pending_review' | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<'all' | 'accepted' | 'pending_review'>('all');
+  const [customerFilter, setCustomerFilter] = React.useState('');
+  const [invoiceFilter, setInvoiceFilter] = React.useState('');
+  const [gstinFilter, setGstinFilter] = React.useState('');
+  const [mappingFilter, setMappingFilter] = React.useState<'all' | 'ai_suggested_new'>('all');
 
-  const [customerLedger, setCustomerLedger] = useState(
-    initialAcc?.customerLedger || resolvedLedger || inv.buyer_name || '',
-  );
-  const [salesLedger, setSalesLedger] = useState(initialAcc?.salesLedger ?? '');
-  const [cgstLedger,  setCgstLedger]  = useState(initialAcc?.cgstLedger ?? '');
-  const [sgstLedger,  setSgstLedger]  = useState(initialAcc?.sgstLedger ?? '');
-  const [igstLedger,  setIgstLedger]  = useState(initialAcc?.igstLedger ?? '');
-  const [roLedger,    setRoLedger]    = useState(initialAcc?.roLedger ?? '');
-  const [saving,      setSaving]      = useState(false);
-  const [err,         setErr]         = useState<string | null>(null);
+  const [selectedRows, setSelectedRows] = React.useState<Set<string>>(new Set());
+  const [selectedLockedInvoices, setSelectedLockedInvoices] = React.useState<Set<string>>(new Set());
+  const [bulkSaving, setBulkSaving] = React.useState(false);
 
-  // Inventory mode: per-line-item stock mapping (desc → tally_item_name)
-  const [stockMapping, setStockMapping] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    if (initialAcc?.stock) Object.assign(initial, initialAcc.stock);
-    return initial;
-  });
-  const [stockFreetext, setStockFreetext] = useState<Record<string, boolean>>({});
-  const [pendingStockItems, setPendingStockItems] = useState<string[]>([]);
+  const [lockedInvoices, setLockedInvoices] = React.useState<Record<string, LockedSalesInvoice>>(initialLockedInvoices);
 
-  // Freetext create state (one per field)
-  const [customerFree, setCustomerFree] = useState(false);
-  const [salesFree,    setSalesFree]    = useState(false);
-  const [roFree,       setRoFree]       = useState(false);
+  const [stockConfirm, setStockConfirm] = React.useState<{
+    invoiceNo: string; itemDesc: string; lineIdx: number; hsn: string; gstPct: number | null; chosenName: string;
+  } | null>(null);
 
-  // Pending new options created in this session
-  const [pendingCustomers,  setPendingCustomers]  = useState<string[]>([]);
-  const [pendingRoLedgers,  setPendingRoLedgers]  = useState<string[]>([]);
-
-  // Lock state: start locked if already accepted, then user can click "Edit Mapping"
-  const [editing, setEditing] = useState(!initialAcc);
-
-  // Auto-fill using 4-case hierarchy (mirrors purchase suggestion logic):
-  // Case 1: per-customer learned preferences, Case 2: historical per-customer,
-  // Case 3: company-wide most used, Case 4: first in master list.
-  useEffect(() => {
-    if (!editing) return;
-    getCustomerLedgerPreferences(companyId, inv.buyer_gstin, inv.buyer_name).then((prefs) => {
-      if (!salesLedger) {
-        const buyerKey = inv.buyer_gstin
-          ? inv.buyer_gstin
-          : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
-        const suggested = (prefs as Record<string, string>).sales    // Case 1: preference
-          || historicalSalesLedgers[buyerKey]                        // Case 2: historical
-          || companyWideSalesLedger                                   // Case 3: company-wide
-          || salesLedgerOptions[0]                                    // Case 4: first in master
-          || '';
-        if (suggested) setSalesLedger(suggested);
-      }
-      if (prefs.CGST && !cgstLedger) setCgstLedger(prefs.CGST);
-      if (prefs.SGST && !sgstLedger) setSgstLedger(prefs.SGST);
-      if (prefs.IGST && !igstLedger) setIgstLedger(prefs.IGST);
-      // Fall back to masters for tax ledgers
-      if (isCgstSgst) {
-        const cgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'CGST'));
-        const sgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'SGST'));
-        if (cgst && !cgstLedger) setCgstLedger(cgst.tally_ledger_name);
-        if (sgst && !sgstLedger) setSgstLedger(sgst.tally_ledger_name);
-      } else if (isIgst) {
-        const igst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'IGST'));
-        if (igst && !igstLedger) setIgstLedger(igst.tally_ledger_name);
-      }
-    }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, companyId, inv.buyer_gstin, inv.buyer_name, inv.tax_type]);
-
-  const cgstOptions = outputOnly(dutiesTaxes, 'CGST').map((x) => x.tally_ledger_name);
-  const sgstOptions = outputOnly(dutiesTaxes, 'SGST').map((x) => x.tally_ledger_name);
-  const igstOptions = outputOnly(dutiesTaxes, 'IGST').map((x) => x.tally_ledger_name);
-  const customerOptions = customers.map((c) => c.tally_ledger_name);
-
-  // Suggest if not yet accepted
-  const isSuggestedSales    = !initialAcc && salesLedgerOptions.length > 0;
-  const isSuggestedCustomer = !initialAcc && !!resolvedLedger;
-
-  const handleSave = async () => {
-    if (isBlank(salesLedger)) { setErr('Sales ledger is required'); return; }
-    setSaving(true); setErr(null);
-    try {
-      const acc: SalesTallyAcceptance = {
-        customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger,
-        ...(voucherMode === 'inventory' && Object.keys(stockMapping).length > 0 ? { stock: stockMapping } : {}),
-      };
-      await saveSalesTallyAcceptance(companyId, inv.id, acc as unknown as Record<string, unknown>);
-
-      // Customer master
-      if (!isBlank(customerLedger)) {
-        await addCustomer(companyId, {
-          tally_ledger_name: customerLedger,
-          customer_gstin: inv.buyer_gstin ?? '',
-          customer_name: inv.buyer_name ?? customerLedger,
-          companyState,
-        }).catch(() => {});
-      }
-      // Sales ledger master
-      if (!isBlank(salesLedger)) {
-        await addSalesLedger(companyId, salesLedger).catch(() => {});
-      }
-      // Stock item masters (inventory mode)
-      if (voucherMode === 'inventory') {
-        for (const [desc, tallyName] of Object.entries(stockMapping)) {
-          if (!isBlank(tallyName) && pendingStockItems.includes(tallyName)) {
-            const lineItem = inv.line_items?.find((li) => (li.description ?? '') === desc);
-            await addStockItem(companyId, {
-              tally_item_name: tallyName,
-              hsn_code: lineItem?.hsn ?? undefined,
-              gst_percent: lineItem?.gst_percent ?? undefined,
-              unit: lineItem?.uom ?? undefined,
-              alias_name: desc !== tallyName ? desc : undefined,
-            }).catch(() => {});
-          }
-        }
-      }
-      // Tax ledger masters
-      const taxWrites: Array<[TaxComponent, string]> = [];
-      if (isCgstSgst && !isBlank(cgstLedger)) taxWrites.push(['CGST', cgstLedger]);
-      if (isCgstSgst && !isBlank(sgstLedger)) taxWrites.push(['SGST', sgstLedger]);
-      if (isIgst     && !isBlank(igstLedger)) taxWrites.push(['IGST', igstLedger]);
-      for (const [comp, ledger] of taxWrites) {
-        await addDutiesTaxes(companyId, { tax_component: comp, tax_rate: null, tally_ledger_name: ledger }).catch(() => {});
-      }
-
-      // Learning: persist preferences per customer
-      await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'sales', salesLedger).catch(() => {});
-      if (!isBlank(cgstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'CGST', cgstLedger).catch(() => {});
-      if (!isBlank(sgstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'SGST', sgstLedger).catch(() => {});
-      if (!isBlank(igstLedger)) await upsertCustomerLedgerPreference(companyId, inv.buyer_gstin, inv.buyer_name, 'IGST', igstLedger).catch(() => {});
-
-      setEditing(false);
-      onSave(inv.id, acc, pendingCustomers.includes(salesLedger) ? salesLedger : undefined);
-    } catch (e) { setErr(getErrMsg(e)); }
-    finally { setSaving(false); }
-  };
-
-  // ── Locked view ────────────────────────────────────────────────────────────
-  if (!editing && initialAcc) {
-    return (
-      <LockedMappingView
-        acc={initialAcc}
-        inv={inv}
-        isCgstSgst={isCgstSgst}
-        isIgst={isIgst}
-        onEdit={() => setEditing(true)}
-        onUnmap={onUnmapRequest}
-      />
-    );
+  // ── Build invoice index ──
+  const invoiceOrder: string[] = [];
+  const byInvoice = new Map<string, StoredInvoice>();
+  for (const inv of invoices) {
+    if (!byInvoice.has(inv.invoice_number)) {
+      invoiceOrder.push(inv.invoice_number);
+      byInvoice.set(inv.invoice_number, inv);
+    }
   }
 
-  // ── Editable form ──────────────────────────────────────────────────────────
-  return (
-    <div className="bg-gray-50 dark:bg-gray-800/50 border-t border-indigo-100 dark:border-indigo-900/40 px-5 py-4">
-      {/* Summary line */}
-      <div className="flex flex-wrap items-center gap-4 mb-4 text-xs text-gray-600 dark:text-gray-400">
-        <span>
-          <strong className="text-gray-900 dark:text-gray-100">{inv.buyer_name ?? '—'}</strong>
-          {inv.buyer_gstin ? ` · ${inv.buyer_gstin}` : ' · B2C'}
-        </span>
-        <span>Taxable: <strong>{formatINR(d.net_goods_taxable + d.taxable_charges_total)}</strong></span>
-        {(d.cgst + d.sgst) > 0 && <span>CGST+SGST: <strong>{formatINR(d.cgst + d.sgst)}</strong></span>}
-        {d.igst > 0 && <span>IGST: <strong>{formatINR(d.igst)}</strong></span>}
-        <span>Total: <strong>{formatINR(d.total)}</strong></span>
-        {resolvedLedger && (
-          <span className="text-green-700 dark:text-green-400">
-            ✓ Found in {customers.some((c) => (c.customer_gstin ?? '').toUpperCase() === (inv.buyer_gstin ?? '').toUpperCase()) ? 'customer' : 'supplier'} master
-          </span>
-        )}
-      </div>
-
-      {/* Ledger mapping grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-
-        {/* Customer Ledger */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-1">
-            <LedgerBadge type="Customer" />
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-              Customer Ledger{!resolvedLedger && ' ⚠'}
-            </label>
-          </div>
-          <CreatableLedgerDropdown
-            value={customerLedger}
-            options={customerOptions}
-            pendingOptions={pendingCustomers}
-            suggested={isSuggestedCustomer}
-            freetext={customerFree}
-            createLabel="New customer ledger name…"
-            onSelect={(v) => { setCustomerLedger(v); }}
-            onStartCreate={() => setCustomerFree(true)}
-            onConfirmCreate={(v) => { setCustomerLedger(v); setPendingCustomers((p) => [...p, v]); setCustomerFree(false); }}
-            onCancelCreate={() => setCustomerFree(false)}
-          />
-          {!resolvedLedger && (
-            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-              Not found in master — saving will add this customer.
-            </p>
-          )}
-        </div>
-
-        {/* Sales Ledger */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-1">
-            <LedgerBadge type="Sales" />
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-              Sales Ledger <span className="text-red-500">*</span>
-            </label>
-          </div>
-          <CreatableLedgerDropdown
-            value={salesLedger}
-            options={salesLedgerOptions}
-            pendingOptions={pendingSalesLedgers}
-            suggested={isSuggestedSales}
-            freetext={salesFree}
-            createLabel="New sales ledger name…"
-            onSelect={(v) => setSalesLedger(v)}
-            onStartCreate={() => setSalesFree(true)}
-            onConfirmCreate={(v) => { setSalesLedger(v); setSalesFree(false); }}
-            onCancelCreate={() => setSalesFree(false)}
-          />
-        </div>
-
-        {/* Round-Off Ledger */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-1">
-            <LedgerBadge type="Round Off" />
-            <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Round-Off Ledger</label>
-          </div>
-          <CreatableLedgerDropdown
-            value={roLedger}
-            options={[]}
-            pendingOptions={pendingRoLedgers}
-            suggested={false}
-            freetext={roFree}
-            createLabel="Round off ledger name…"
-            onSelect={(v) => setRoLedger(v)}
-            onStartCreate={() => setRoFree(true)}
-            onConfirmCreate={(v) => { setRoLedger(v); setPendingRoLedgers((p) => [...p, v]); setRoFree(false); }}
-            onCancelCreate={() => setRoFree(false)}
-          />
-        </div>
-
-        {/* CGST Ledger */}
-        {isCgstSgst && d.cgst > 0 && (
-          <div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <LedgerBadge type="CGST" />
-              <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output CGST ({formatINR(d.cgst)})
-              </label>
-            </div>
-            <select
-              value={cgstLedger}
-              onChange={(e) => setCgstLedger(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">— select —</option>
-              {cgstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-        )}
-
-        {/* SGST Ledger */}
-        {isCgstSgst && d.sgst > 0 && (
-          <div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <LedgerBadge type="SGST" />
-              <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output SGST ({formatINR(d.sgst)})
-              </label>
-            </div>
-            <select
-              value={sgstLedger}
-              onChange={(e) => setSgstLedger(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">— select —</option>
-              {sgstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-        )}
-
-        {/* IGST Ledger */}
-        {isIgst && d.igst > 0 && (
-          <div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <LedgerBadge type="IGST" />
-              <label className="text-xs font-medium text-gray-600 dark:text-gray-400">
-                Output IGST ({formatINR(d.igst)})
-              </label>
-            </div>
-            <select
-              value={igstLedger}
-              onChange={(e) => setIgstLedger(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              <option value="">— select —</option>
-              {igstOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-          </div>
-        )}
-      </div>
-
-      {/* Inventory mode: per-line-item stock mapping */}
-      {voucherMode === 'inventory' && inv.line_items && inv.line_items.length > 0 && (
-        <div className="mb-4">
-          <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
-            Stock Item Mapping
-            <span className="ml-2 text-gray-400 font-normal">({inv.line_items.length} item{inv.line_items.length !== 1 ? 's' : ''})</span>
-          </div>
-          <div className="space-y-2">
-            {inv.line_items.map((item, idx) => {
-              const desc = item.description ?? '';
-              const key = `${inv.id}_${idx}`;
-              const currentVal = stockMapping[desc] ?? '';
-              const stockOptions = stockItems.map((s) => s.tally_item_name);
-              const allOpts = [...stockOptions, ...pendingStockItems];
-              const isGhost = currentVal !== '' && !allOpts.includes(currentVal);
-              return (
-                <div key={key} className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate" title={desc}>{desc || '(no description)'}</div>
-                    <div className="text-[10px] text-gray-400 dark:text-gray-500">HSN: {item.hsn || '—'} · {item.gst_percent ?? 0}% GST · Qty: {item.qty}</div>
-                  </div>
-                  <div className="w-52 flex-shrink-0">
-                    {stockFreetext[key] ? (
-                      <InlineCreateInput
-                        placeholder="New stock item name…"
-                        onConfirm={(v) => {
-                          setStockMapping((prev) => ({ ...prev, [desc]: v }));
-                          setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
-                          setStockFreetext((p) => ({ ...p, [key]: false }));
-                        }}
-                        onCancel={() => setStockFreetext((p) => ({ ...p, [key]: false }))}
-                      />
-                    ) : (
-                      <select
-                        value={currentVal}
-                        onChange={(e) => {
-                          if (e.target.value === '__new__') { setStockFreetext((p) => ({ ...p, [key]: true })); return; }
-                          setStockMapping((prev) => ({ ...prev, [desc]: e.target.value }));
-                        }}
-                        className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100"
-                      >
-                        <option value="">— select stock item —</option>
-                        {isGhost && <option value={currentVal}>{currentVal} (current)</option>}
-                        {stockOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                        {pendingStockItems.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
-                        <option value="__new__">+ Create new…</option>
-                      </select>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {err && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{err}</p>}
-
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
-          {saving ? 'Saving…' : 'Accept Mapping'}
-        </button>
-        {initialAcc && (
-          <button
-            onClick={() => setEditing(false)}
-            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          >
-            Cancel
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Dashboard stat card ───────────────────────────────────────────────────────
-
-function StatCard({
-  label, value, sub, color, onClick, active,
-}: {
-  label: string; value: string | number; sub?: string;
-  color: 'gray' | 'green' | 'amber' | 'indigo';
-  onClick?: () => void; active?: boolean;
-}) {
-  const border = {
-    gray:   'border-gray-200 dark:border-gray-700',
-    green:  'border-green-200 dark:border-green-800',
-    amber:  'border-amber-200 dark:border-amber-800',
-    indigo: 'border-indigo-200 dark:border-indigo-800',
-  }[color];
-  const textColor = {
-    gray:   'text-gray-900 dark:text-gray-100',
-    green:  'text-green-700 dark:text-green-400',
-    amber:  'text-amber-700 dark:text-amber-400',
-    indigo: 'text-indigo-700 dark:text-indigo-400',
-  }[color];
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 min-w-[120px] p-3 rounded-lg border text-left transition-colors ${border} ${
-        active ? 'ring-2 ring-indigo-500' : ''
-      } ${onClick ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50' : 'cursor-default'} bg-white dark:bg-gray-900`}
-    >
-      <div className={`text-xl font-bold ${textColor}`}>{value}</div>
-      <div className="text-xs font-medium text-gray-700 dark:text-gray-300">{label}</div>
-      {sub && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</div>}
-    </button>
-  );
-}
-
-// ─── Preview table ────────────────────────────────────────────────────────────
-
-const STATUS_CLS: Record<string, string> = {
-  OK:      'text-green-700 dark:text-green-400',
-  Warning: 'text-amber-600 dark:text-amber-400',
-  Skipped: 'text-red-500 dark:text-red-400',
-};
-
-function SalesPreviewTable({ rows, onClose, onDownload }: { rows: SalesPreviewRow[]; onClose: () => void; onDownload: () => void }) {
-  const ok      = rows.filter((r) => r.status === 'OK').length;
-  const warned  = rows.filter((r) => r.status === 'Warning').length;
-  const skipped = rows.filter((r) => r.status === 'Skipped').length;
-  return (
-    <div className="mt-6 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Export Preview</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400">{rows.length} rows · {ok} OK · {warned} warnings · {skipped} skipped</span>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={onDownload}
-            className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          >
-            Download Excel
-          </button>
-          <button
-            onClick={onClose}
-            className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-          >
-            Close ✕
-          </button>
-        </div>
-      </div>
-      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
-            <tr className="border-b border-gray-200 dark:border-gray-700">
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Invoice #</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Date</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Customer</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Type</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Tally Ledger</th>
-              <th className="text-right px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Amount</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Status</th>
-              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Note</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {rows.map((r, i) => (
-              <tr key={i} className={`${r.status === 'Skipped' ? 'opacity-50' : ''} hover:bg-gray-50 dark:hover:bg-gray-800/50`}>
-                <td className="px-3 py-1.5 font-mono text-gray-700 dark:text-gray-300">{r.invoice_number}</td>
-                <td className="px-3 py-1.5 text-gray-500 dark:text-gray-400 tabular-nums">{r.invoice_date}</td>
-                <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300 max-w-[120px] truncate" title={r.buyer_name}>{r.buyer_name || '—'}</td>
-                <td className="px-3 py-1.5">
-                  <span className={`inline-block px-1.5 py-0.5 rounded font-medium ${BADGE[r.ledger_type] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {r.ledger_type}
-                  </span>
-                </td>
-                <td className="px-3 py-1.5 font-mono text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={r.tally_ledger_name}>{r.tally_ledger_name}</td>
-                <td className={`px-3 py-1.5 text-right tabular-nums font-mono ${r.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
-                  {r.amount >= 0 ? '+' : ''}{r.amount.toFixed(2)}
-                </td>
-                <td className={`px-3 py-1.5 font-medium ${STATUS_CLS[r.status] ?? 'text-gray-500'}`}>{r.status}</td>
-                <td className="px-3 py-1.5 text-gray-400 dark:text-gray-500 max-w-[200px] truncate" title={r.skip_reason ?? r.warning ?? ''}>
-                  {r.skip_reason ?? r.warning ?? ''}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function downloadPreviewExcel(rows: SalesPreviewRow[], fy: string) {
-  const wsData = [
-    ['Invoice No', 'Date', 'Customer (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
-    ...rows.map((r) => [
-      r.invoice_number, r.invoice_date, r.buyer_name, r.party_ledger,
-      r.ledger_type, r.tally_ledger_name, r.amount, r.status,
-      r.skip_reason ?? r.warning ?? '',
-    ]),
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Sales Preview');
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([wbout], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `sales_export_preview_${fy}.xlsx`;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a); URL.revokeObjectURL(url);
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
-
-export default function SalesXmlPage() {
-  const router = useRouter();
-  const { company } = useCompany();
-  const [fy, setFy] = useState(currentFY());
-
-  const [invoices,           setInvoices]           = useState<StoredInvoice[]>([]);
-  const [customers,          setCustomers]           = useState<CustomerMaster[]>([]);
-  const [suppliers,          setSuppliers]           = useState<SupplierMaster[]>([]);
-  const [dutiesTaxes,        setDutiesTaxes]         = useState<DutiesTaxesMaster[]>([]);
-  const [stockItems,         setStockItems]          = useState<StockItemMaster[]>([]);
-  const [tallyCompanyName,   setTallyCompanyName]    = useState('');
-  const [companyGstin,       setCompanyGstin]        = useState('');
-  const [companyState,       setCompanyState]        = useState('');
-  const [voucherMode,        setVoucherMode]         = useState<'accounting_only' | 'inventory'>('accounting_only');
-  const [stockItemMode,      setStockItemMode]       = useState<'hsn_driven' | null>(null);
-  const [loading,            setLoading]             = useState(true);
-  const [bulkMapping,        setBulkMapping]         = useState(false);
-  const [bulkSaving,         setBulkSaving]          = useState(false);
-  const [error,              setError]               = useState<string | null>(null);
-  const [exportMsg,          setExportMsg]           = useState<string | null>(null);
-
-  const [acceptedMap,        setAcceptedMap]         = useState<Record<string, SalesTallyAcceptance>>({});
-  const [salesLedgerOptions, setSalesLedgerOptions]  = useState<string[]>([]);
-  const [pendingSalesLedgers,setPendingSalesLedgers]  = useState<string[]>([]);
-  const [expandedIds,        setExpandedIds]         = useState<Set<string>>(new Set());
-  const [filterStatus,       setFilterStatus]        = useState<'all' | 'accepted' | 'pending'>('all');
-  const [search,             setSearch]              = useState('');
-  const [selectedInvoices,   setSelectedInvoices]    = useState<Set<string>>(new Set());
-  const [editingInvoice,     setEditingInvoice]      = useState<StoredInvoice | null>(null);
-  const [previewRows,        setPreviewRows]         = useState<SalesPreviewRow[] | null>(null);
-  const [historicalSalesLedgers,    setHistoricalSalesLedgers]    = useState<Record<string, string>>({});
-  const [companyWideSalesLedger,    setCompanyWideSalesLedger]    = useState<string | null>(null);
-
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      const session = await getSession();
-      if (!session) { router.push('/login'); return; }
-      if (!company) { router.push('/select-company'); return; }
-      try {
-        const [invData, custData, suppData, dtData, comp, importedSalesLedgers, stockData] = await Promise.all([
-          getSalesRegister(company.id, { financialYear: fy }),
-          loadCustomers(company.id),
-          loadSuppliers(company.id),
-          loadDutiesTaxes(company.id),
-          getCompany(company.id),
-          loadSalesLedgers(company.id),
-          loadStockItems(company.id),
-        ]);
-        setInvoices(invData);
-        setCustomers(custData);
-        setSuppliers(suppData);
-        setDutiesTaxes(dtData);
-        setStockItems(stockData);
-        setTallyCompanyName(comp.tally_company_name ?? comp.name);
-        setCompanyGstin(comp.gstin ?? '');
-        setCompanyState(comp.state_name ?? '');
-        setVoucherMode(comp.voucher_mode === 'inventory' ? 'inventory' : 'accounting_only');
-        setStockItemMode(comp.stock_item_mode ?? null);
-
-        const ledgerSet = new Set<string>(importedSalesLedgers.map((l) => l.tally_ledger_name));
-        for (const inv of invData) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const a = inv.tally_ledger_acceptance as any;
-          if (a?.salesLedger) ledgerSet.add(a.salesLedger);
-        }
-        setSalesLedgerOptions(Array.from(ledgerSet));
-
-        const map: Record<string, SalesTallyAcceptance> = {};
-        for (const inv of invData) {
-          const acc = parseSalesAcceptance(inv);
-          if (acc) map[inv.id] = acc;
-        }
-        setAcceptedMap(map);
-
-        // Load historical and company-wide sales ledger suggestions (async, non-blocking)
-        const masterNames = importedSalesLedgers.map((l) => l.tally_ledger_name);
-        const uniqueKeys: Record<string, true> = {};
-        for (const inv of invData) {
-          const k = inv.buyer_gstin ? inv.buyer_gstin : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
-          if (k) uniqueKeys[k] = true;
-        }
-        const [historicalEntries, companyWide] = await Promise.all([
-          Promise.all(
-            Object.keys(uniqueKeys).map(async (key) => {
-              const isGstin = !key.startsWith('name:');
-              const result = await getHistoricalSalesLedger(company.id, isGstin ? key : null, isGstin ? null : key.slice(5));
-              return [key, result] as [string, string | null];
-            })
-          ),
-          masterNames.length > 0 ? getCompanyWideMostUsedSalesLedger(company.id, masterNames) : Promise.resolve(null),
-        ]);
-        const histMap: Record<string, string> = {};
-        for (const [key, val] of historicalEntries) { if (val) histMap[key] = val; }
-        setHistoricalSalesLedgers(histMap);
-        setCompanyWideSalesLedger(companyWide);
-      } catch (e) {
-        setError(getErrMsg(e));
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company, fy]);
-
-  const handleSave = (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => {
-    setAcceptedMap((prev) => ({ ...prev, [id]: acc }));
-    if (newSalesLedger && !salesLedgerOptions.includes(newSalesLedger)) {
-      setSalesLedgerOptions((prev) => [...prev, newSalesLedger]);
-      setPendingSalesLedgers((prev) => [...prev, newSalesLedger]);
-    } else if (acc.salesLedger && !salesLedgerOptions.includes(acc.salesLedger)) {
-      setSalesLedgerOptions((prev) => [...prev, acc.salesLedger]);
+  // ── Helper: resolve customer ledger ──
+  function resolveCustomerLedger(inv: StoredInvoice): { ledger: string; suggested: boolean } {
+    const gstin = inv.buyer_gstin;
+    const name = inv.buyer_name ?? '';
+    if (gstin) {
+      const g = gstin.toLowerCase().trim();
+      const byGstin = customers.find((c) => (c.customer_gstin ?? '').toLowerCase().trim() === g);
+      if (byGstin) return { ledger: byGstin.tally_ledger_name, suggested: false };
     }
-    // Collapse after accepting
-    setExpandedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-  };
+    const n = name.toLowerCase().trim();
+    const byName = customers.find(
+      (c) => c.customer_name.toLowerCase().trim() === n || c.tally_ledger_name.toLowerCase().trim() === n
+    );
+    if (byName) return { ledger: byName.tally_ledger_name, suggested: false };
+    if (gstin) {
+      const g = gstin.toLowerCase().trim();
+      const supByGstin = suppliers.find((s) => (s.vendor_gstin ?? '').toLowerCase().trim() === g);
+      if (supByGstin) return { ledger: supByGstin.tally_ledger_name, suggested: true };
+    }
+    const supByName = suppliers.find((s) => s.vendor_name.toLowerCase().trim() === n);
+    if (supByName) return { ledger: supByName.tally_ledger_name, suggested: true };
+    return { ledger: name, suggested: true };
+  }
 
-  const handleUnmap = async (invId: string) => {
-    if (!company) return;
-    try {
-      await saveSalesTallyAcceptance(company.id, invId, null);
-      setAcceptedMap((prev) => { const next = { ...prev }; delete next[invId]; return next; });
-    } catch (e) { setError(getErrMsg(e)); }
-  };
+  // ── Helper: output tax ledger ──
+  function findOutputTaxLedger(component: string): string {
+    const comp = component.toUpperCase();
+    const consolidated = dutiesTaxes.filter((d) => d.tax_component === comp && d.tax_rate == null);
+    if (consolidated.length === 0) return '';
+    const output = consolidated.find((d) => d.tally_ledger_name.toLowerCase().startsWith('output'));
+    return (output ?? consolidated[0]).tally_ledger_name;
+  }
 
-  const toggleExpand = (id: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
+  // ── Build display rows ──
+  const displayRows: SalesFlatDisplayRow[] = [];
+
+  for (const invNo of invoiceOrder) {
+    const inv = byInvoice.get(invNo)!;
+    const { ledger: customerLedger, suggested: customerSuggested } = resolveCustomerLedger(inv);
+    const lockedInv = lockedInvoices[invNo];
+
+    // Sales ledger 4-case hierarchy
+    let salesLedger: string;
+    let salesLedgerCase: 1 | 2 | 3 | 4;
+    if (lockedInv) {
+      salesLedger = lockedInv.salesLedger;
+      salesLedgerCase = 1;
+    } else {
+      const buyerKey = inv.buyer_gstin
+        ? inv.buyer_gstin
+        : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+      const historical = historicalSalesLedgers[buyerKey];
+      const validHistorical = historical && salesLedgerMasters.includes(historical) ? historical : null;
+      if (validHistorical) {
+        salesLedger = validHistorical;
+        salesLedgerCase = 2;
+      } else if (salesLedgerMasters.length === 0) {
+        salesLedger = 'Sales';
+        salesLedgerCase = 1;
+      } else if (companyWideSalesLedger) {
+        salesLedger = companyWideSalesLedger;
+        salesLedgerCase = 3;
+      } else {
+        salesLedger = salesLedgerMasters[0];
+        salesLedgerCase = 4;
+      }
+    }
+    const salesLedgerSuggested = !lockedInv;
+
+    const invTaxType = (inv.tax_type ?? 'none') as 'cgst_sgst' | 'igst' | 'none';
+    const cgstLedger = lockedInv?.cgstLedger ?? findOutputTaxLedger('CGST');
+    const sgstLedger = lockedInv?.sgstLedger ?? findOutputTaxLedger('SGST');
+    const igstLedger = lockedInv?.igstLedger ?? findOutputTaxLedger('IGST');
+    const cgstSuggested = !lockedInv;
+    const sgstSuggested = !lockedInv;
+    const igstSuggested = !lockedInv;
+
+    const invFinancials = deriveInvoiceFinancials(inv as Parameters<typeof deriveInvoiceFinancials>[0]);
+    const cgstAmt = invFinancials.cgst;
+    const sgstAmt = invFinancials.sgst;
+    const igstAmt = invFinancials.igst;
+    const roAmt = invFinancials.round_off;
+    const roLedger = lockedInv?.roLedger ?? '';
+    const roSuggested = !lockedInv;
+
+    const charges: SalesFlatDisplayRow['charges'] = (inv.charges ?? []).map((ch) => {
+      const keyword = ch.description ?? '';
+      const ledger = lockedInv?.charges?.[keyword] ?? '';
+      return { desc: keyword, ledger, suggested: !lockedInv, amount: ch.amount ?? 0 };
     });
-  };
 
-  // Auto-map all unmapped invoices using preferences + masters
-  // 4-case sales ledger suggestion hierarchy (mirrors purchase 4-case logic):
-  // Case 1: per-customer learned preferences (customerLedgerPreferences)
-  // Case 2: per-customer historical from accepted invoices (getHistoricalSalesLedger)
-  // Case 3: company-wide most used (getCompanyWideMostUsedSalesLedger)
-  // Case 4: first in master list (bootstrap default)
-  const resolveSalesLedger = (prefs: Record<string, string>, buyerGstin: string | null, buyerName: string | null): string => {
-    const buyerKey = buyerGstin ? buyerGstin : `name:${(buyerName ?? '').toLowerCase().trim()}`;
-    return prefs.sales                          // Case 1: per-customer preference
-      || historicalSalesLedgers[buyerKey]       // Case 2: historical per-customer
-      || companyWideSalesLedger                 // Case 3: company-wide most used
-      || salesLedgerOptions[0]                  // Case 4: first in master list
-      || '';
-  };
+    const invoiceTail = { charges, roLedger, roSuggested, roAmt };
+    const emptyTail = { charges: [], roLedger: '', roSuggested: false, roAmt: 0 };
 
-  const handleAutoMapAll = async () => {
-    if (!company || invoices.length === 0) return;
-    setBulkMapping(true);
-    setError(null);
-    let mapped = 0;
-    let skipped = 0;
-    try {
-      for (const inv of invoices) {
-        if (acceptedMap[inv.id]) continue;
-        const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
-        const resolved = resolveCustomerLedger(inv, customers, suppliers);
-        const custLedger = resolved || inv.buyer_name || '';
-        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
-        if (!salesL) { skipped++; continue; }
+    const base = {
+      invoiceDate: inv.invoice_date ?? '',
+      invoiceNo: invNo,
+      invoiceId: inv.id,
+      buyerName: inv.buyer_name ?? '',
+      gstin: inv.buyer_gstin ?? '',
+      taxType: invTaxType,
+      customerLedger, customerSuggested,
+      salesLedger, salesLedgerSuggested, salesLedgerCase,
+      cgstLedger, cgstSuggested,
+      sgstLedger, sgstSuggested,
+      igstLedger, igstSuggested,
+    };
 
-        let cgstL = (prefs as Record<string, string>).CGST || '';
-        let sgstL = (prefs as Record<string, string>).SGST || '';
-        let igstL = (prefs as Record<string, string>).IGST || '';
-        if (!cgstL) cgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'CGST'))?.tally_ledger_name ?? '';
-        if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
-        if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
+    const lineItems = inv.line_items ?? [];
 
-        // Auto-map stock items for inventory mode
-        let stock: Record<string, string> | undefined;
-        if (voucherMode === 'inventory' && inv.line_items?.length) {
-          stock = {};
-          for (const item of inv.line_items) {
-            const desc = item.description ?? '';
-            const si = stockItems.find((s) => {
-              const q = desc.toLowerCase().trim();
-              return (s.alias_name && s.alias_name.toLowerCase().trim() === q) || s.tally_item_name.toLowerCase().trim() === q;
-            }) ?? stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === (item.hsn ?? '').replace(/[\s.]/g, '') && s.gst_percent === item.gst_percent);
-            if (si && desc) stock[desc] = si.tally_item_name;
-          }
-          if (Object.keys(stock).length === 0) stock = undefined;
-        }
-        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '', ...(stock ? { stock } : {}) };
-        await saveSalesTallyAcceptance(company.id, inv.id, acc as unknown as Record<string, unknown>).catch(() => {});
-        setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
-        mapped++;
-      }
-      setExportMsg(
-        skipped > 0
-          ? `✓ Auto-mapped ${mapped} invoices. ${skipped} skipped — add a Sales Ledger in Masters first.`
-          : `✓ Auto-mapped ${mapped} invoices.`
-      );
-    } catch (e) {
-      setError(getErrMsg(e));
-    } finally {
-      setBulkMapping(false);
+    if (lineItems.length === 0) {
+      displayRows.push({
+        ...base, isFirst: true, ...invoiceTail,
+        itemDesc: '', lineIdx: 0, hsn: '', stockItem: '', stockItemSuggested: false,
+        taxRate: null, qty: null, uom: '', rate: null, disc: null,
+        amount: Math.abs(invFinancials.total),
+        cgstAmt, sgstAmt, igstAmt,
+      });
+      continue;
     }
-  };
 
-  // Bulk accept selected (uses same 4-case hierarchy as auto-map)
-  const handleBulkAcceptSelected = async () => {
-    if (!company || selectedInvoices.size === 0) return;
-    setBulkSaving(true);
-    setError(null);
-    let mapped = 0;
-    let skipped = 0;
-    try {
-      const toMap = invoices.filter((inv) => selectedInvoices.has(inv.id) && !acceptedMap[inv.id]);
-      for (const inv of toMap) {
-        const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
-        const resolved = resolveCustomerLedger(inv, customers, suppliers);
-        const custLedger = resolved || inv.buyer_name || '';
-        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
-        if (!salesL) { skipped++; continue; }
+    lineItems.forEach((item, idx) => {
+      const desc = item.description ?? '';
+      let stockItemName = '';
+      let stockItemSuggested = false;
 
-        let cgstL = (prefs as Record<string, string>).CGST || '';
-        let sgstL = (prefs as Record<string, string>).SGST || '';
-        let igstL = (prefs as Record<string, string>).IGST || '';
-        if (!cgstL) cgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'CGST'))?.tally_ledger_name ?? '';
-        if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
-        if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
-
-        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '' };
-        await saveSalesTallyAcceptance(company.id, inv.id, acc as unknown as Record<string, unknown>).catch(() => {});
-        setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
-        mapped++;
+      if (isInventoryMode) {
+        const lockedStockName = lockedInv?.stock?.[desc];
+        if (lockedStockName) {
+          stockItemName = lockedStockName;
+          stockItemSuggested = false;
+        } else if (stockItemMode === 'hsn_driven' && item.hsn) {
+          const cleanHsn = item.hsn.replace(/[\s.]/g, '');
+          const match = stockItems.find(
+            (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
+          ) ?? stockItems.find(
+            (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
+          );
+          if (match) { stockItemName = match.tally_item_name; stockItemSuggested = false; }
+          else { stockItemName = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : desc; stockItemSuggested = true; }
+        } else {
+          const n = desc.toLowerCase().trim();
+          const byAlias = stockItems.find((s) => s.alias_name && s.alias_name.toLowerCase().trim() === n);
+          const byName = stockItems.find((s) => s.tally_item_name.toLowerCase().trim() === n);
+          const match = byAlias ?? byName;
+          if (match) { stockItemName = match.tally_item_name; stockItemSuggested = false; }
+          else { stockItemName = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : desc; stockItemSuggested = true; }
+        }
       }
-      setSelectedInvoices(new Set());
-      if (skipped > 0) setError(`${skipped} invoice${skipped === 1 ? '' : 's'} could not be mapped — no Sales Ledger available. Add one in Masters → Sales Ledgers.`);
-      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoice${mapped === 1 ? '' : 's'}.`);
-    } catch (e) {
-      setError(getErrMsg(e));
+
+      displayRows.push({
+        ...base,
+        isFirst: idx === 0,
+        ...(idx === 0 ? invoiceTail : emptyTail),
+        itemDesc: desc,
+        lineIdx: idx,
+        hsn: item.hsn ?? '',
+        stockItem: stockItemName,
+        stockItemSuggested,
+        taxRate: item.gst_percent ?? null,
+        qty: item.qty ?? null,
+        uom: normalizeUomDisplay(item.uom),
+        rate: item.rate ?? null,
+        disc: (item.disc_percent ?? 0) > 0 ? item.disc_percent : null,
+        amount: calcLineAmount(item),
+        cgstAmt: idx === 0 ? cgstAmt : 0,
+        sgstAmt: idx === 0 ? sgstAmt : 0,
+        igstAmt: idx === 0 ? igstAmt : 0,
+      });
+    });
+  }
+
+  const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
+
+  // ── Filter ──
+  const filteredInvoiceNos = React.useMemo(() => {
+    const effectiveStatus = cardFilter ?? statusFilter;
+    return new Set(invoiceOrder.filter((invNo) => {
+      const inv = byInvoice.get(invNo);
+      const isAccepted = !!lockedInvoices[invNo];
+      if (effectiveStatus === 'accepted' && !isAccepted) return false;
+      if (effectiveStatus === 'pending_review' && isAccepted) return false;
+      if (customerFilter && !(inv?.buyer_name ?? '').toLowerCase().includes(customerFilter.toLowerCase())) return false;
+      if (invoiceFilter && !invNo.toLowerCase().includes(invoiceFilter.toLowerCase())) return false;
+      if (gstinFilter && !(inv?.buyer_gstin ?? '').toLowerCase().includes(gstinFilter.toLowerCase())) return false;
+      if (mappingFilter === 'ai_suggested_new') {
+        const row = displayRows.find((r) => r.invoiceNo === invNo && r.isFirst);
+        if (!row) return false;
+        if (!row.customerSuggested && !row.salesLedgerSuggested) return false;
+      }
+      return true;
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardFilter, statusFilter, customerFilter, invoiceFilter, gstinFilter, mappingFilter, lockedInvoices]);
+
+  // ── Select ──
+  const suggestableInvoices: string[] = [];
+  {
+    const seen = new Set<string>();
+    for (const row of displayRows) {
+      if (!seen.has(row.invoiceNo)) {
+        seen.add(row.invoiceNo);
+        if (!lockedInvoices[row.invoiceNo]) suggestableInvoices.push(row.invoiceNo);
+      }
+    }
+  }
+
+  const allSelected = suggestableInvoices.length > 0 && suggestableInvoices.every((inv) => selectedRows.has(inv));
+  const toggleAll = () => {
+    if (allSelected) setSelectedRows(new Set());
+    else setSelectedRows(new Set(suggestableInvoices));
+  };
+  const toggleInvoice = (invNo: string) => setSelectedRows((prev) => {
+    const s = new Set(prev); s.has(invNo) ? s.delete(invNo) : s.add(invNo); return s;
+  });
+  const toggleLockedInvoice = (invNo: string) => setSelectedLockedInvoices((prev) => {
+    const s = new Set(prev); s.has(invNo) ? s.delete(invNo) : s.add(invNo); return s;
+  });
+
+  // ── Bulk accept ──
+  const handleBulkAccept = async () => {
+    setBulkSaving(true);
+    const payloads: SalesAcceptPayload[] = [];
+
+    for (const invNo of Array.from(selectedRows)) {
+      const invRows = displayRows.filter((r) => r.invoiceNo === invNo);
+      const firstRow = invRows.find((r) => r.isFirst);
+      if (!firstRow) continue;
+      const inv = byInvoice.get(invNo);
+      if (!inv) continue;
+
+      const customerLedger = customerEdits[firstRow.buyerName] ?? firstRow.customerLedger;
+      const salesLedger = salesLedgerEdits[invNo] ?? firstRow.salesLedger;
+      const cgstLedger = taxLedgerEdits.cgst ?? firstRow.cgstLedger;
+      const sgstLedger = taxLedgerEdits.sgst ?? firstRow.sgstLedger;
+      const igstLedger = taxLedgerEdits.igst ?? firstRow.igstLedger;
+
+      const stockItemsPayload: SalesAcceptPayload['stockItems'] = [];
+      const lockedStock: Record<string, string> = {};
+      if (isInventoryMode) {
+        for (const r of invRows) {
+          if (r.itemDesc) {
+            const tallyName = stockItemEdits[`${invNo}_${r.lineIdx}`] ?? r.stockItem;
+            if (tallyName) {
+              stockItemsPayload.push({ desc: r.itemDesc, hsn: r.hsn, uom: r.uom, gst_percent: r.taxRate ?? undefined, tallyName });
+              lockedStock[r.itemDesc] = tallyName;
+            }
+          }
+        }
+      }
+
+      const charges: SalesAcceptPayload['charges'] = (firstRow.charges ?? []).map((ch) => ({
+        keyword: ch.desc,
+        tallyName: chargeEdits[ch.desc] ?? ch.ledger,
+      }));
+
+      const roLedger = roLedgerEdits[invNo] ?? firstRow.roLedger;
+
+      payloads.push({
+        invoiceNo: invNo,
+        invoiceId: inv.id,
+        customerName: firstRow.buyerName,
+        customerGstin: firstRow.gstin,
+        customerLedger,
+        salesLedger,
+        stockItems: stockItemsPayload,
+        charges,
+        cgstLedger, sgstLedger, igstLedger,
+        roLedger,
+        taxType: firstRow.taxType,
+        lockedStock,
+      });
+    }
+
+    // Validate
+    const validationErrors: string[] = [];
+    for (const p of payloads) {
+      const errs: string[] = [];
+      if (isBlank(p.customerLedger)) errs.push('Customer Ledger is empty');
+      if (isBlank(p.salesLedger)) errs.push('Sales Ledger is empty');
+      if (p.taxType === 'cgst_sgst') {
+        if (isBlank(p.cgstLedger)) errs.push('CGST Ledger is empty');
+        if (isBlank(p.sgstLedger)) errs.push('SGST Ledger is empty');
+      }
+      if (p.taxType === 'igst') {
+        if (isBlank(p.igstLedger)) errs.push('IGST Ledger is empty');
+      }
+      const firstRow = displayRows.find((r) => r.invoiceNo === p.invoiceNo && r.isFirst);
+      if (firstRow && Math.abs(firstRow.roAmt) > 0.001 && isBlank(p.roLedger)) {
+        errs.push('Round Off Ledger is empty');
+      }
+      if (isInventoryMode) {
+        for (const si of p.stockItems) {
+          if (isBlank(si.tallyName)) errs.push(`Stock Item "${si.desc}" is empty`);
+        }
+      }
+      if (errs.length) validationErrors.push(`Invoice ${p.invoiceNo}:\n• ${errs.join('\n• ')}`);
+    }
+    if (validationErrors.length) {
+      alert(validationErrors.join('\n\n'));
+      setBulkSaving(false);
+      return;
+    }
+
+    try {
+      await onAcceptInvoices(payloads);
+      setLockedInvoices((prev) => {
+        const next = { ...prev };
+        for (const p of payloads) {
+          const chargesLocked: Record<string, string> = {};
+          p.charges.forEach((ch) => { chargesLocked[ch.keyword] = ch.tallyName; });
+          next[p.invoiceNo] = {
+            customerLedger: p.customerLedger,
+            salesLedger: p.salesLedger,
+            cgstLedger: p.cgstLedger,
+            sgstLedger: p.sgstLedger,
+            igstLedger: p.igstLedger,
+            roLedger: p.roLedger,
+            stock: p.lockedStock,
+            charges: chargesLocked,
+          };
+        }
+        return next;
+      });
+      setSelectedRows(new Set());
     } finally {
       setBulkSaving(false);
     }
   };
 
-  // Bulk unmap selected accepted invoices
-  const handleBulkUnmapSelected = async () => {
-    if (!company) return;
-    const toUnmap = invoices.filter((inv) => selectedInvoices.has(inv.id) && acceptedMap[inv.id]);
-    if (!toUnmap.length) return;
+  // ── Bulk unaccept ──
+  const handleBulkUnaccept = async () => {
+    if (selectedLockedInvoices.size === 0) return;
     setBulkSaving(true);
-    try {
-      for (const inv of toUnmap) {
-        await saveSalesTallyAcceptance(company.id, inv.id, null).catch(() => {});
-        setAcceptedMap((prev) => { const next = { ...prev }; delete next[inv.id]; return next; });
-      }
-      setSelectedInvoices(new Set());
-    } catch (e) { setError(getErrMsg(e)); }
-    finally { setBulkSaving(false); }
-  };
-
-  const mappedInvoices = useMemo(
-    () => invoices.filter((inv) => { const a = acceptedMap[inv.id]; return a && !isBlank(a.salesLedger); }),
-    [invoices, acceptedMap],
-  );
-
-  const filteredInvoices = useMemo(() => {
-    let list = invoices;
-    if (filterStatus === 'accepted') list = list.filter((inv) => acceptedMap[inv.id] && !isBlank(acceptedMap[inv.id].salesLedger));
-    if (filterStatus === 'pending')  list = list.filter((inv) => !acceptedMap[inv.id] || isBlank(acceptedMap[inv.id].salesLedger));
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((inv) =>
-        (inv.invoice_number ?? '').toLowerCase().includes(q) ||
-        (inv.buyer_name ?? '').toLowerCase().includes(q) ||
-        (inv.buyer_gstin ?? '').toLowerCase().includes(q),
-      );
+    const errs: string[] = [];
+    for (const invNo of Array.from(selectedLockedInvoices)) {
+      const inv = byInvoice.get(invNo);
+      if (!inv) continue;
+      try {
+        await saveSalesTallyAcceptance(companyId, inv.id, null);
+      } catch (e) { errs.push(`${invNo}: ${e instanceof Error ? e.message : String(e)}`); }
     }
-    return list;
-  }, [invoices, acceptedMap, filterStatus, search]);
+    setLockedInvoices((prev) => {
+      const next = { ...prev };
+      selectedLockedInvoices.forEach((invNo) => delete next[invNo]);
+      return next;
+    });
+    setSelectedLockedInvoices(new Set());
+    setBulkSaving(false);
+    if (errs.length) alert(`Some failed:\n${errs.join('\n')}`);
+  };
 
-  // Invoices eligible for select/accept (unmapped in current filter)
-  const selectableIds = useMemo(
-    () => filteredInvoices.filter((inv) => !acceptedMap[inv.id]).map((inv) => inv.id),
-    [filteredInvoices, acceptedMap],
+  // ── Dual scroll ──
+  const tableContainerRef = React.useRef<HTMLDivElement>(null);
+  const topScrollRef = React.useRef<HTMLDivElement>(null);
+  const [tableScrollWidth, setTableScrollWidth] = React.useState(0);
+  React.useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const update = () => setTableScrollWidth(el.scrollWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [displayRows]);
+  const onTableScroll = () => {
+    if (topScrollRef.current && tableContainerRef.current)
+      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+  };
+  const onTopScroll = () => {
+    if (tableContainerRef.current && topScrollRef.current)
+      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+  };
+
+  // ── Dashboard counts ──
+  const dashTotalCount = invoiceOrder.length;
+  const dashAcceptedCount = Object.keys(lockedInvoices).length;
+  const dashPendingCount = invoiceOrder.filter((invNo) => !lockedInvoices[invNo]).length;
+
+  const TH = ({ children, right }: { children: React.ReactNode; right?: boolean }) => (
+    <th className={`px-3 py-2.5 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide whitespace-nowrap text-[11px] bg-gray-50 dark:bg-gray-800 ${right ? 'text-right' : 'text-left'}`}>
+      {children}
+    </th>
   );
-  const selectedAccepted = useMemo(
-    () => new Set(Array.from(selectedInvoices).filter((id) => !!acceptedMap[id])),
-    [selectedInvoices, acceptedMap],
-  );
-  const allPendingSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedInvoices.has(id));
-
-  const toggleSelectAll = () => {
-    if (allPendingSelected) {
-      setSelectedInvoices((prev) => { const next = new Set(prev); selectableIds.forEach((id) => next.delete(id)); return next; });
-    } else {
-      setSelectedInvoices((prev) => new Set([...Array.from(prev), ...selectableIds]));
-    }
-  };
-  const toggleSelect = (id: string) => {
-    setSelectedInvoices((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  };
-
-  const totalCount    = invoices.length;
-  const mappedCount   = mappedInvoices.length;
-  const unmappedCount = totalCount - mappedCount;
-
-  const totalTaxable = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.net_goods_taxable + d.taxable_charges_total; }, 0), [filteredInvoices]);
-  const totalTax     = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.cgst + d.sgst + d.igst; }, 0), [filteredInvoices]);
-  const grandTotal   = useMemo(() => filteredInvoices.reduce((s, inv) => { const d = deriveInvoiceFinancials(inv); return s + d.total; }, 0), [filteredInvoices]);
-
-  const selectedPending   = useMemo(() => Array.from(selectedInvoices).filter((id) => !acceptedMap[id]).length,  [selectedInvoices, acceptedMap]);
-  const selectedAccepted2 = useMemo(() => Array.from(selectedInvoices).filter((id) => !!acceptedMap[id]).length, [selectedInvoices, acceptedMap]);
-
-  const handleExportVouchers = () => {
-    if (!mappedInvoices.length) { setExportMsg('No invoices with complete mapping to export.'); return; }
-    setExportMsg(null);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesVouchersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
-      downloadXmlFile(xml, `sales_vouchers_${fy}.xml`);
-      setExportMsg(`✓ Exported ${mappedInvoices.length} vouchers.`);
-    } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
-  };
-
-  const handleExportMasters = () => {
-    if (!mappedInvoices.length) { setExportMsg('No mapped invoices to generate masters for.'); return; }
-    setExportMsg(null);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesMastersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
-      downloadXmlFile(xml, `sales_masters_${fy}.xml`);
-      setExportMsg('✓ Masters XML downloaded.');
-    } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
-  };
-
-  const handlePreview = () => {
-    if (!mappedInvoices.length) { setExportMsg('No accepted invoices to preview.'); return; }
-    setExportMsg(null);
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const rows = buildSalesPreview({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
-      setPreviewRows(rows);
-      const { includedCount, skippedInvoices } = generateSalesVouchers({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
-      if (skippedInvoices.length > 0) {
-        setExportMsg(`Preview: ${includedCount} vouchers ready · ${skippedInvoices.length} will be skipped`);
-      }
-    } catch (e) { setExportMsg(`Preview failed: ${getErrMsg(e)}`); }
-  };
 
   return (
-    <AppLayout>
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Page header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Sales Export to Tally</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Map ledgers for each invoice, then export Sales vouchers and Masters to Tally XML.
-          </p>
+    <div className="space-y-3">
+      {/* Dashboard cards */}
+      <div className="flex flex-wrap items-start gap-3">
+        <button
+          onClick={() => { setCardFilter(null); setStatusFilter('all'); }}
+          className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === null && statusFilter === 'all' ? 'bg-gray-100 dark:bg-gray-700 border-gray-400 dark:border-gray-500' : 'bg-gray-50 dark:bg-gray-900/40 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+        >
+          <span className="text-xl font-bold text-gray-900 dark:text-gray-100">{dashTotalCount}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Total Invoices</span>
+        </button>
+        <button
+          onClick={() => setCardFilter((p) => p === 'accepted' ? null : 'accepted')}
+          className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === 'accepted' ? 'bg-green-100 dark:bg-green-900/40 border-green-400 dark:border-green-600' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/30'}`}
+        >
+          <span className="text-xl font-bold text-green-800 dark:text-green-400">{dashAcceptedCount}</span>
+          <span className="text-xs text-green-700 dark:text-green-500 mt-0.5">Accepted – Ready for Export</span>
+        </button>
+        {dashPendingCount > 0 && (
+          <button
+            onClick={() => setCardFilter((p) => p === 'pending_review' ? null : 'pending_review')}
+            className={`flex flex-col items-start px-4 py-3 rounded-xl border transition-colors text-left ${cardFilter === 'pending_review' ? 'bg-amber-100 dark:bg-amber-900/40 border-amber-400 dark:border-amber-600' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/30'}`}
+          >
+            <span className="text-xl font-bold text-amber-800 dark:text-amber-300">{dashPendingCount}</span>
+            <span className="text-xs text-amber-700 dark:text-amber-500 mt-0.5">Pending Mapping Reviews</span>
+          </button>
+        )}
+        <button
+          onClick={onDownloadExcel}
+          className="flex items-center gap-2 px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors self-start"
+        >
+          <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+          Download as Excel
+        </button>
+      </div>
+
+      {cardFilter && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700 rounded-lg text-sm w-fit">
+          <span className="text-indigo-700 dark:text-indigo-300 font-medium">
+            Filter: {cardFilter === 'accepted' ? 'Accepted – Ready for Export' : 'Pending Mapping Reviews'}
+          </span>
+          <button onClick={() => setCardFilter(null)} className="text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-200 ml-1 font-bold leading-none">×</button>
         </div>
+      )}
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">{error}</div>
-        )}
-        {exportMsg && (
-          <div className={`mb-4 p-3 rounded-lg text-sm ${exportMsg.startsWith('✓')
-            ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400'
-            : 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400'}`}>
-            {exportMsg}
-          </div>
-        )}
-
-        {/* Dashboard stat cards */}
-        {!loading && totalCount > 0 && (
-          <div className="flex flex-wrap gap-3 mb-6">
-            <StatCard label="Total Invoices"          value={totalCount.toLocaleString()}    color="gray"  onClick={() => setFilterStatus('all')}      active={filterStatus === 'all'} />
-            <StatCard
-              label="Accepted – Ready for Export"
-              value={mappedCount.toLocaleString()}
-              color="green"
-              onClick={() => setFilterStatus('accepted')}
-              active={filterStatus === 'accepted'}
-              sub={mappedCount > 0 ? `${formatINR(mappedInvoices.reduce((s, i) => { const d = deriveInvoiceFinancials(i); return s + d.total; }, 0))} total` : undefined}
-            />
-            {unmappedCount > 0 && (
-              <StatCard label="Pending Mapping" value={unmappedCount.toLocaleString()} color="amber" onClick={() => setFilterStatus('pending')} active={filterStatus === 'pending'} />
-            )}
-          </div>
-        )}
-
-        {/* Controls row */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          <FYPeriodSelector value={fy} onChange={(v) => { setFy(v); setError(null); setExportMsg(null); }} />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search invoice # / customer / GSTIN…"
-            className="px-3 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 w-64 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
-          <div className="flex gap-2 ml-auto">
-            <button
-              onClick={handleAutoMapAll}
-              disabled={bulkMapping || unmappedCount === 0}
-              className="px-4 py-2 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {bulkMapping ? 'Mapping…' : `Auto-Map ${unmappedCount} Remaining`}
-            </button>
-            <button
-              onClick={handlePreview}
-              disabled={mappedCount === 0}
-              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Export Preview
-            </button>
-            <button
-              onClick={handleExportMasters}
-              disabled={mappedCount === 0}
-              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Masters XML
-            </button>
-            <button
-              onClick={handleExportVouchers}
-              disabled={mappedCount === 0}
-              className="px-4 py-2 text-sm bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Export {mappedCount > 0 ? `${mappedCount} ` : ''}Vouchers XML
-            </button>
-          </div>
-        </div>
-
-        {/* Bulk action bar */}
-        {!loading && totalCount > 0 && (
-          <div className="flex items-center gap-3 mb-3 min-h-[32px]">
-            {/* Select all checkbox */}
-            {selectableIds.length > 0 && (
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={allPendingSelected}
-                  onChange={toggleSelectAll}
-                  className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
-                />
-                Select All Pending
-              </label>
-            )}
-
-            {selectedPending > 0 && (
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+        {/* Action bar */}
+        {(suggestableInvoices.length > 0 || selectedLockedInvoices.size > 0) && (
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-700 flex-wrap">
+            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+              />
+              Select All
+            </label>
+            {selectedRows.size > 0 && (
               <button
-                onClick={handleBulkAcceptSelected}
+                onClick={handleBulkAccept}
                 disabled={bulkSaving}
-                className="px-3 py-1 text-xs bg-indigo-600 text-white font-medium rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {bulkSaving ? 'Accepting…' : `Accept ${selectedPending} invoice${selectedPending === 1 ? '' : 's'}`}
+                {bulkSaving ? 'Saving…' : `Accept ${selectedRows.size} invoice${selectedRows.size !== 1 ? 's' : ''}`}
               </button>
             )}
-
-            {selectedAccepted2 > 0 && (
+            {selectedLockedInvoices.size > 0 && (
               <button
-                onClick={handleBulkUnmapSelected}
+                onClick={handleBulkUnaccept}
                 disabled={bulkSaving}
-                className="px-3 py-1 text-xs border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 font-medium rounded hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+                className="px-4 py-1.5 border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {bulkSaving ? 'Unmapping…' : `Unmap ${selectedAccepted2} invoice${selectedAccepted2 === 1 ? '' : 's'}`}
+                {bulkSaving ? 'Saving…' : `Unaccept ${selectedLockedInvoices.size} invoice${selectedLockedInvoices.size !== 1 ? 's' : ''}`}
               </button>
             )}
-
-            {selectedInvoices.size === 0 && unmappedCount > 0 && (
-              <span className="text-xs text-gray-400 dark:text-gray-500">
-                Select invoices to accept in bulk, or click a row to map manually.
+            {selectedRows.size === 0 && selectedLockedInvoices.size === 0 && (
+              <span className="text-xs text-amber-700 dark:text-amber-400">
+                ✦ Amber fields are AI suggestions — edit if needed, then accept to save to masters
               </span>
             )}
           </div>
         )}
 
-        {loading ? (
-          <div className="text-center py-16 text-gray-400">Loading…</div>
-        ) : invoices.length === 0 ? (
-          <div className="text-center py-16">
-            <div className="text-4xl mb-3">📭</div>
-            <p className="text-gray-600 dark:text-gray-400 font-medium">No sales invoices found for {fy}</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Upload and import sales invoices first.</p>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            {/* Table header */}
-            <div className="grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-500 dark:text-gray-400">
-              <span />
-              <span />
-              <span>Customer · Invoice #</span>
-              <span className="text-center">Date</span>
-              <span className="text-center">Type</span>
-              <span className="text-center">Status</span>
-              <span className="text-right">Taxable</span>
-              <span className="text-right">Tax</span>
-              <span className="text-center">Sales Ledger</span>
-              <span />
-            </div>
-
-            {/* Invoice rows */}
-            {filteredInvoices.map((inv) => {
-              const acc      = acceptedMap[inv.id];
-              const d        = deriveInvoiceFinancials(inv);
-              const isMapped = acc && !isBlank(acc.salesLedger);
-              const expanded = expandedIds.has(inv.id);
-              const hasTax   = d.cgst + d.sgst + d.igst > 0;
-              const isSelected = selectedInvoices.has(inv.id);
-
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/60">
+          <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+            {(['all', 'accepted', 'pending_review'] as const).map((s) => {
+              const isActive = cardFilter === null ? statusFilter === s
+                : (s === 'accepted' && cardFilter === 'accepted') || (s === 'pending_review' && cardFilter === 'pending_review');
               return (
-                <React.Fragment key={inv.id}>
-                  <div
-                    className={[
-                      'grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px]',
-                      'items-center gap-2 px-4 py-2.5 border-b border-gray-100 dark:border-gray-800',
-                      'cursor-pointer select-none transition-colors',
-                      expanded ? 'bg-indigo-50/70 dark:bg-indigo-900/10' : '',
-                      isMapped && !expanded ? 'bg-green-50/30 dark:bg-green-900/5' : '',
-                      !isMapped && !expanded ? 'hover:bg-gray-50 dark:hover:bg-gray-800/50' : '',
-                    ].join(' ')}
-                    onClick={() => toggleExpand(inv.id)}
-                  >
-                    {/* Checkbox */}
-                    <div onClick={(e) => { e.stopPropagation(); toggleSelect(inv.id); }}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleSelect(inv.id)}
-                        className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
-                      />
-                    </div>
-
-                    {/* Status dot */}
-                    <div className="text-center text-base leading-none">
-                      {isMapped ? '✅' : '🟡'}
-                    </div>
-
-                    {/* Customer + invoice */}
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">
-                        {inv.buyer_name ?? '—'}
-                      </div>
-                      <div className="text-xs font-mono text-gray-500 dark:text-gray-400">{inv.invoice_number}</div>
-                    </div>
-
-                    {/* Date */}
-                    <div className="text-xs text-center text-gray-500 dark:text-gray-400 tabular-nums">{inv.invoice_date ?? '—'}</div>
-
-                    {/* Tax type badge */}
-                    <div className="text-center">
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-mono font-medium ${
-                        inv.tax_type === 'igst'      ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' :
-                        inv.tax_type === 'cgst_sgst' ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400' :
-                        'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
-                      }`}>
-                        {inv.tax_type === 'igst' ? 'IGST' : inv.tax_type === 'cgst_sgst' ? 'C+S' : 'NIL'}
-                      </span>
-                    </div>
-
-                    {/* Readiness badge */}
-                    <div className="text-center">
-                      {inv.readiness && inv.readiness !== 'ready'
-                        ? <ReadinessBadge readiness={inv.readiness} flags={inv.readiness_flags as string[] | null} />
-                        : <span className="text-xs text-green-600 dark:text-green-400">✓</span>
-                      }
-                    </div>
-
-                    {/* Taxable */}
-                    <div className="text-xs text-right text-gray-900 dark:text-gray-100 tabular-nums">
-                      {formatINR(d.net_goods_taxable + d.taxable_charges_total)}
-                    </div>
-
-                    {/* Tax */}
-                    <div className="text-xs text-right text-gray-500 dark:text-gray-400 tabular-nums">
-                      {hasTax ? formatINR(d.cgst + d.sgst + d.igst) : '—'}
-                    </div>
-
-                    {/* Sales ledger badge or pending indicator */}
-                    <div className="text-center">
-                      {acc?.salesLedger ? (
-                        <span className="inline-block text-xs text-green-700 dark:text-green-400 font-medium truncate max-w-[108px]" title={acc.salesLedger}>
-                          {acc.salesLedger}
-                        </span>
-                      ) : (
-                        <span className="inline-block text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                          Map →
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Edit + expand */}
-                    <div className="flex items-center justify-center gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setEditingInvoice(inv); }}
-                        title="Edit invoice"
-                        className="p-1 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900/30 text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 11l6.5-6.5a2 2 0 012.828 2.828L11.828 13.83A4 4 0 019.172 15H8v-1.172A4 4 0 019 11z" />
-                        </svg>
-                      </button>
-                      <span className="text-gray-400 text-xs">{expanded ? '▲' : '▼'}</span>
-                    </div>
-                  </div>
-
-                  {/* Expanded mapping panel */}
-                  {expanded && (
-                    <MappingPanel
-                      inv={inv}
-                      customers={customers}
-                      suppliers={suppliers}
-                      dutiesTaxes={dutiesTaxes}
-                      salesLedgerOptions={salesLedgerOptions}
-                      pendingSalesLedgers={pendingSalesLedgers}
-                      companyId={company!.id}
-                      companyState={companyState}
-                      initialAcc={acc ?? null}
-                      historicalSalesLedgers={historicalSalesLedgers}
-                      companyWideSalesLedger={companyWideSalesLedger}
-                      voucherMode={voucherMode}
-                      stockItems={stockItems}
-                      onSave={handleSave}
-                      onUnmapRequest={() => handleUnmap(inv.id)}
-                    />
-                  )}
-                </React.Fragment>
+                <button
+                  key={s}
+                  onClick={() => { setStatusFilter(s); setCardFilter(null); }}
+                  className={`px-3 py-1.5 font-medium transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                >
+                  {s === 'all' ? 'All' : s === 'accepted' ? 'Accepted' : 'Pending Review'}
+                </button>
               );
             })}
-
-            {/* Footer totals */}
-            {filteredInvoices.length > 0 && (
-              <div className="grid grid-cols-[20px_32px_1fr_100px_60px_80px_120px_120px_120px_32px] items-center gap-2 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300">
-                <div /><div />
-                <div>Total ({filteredInvoices.length.toLocaleString()} invoices)</div>
-                <div className="col-span-3" />
-                <div className="text-right tabular-nums">{formatINR(totalTaxable)}</div>
-                <div className="text-right tabular-nums">{formatINR(totalTax)}</div>
-                <div className="col-span-2" />
-              </div>
-            )}
           </div>
-        )}
-      </div>
-
-      {previewRows && (
-        <div className="max-w-7xl mx-auto px-4 pb-8">
-          <SalesPreviewTable
-            rows={previewRows}
-            onClose={() => setPreviewRows(null)}
-            onDownload={() => downloadPreviewExcel(previewRows, fy)}
+          <select
+            value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+            className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 max-w-[180px]"
+          >
+            <option value="">All Customers</option>
+            {Array.from(new Set(displayRows.map((r) => r.buyerName))).sort().map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Invoice No…"
+            value={invoiceFilter}
+            onChange={(e) => setInvoiceFilter(e.target.value)}
+            className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 w-28"
           />
+          <input
+            type="text"
+            placeholder="GSTIN…"
+            value={gstinFilter}
+            onChange={(e) => setGstinFilter(e.target.value)}
+            className="border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1.5 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 w-36"
+          />
+          <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
+            {([['all', 'All'], ['ai_suggested_new', '✦ AI Suggested']] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setMappingFilter(m)}
+                className={`px-3 py-1.5 font-medium transition-colors ${mappingFilter === m ? 'bg-amber-500 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {filteredInvoiceNos.size !== invoiceOrder.length && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Showing {filteredInvoiceNos.size} of {invoiceOrder.length}
+            </span>
+          )}
+          {(cardFilter || statusFilter !== 'all' || customerFilter || invoiceFilter || gstinFilter || mappingFilter !== 'all') && (
+            <button
+              onClick={() => { setCardFilter(null); setStatusFilter('all'); setCustomerFilter(''); setInvoiceFilter(''); setGstinFilter(''); setMappingFilter('all'); }}
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            >
+              Clear all
+            </button>
+          )}
         </div>
-      )}
 
-      {editingInvoice && (
-        <InvoiceEditPanel
-          invoice={editingInvoice}
-          perspective="sales"
-          onClose={() => setEditingInvoice(null)}
-          onSave={async (data: InvoiceEditData) => {
-            const { deriveInvoiceFinancials: derive } = await import('@/lib/invoiceCalculations');
-            const { computeSalesReadiness } = await import('@/lib/salesDb');
-            const { updateAcceptedInvoice } = await import('@/lib/db');
-            const d = derive(data);
-            const r = computeSalesReadiness({ ...editingInvoice, ...data } as import('@/types/invoice').ExtractedInvoice);
-            const patch = {
-              invoice_number:       data.invoice_number ?? undefined,
-              invoice_date:         data.invoice_date ?? null,
-              vendor_name:          data.vendor_name ?? undefined,
-              vendor_gstin:         data.vendor_gstin ?? null,
-              buyer_name:           data.buyer_name ?? null,
-              buyer_gstin:          data.buyer_gstin ?? null,
-              tax_type:             data.tax_type,
-              bill_discount_amount: data.bill_discount_amount ?? 0,
-              round_off:            d.round_off,
-              cgst:                 d.cgst,
-              sgst:                 d.sgst,
-              igst:                 d.igst,
-              total:                d.total,
-              line_items:           data.line_items,
-              charges:              data.charges,
-              readiness:            r.readiness,
-              readiness_flags:      r.flags,
-            };
-            await updateAcceptedInvoice(editingInvoice!.id, patch);
-            const updated: StoredInvoice = { ...editingInvoice!, ...patch } as StoredInvoice;
-            setInvoices((prev) => prev.map((i) => i.id === updated.id ? updated : i));
-            setEditingInvoice(null);
-          }}
-        />
-      )}
+        {/* Top scrollbar */}
+        <div ref={topScrollRef} onScroll={onTopScroll} className="overflow-x-auto" style={{ height: 12 }}>
+          <div style={{ width: tableScrollWidth, height: 1 }} />
+        </div>
+
+        {/* Table */}
+        <div ref={tableContainerRef} onScroll={onTableScroll} className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table className="min-w-max text-xs border-collapse">
+            <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0 z-10">
+              <tr>
+                <TH> </TH>
+                <TH>Date</TH>
+                <TH>Invoice No</TH>
+                <TH>Customer (Invoice)</TH>
+                <TH>Customer Ledger (Tally)</TH>
+                <TH>GSTIN</TH>
+                <TH>Sales Ledger (Tally)</TH>
+                {isInventoryMode && <TH>Item (Invoice)</TH>}
+                {isInventoryMode && <TH>Stock Item (Tally)</TH>}
+                {isInventoryMode && <TH right>Tax Rate %</TH>}
+                {isInventoryMode && <TH right>Qty</TH>}
+                {isInventoryMode && <TH>UOM</TH>}
+                {isInventoryMode && <TH right>Rate (₹)</TH>}
+                {isInventoryMode && <TH right>Disc %</TH>}
+                <TH right>Amount (₹)</TH>
+                {Array.from({ length: maxCharges }, (_, ci) => (
+                  <React.Fragment key={`ch${ci}`}>
+                    <TH>Charge {ci + 1} (Invoice)</TH>
+                    <TH>Charge {ci + 1} Ledger (Tally)</TH>
+                    <TH right>Charge {ci + 1} Amt (₹)</TH>
+                  </React.Fragment>
+                ))}
+                <TH>CGST Ledger (Tally)</TH>
+                <TH right>CGST Amt (₹)</TH>
+                <TH>SGST Ledger (Tally)</TH>
+                <TH right>SGST Amt (₹)</TH>
+                <TH>IGST Ledger (Tally)</TH>
+                <TH right>IGST Amt (₹)</TH>
+                <TH>Round Off Ledger (Tally)</TH>
+                <TH right>Round Off Amt (₹)</TH>
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((row, i) => {
+                if (!filteredInvoiceNos.has(row.invoiceNo)) return null;
+                const prevRow = displayRows[i - 1];
+                const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
+                const locked = lockedInvoices[row.invoiceNo];
+                const isLocked = !!locked;
+                const rowBg = isLocked
+                  ? 'bg-green-50/30 dark:bg-green-900/20'
+                  : isNewInvoice
+                  ? 'bg-white dark:bg-gray-800'
+                  : 'bg-blue-50/20 dark:bg-blue-900/20';
+                const borderTop = isNewInvoice && i > 0
+                  ? 'border-t-2 border-gray-300 dark:border-gray-600'
+                  : 'border-t border-gray-100 dark:border-gray-700';
+                const isChecked = selectedRows.has(row.invoiceNo);
+
+                const effectiveCustomerLedger = locked?.customerLedger ?? (customerEdits[row.buyerName] ?? row.customerLedger);
+                const effectiveSalesLedger = locked?.salesLedger ?? (salesLedgerEdits[row.invoiceNo] ?? row.salesLedger);
+                const effectiveStockItem = locked?.stock?.[row.itemDesc] ?? (stockItemEdits[`${row.invoiceNo}_${row.lineIdx}`] ?? row.stockItem);
+                const effectiveCgst = locked?.cgstLedger ?? (taxLedgerEdits.cgst ?? row.cgstLedger);
+                const effectiveSgst = locked?.sgstLedger ?? (taxLedgerEdits.sgst ?? row.sgstLedger);
+                const effectiveIgst = locked?.igstLedger ?? (taxLedgerEdits.igst ?? row.igstLedger);
+                const effectiveRo = locked?.roLedger ?? (roLedgerEdits[row.invoiceNo] ?? row.roLedger);
+
+                return (
+                  <tr key={i} className={`${rowBg} ${borderTop} hover:bg-yellow-50/40 dark:hover:bg-gray-700/50 transition-colors`}>
+                    {/* Checkbox */}
+                    <td className="px-2 py-2 w-12 text-center">
+                      {row.isFirst && isLocked && (
+                        <label className="flex items-center justify-center gap-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedLockedInvoices.has(row.invoiceNo)}
+                            onChange={() => toggleLockedInvoice(row.invoiceNo)}
+                            className="rounded border-gray-300 dark:border-gray-600 text-red-500 focus:ring-red-400"
+                          />
+                          <span title="Accepted" className="text-green-600 dark:text-green-400 text-sm font-bold leading-none">✓</span>
+                        </label>
+                      )}
+                      {row.isFirst && !isLocked && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleInvoice(row.invoiceNo)}
+                          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      )}
+                    </td>
+                    {/* Date */}
+                    <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600 dark:text-gray-400">{row.invoiceDate}</td>
+                    {/* Invoice No */}
+                    <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800 dark:text-gray-200">{row.invoiceNo}</td>
+                    {/* Customer Name */}
+                    <td className="px-3 py-2 max-w-[160px] truncate text-gray-700 dark:text-gray-300" title={row.buyerName}>{row.buyerName}</td>
+                    {/* Customer Ledger */}
+                    <td className="px-3 py-2 min-w-[180px]">
+                      {isLocked ? (
+                        <span className="font-mono font-medium text-purple-800 dark:text-purple-300">{effectiveCustomerLedger || '-'}</span>
+                      ) : (
+                        <CreatableLedgerDropdown
+                          value={customerEdits[row.buyerName] ?? row.customerLedger}
+                          options={customers.map((c) => c.tally_ledger_name)}
+                          pendingOptions={pendingCustomers}
+                          suggested={row.customerSuggested}
+                          freetext={customerFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
+                          createLabel="New customer ledger name…"
+                          onSelect={(v) => setCustomerEdits((p) => ({ ...p, [row.buyerName]: v }))}
+                          onStartCreate={() => setCustomerFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                          onConfirmCreate={(v) => {
+                            setPendingCustomers((p) => p.includes(v) ? p : [...p, v]);
+                            setCustomerEdits((p) => ({ ...p, [row.buyerName]: v }));
+                            setCustomerFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                          }}
+                          onCancelCreate={() => setCustomerFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                        />
+                      )}
+                    </td>
+                    {/* GSTIN */}
+                    <td className="px-3 py-2 font-mono text-gray-400 dark:text-gray-500 whitespace-nowrap text-[11px]">{row.gstin || '-'}</td>
+                    {/* Sales Ledger */}
+                    <td className="px-3 py-2 min-w-[200px]">
+                      {isLocked ? (
+                        <span className="font-mono font-medium text-blue-800 dark:text-blue-300">{effectiveSalesLedger || '-'}</span>
+                      ) : salesLedgerCreating[`${row.invoiceNo}_${row.lineIdx}`] ? (
+                        <InlineCreateInput
+                          placeholder="New sales ledger name…"
+                          onConfirm={(v) => {
+                            setPendingSalesLedgers((p) => p.includes(v) ? p : [...p, v]);
+                            setSalesLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                            setSalesLedgerCreating((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                          }}
+                          onCancel={() => setSalesLedgerCreating((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                        />
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <select
+                            value={salesLedgerEdits[row.invoiceNo] ?? row.salesLedger}
+                            onChange={(e) => {
+                              if (e.target.value === '__new__') {
+                                setSalesLedgerCreating((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }));
+                                return;
+                              }
+                              if (!e.target.value) return;
+                              setSalesLedgerEdits((p) => ({ ...p, [row.invoiceNo]: e.target.value }));
+                            }}
+                            className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
+                              row.salesLedgerCase !== 2
+                                ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+                                : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
+                            }`}
+                          >
+                            {(() => {
+                              const cur = salesLedgerEdits[row.invoiceNo] ?? row.salesLedger;
+                              const allOpts = [...salesLedgerMasters, ...pendingSalesLedgers];
+                              if (cur && !allOpts.includes(cur)) {
+                                return <option value={cur}>{cur}{row.salesLedgerCase !== 2 ? ' ✦' : ''}</option>;
+                              }
+                              return null;
+                            })()}
+                            {salesLedgerMasters.map((name) => <option key={name} value={name}>{name}</option>)}
+                            {pendingSalesLedgers.map((name) => <option key={`pending_${name}`} value={name}>{name} (new)</option>)}
+                            <option value="__new__">+ Create new…</option>
+                          </select>
+                          {(row.salesLedgerCase === 3 || row.salesLedgerCase === 4 || row.salesLedgerCase === 1) && (
+                            <span
+                              className="shrink-0 text-amber-500 dark:text-amber-400 cursor-help text-sm"
+                              title={
+                                row.salesLedgerCase === 1
+                                  ? 'No sales ledgers configured yet. Using placeholder. Add a Sales Ledger in masters first.'
+                                  : row.salesLedgerCase === 3
+                                  ? 'Multiple Sales Ledgers are configured. Suggesting the most frequently used company-wide ledger. Please verify before accepting.'
+                                  : 'Showing first-configured Sales Ledger. No prior invoices found for this customer. Please verify before accepting.'
+                              }
+                            >
+                              ⓘ
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    {/* Inventory: Item */}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 max-w-[220px]">
+                        <div className="truncate text-gray-800 dark:text-gray-200" title={row.itemDesc}>{row.itemDesc || '-'}</div>
+                        {row.hsn && <div className="text-gray-400 dark:text-gray-500 font-mono text-[10px]">HSN: {row.hsn}</div>}
+                      </td>
+                    )}
+                    {/* Inventory: Stock Item */}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 min-w-[180px]">
+                        {isLocked ? (
+                          <span className="font-mono text-indigo-700 dark:text-indigo-300">{effectiveStockItem || '-'}</span>
+                        ) : (stockItems.length > 0 || pendingStockItems.length > 0) ? (
+                          <CreatableLedgerDropdown
+                            value={stockItemEdits[`${row.invoiceNo}_${row.lineIdx}`] ?? row.stockItem}
+                            options={stockItems.map((s) => s.tally_item_name)}
+                            pendingOptions={pendingStockItems}
+                            suggested={row.stockItemSuggested}
+                            freetext={stockItemFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
+                            createLabel="New Tally stock item name…"
+                            onSelect={(v) => {
+                              const expectedPattern = row.hsn
+                                ? `${row.hsn} @ ${row.taxRate ?? 0}%`
+                                : `${row.itemDesc} @ ${row.taxRate ?? 0}%`;
+                              const isPatternMatch = v.trim() === expectedPattern.trim();
+                              const otherSameInvoice = displayRows.some((r) =>
+                                r.invoiceNo === row.invoiceNo && r.lineIdx !== row.lineIdx &&
+                                r.itemDesc && r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+                              );
+                              const otherGlobal = displayRows.some((r) =>
+                                !(r.invoiceNo === row.invoiceNo && r.lineIdx === row.lineIdx) &&
+                                r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
+                                !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+                              );
+                              if (isPatternMatch && (otherSameInvoice || otherGlobal)) {
+                                setStockConfirm({ invoiceNo: row.invoiceNo, itemDesc: row.itemDesc, lineIdx: row.lineIdx, hsn: row.hsn, gstPct: row.taxRate, chosenName: v });
+                              } else {
+                                setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
+                              }
+                            }}
+                            onStartCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                            onConfirmCreate={(v) => {
+                              setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
+                              setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                              setStockItemEdits((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: v }));
+                            }}
+                            onCancelCreate={() => setStockItemFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                          />
+                        ) : (
+                          <span className="font-mono text-indigo-700 dark:text-indigo-300">{row.stockItem || ''}</span>
+                        )}
+                      </td>
+                    )}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-400">
+                        {row.taxRate != null ? `${row.taxRate}%` : '-'}
+                      </td>
+                    )}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                        {row.qty != null ? row.qty : '-'}
+                      </td>
+                    )}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 text-gray-500 dark:text-gray-400">{row.uom || '-'}</td>
+                    )}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                        {row.rate != null ? row.rate.toFixed(2) : '-'}
+                      </td>
+                    )}
+                    {isInventoryMode && (
+                      <td className="px-3 py-2 text-right text-gray-500 dark:text-gray-400">
+                        {row.disc != null && row.disc > 0 ? `${row.disc}%` : '-'}
+                      </td>
+                    )}
+                    {/* Amount */}
+                    <td className="px-3 py-2 text-right font-mono font-semibold text-gray-900 dark:text-gray-100">
+                      {row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    {/* Charges */}
+                    {Array.from({ length: maxCharges }, (_, ci) => {
+                      const ch = row.isFirst ? row.charges[ci] : undefined;
+                      return (
+                        <React.Fragment key={`ch${ci}`}>
+                          <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{ch?.desc ?? ''}</td>
+                          <td className="px-3 py-2 min-w-[160px]">
+                            {ch && (
+                              isLocked ? (
+                                <span className="font-mono text-orange-700 dark:text-orange-300">
+                                  {(locked?.charges?.[ch.desc] ?? ch.ledger) || '-'}
+                                </span>
+                              ) : chargeFreetext[`${row.invoiceNo}_${ci}`] ? (
+                                <InlineCreateInput
+                                  placeholder="New charge ledger name…"
+                                  onConfirm={(v) => {
+                                    setChargeEdits((p) => ({ ...p, [ch.desc]: v }));
+                                    setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: false }));
+                                  }}
+                                  onCancel={() => setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: false }))}
+                                />
+                              ) : (
+                                <select
+                                  value={chargeEdits[ch.desc] ?? ch.ledger}
+                                  onChange={(e) => {
+                                    if (e.target.value === '__new__') {
+                                      setChargeFreetext((p) => ({ ...p, [`${row.invoiceNo}_${ci}`]: true }));
+                                      return;
+                                    }
+                                    if (!e.target.value) return;
+                                    setChargeEdits((p) => ({ ...p, [ch.desc]: e.target.value }));
+                                  }}
+                                  className={`border rounded px-2 py-1 text-xs w-full dark:text-gray-100 ${
+                                    ch.suggested
+                                      ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+                                      : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700'
+                                  }`}
+                                >
+                                  {(chargeEdits[ch.desc] ?? ch.ledger) && (
+                                    <option value={chargeEdits[ch.desc] ?? ch.ledger}>
+                                      {chargeEdits[ch.desc] ?? ch.ledger}{ch.suggested ? ' ✦' : ''}
+                                    </option>
+                                  )}
+                                  <option value="__new__">+ Create new ledger…</option>
+                                </select>
+                              )
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                            {ch ? ch.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
+                          </td>
+                        </React.Fragment>
+                      );
+                    })}
+                    {/* CGST */}
+                    <td className="px-3 py-2 min-w-[160px]">
+                      {row.taxType === 'cgst_sgst' && row.isFirst && (() => {
+                        const opts = dutiesTaxes.filter((d) => d.tax_component === 'CGST').map((d) => d.tally_ledger_name);
+                        return isLocked
+                          ? <span className="font-mono font-medium text-teal-700 dark:text-teal-300">{effectiveCgst || '-'}</span>
+                          : <CreatableLedgerDropdown
+                              value={taxLedgerEdits.cgst ?? row.cgstLedger}
+                              options={opts}
+                              pendingOptions={pendingCgst}
+                              suggested={row.cgstSuggested}
+                              freetext={cgstFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
+                              createLabel="New CGST ledger name…"
+                              onSelect={(v) => setTaxLedgerEdits((p) => ({ ...p, cgst: v }))}
+                              onStartCreate={() => setCgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                              onConfirmCreate={(v) => {
+                                setPendingCgst((p) => p.includes(v) ? p : [...p, v]);
+                                setTaxLedgerEdits((p) => ({ ...p, cgst: v }));
+                                setCgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                              }}
+                              onCancelCreate={() => setCgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                            />;
+                      })()}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                      {row.taxType === 'cgst_sgst' && row.cgstAmt !== 0 ? row.cgstAmt.toFixed(2) : ''}
+                    </td>
+                    {/* SGST */}
+                    <td className="px-3 py-2 min-w-[160px]">
+                      {row.taxType === 'cgst_sgst' && row.isFirst && (() => {
+                        const opts = dutiesTaxes.filter((d) => d.tax_component === 'SGST').map((d) => d.tally_ledger_name);
+                        return isLocked
+                          ? <span className="font-mono font-medium text-teal-700 dark:text-teal-300">{effectiveSgst || '-'}</span>
+                          : <CreatableLedgerDropdown
+                              value={taxLedgerEdits.sgst ?? row.sgstLedger}
+                              options={opts}
+                              pendingOptions={pendingSgst}
+                              suggested={row.sgstSuggested}
+                              freetext={sgstFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
+                              createLabel="New SGST ledger name…"
+                              onSelect={(v) => setTaxLedgerEdits((p) => ({ ...p, sgst: v }))}
+                              onStartCreate={() => setSgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                              onConfirmCreate={(v) => {
+                                setPendingSgst((p) => p.includes(v) ? p : [...p, v]);
+                                setTaxLedgerEdits((p) => ({ ...p, sgst: v }));
+                                setSgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                              }}
+                              onCancelCreate={() => setSgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                            />;
+                      })()}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                      {row.taxType === 'cgst_sgst' && row.sgstAmt !== 0 ? row.sgstAmt.toFixed(2) : ''}
+                    </td>
+                    {/* IGST */}
+                    <td className="px-3 py-2 min-w-[160px]">
+                      {row.taxType === 'igst' && row.isFirst && (() => {
+                        const opts = dutiesTaxes.filter((d) => d.tax_component === 'IGST').map((d) => d.tally_ledger_name);
+                        return isLocked
+                          ? <span className="font-mono font-medium text-cyan-700 dark:text-cyan-300">{effectiveIgst || '-'}</span>
+                          : <CreatableLedgerDropdown
+                              value={taxLedgerEdits.igst ?? row.igstLedger}
+                              options={opts}
+                              pendingOptions={pendingIgst}
+                              suggested={row.igstSuggested}
+                              freetext={igstFreetext[`${row.invoiceNo}_${row.lineIdx}`] ?? false}
+                              createLabel="New IGST ledger name…"
+                              onSelect={(v) => setTaxLedgerEdits((p) => ({ ...p, igst: v }))}
+                              onStartCreate={() => setIgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: true }))}
+                              onConfirmCreate={(v) => {
+                                setPendingIgst((p) => p.includes(v) ? p : [...p, v]);
+                                setTaxLedgerEdits((p) => ({ ...p, igst: v }));
+                                setIgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }));
+                              }}
+                              onCancelCreate={() => setIgstFreetext((p) => ({ ...p, [`${row.invoiceNo}_${row.lineIdx}`]: false }))}
+                            />;
+                      })()}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-700 dark:text-gray-300">
+                      {row.taxType === 'igst' && row.igstAmt !== 0 ? row.igstAmt.toFixed(2) : ''}
+                    </td>
+                    {/* Round Off */}
+                    <td className="px-3 py-2 min-w-[160px]">
+                      {row.isFirst && row.roAmt !== 0 && (() => {
+                        return isLocked
+                          ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>
+                          : <CreatableLedgerDropdown
+                              value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
+                              options={[]}
+                              pendingOptions={pendingRo}
+                              suggested={row.roSuggested}
+                              freetext={roFreetext[row.invoiceNo] ?? false}
+                              createLabel="New round off ledger name…"
+                              onSelect={(v) => setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }))}
+                              onStartCreate={() => setRoFreetext((p) => ({ ...p, [row.invoiceNo]: true }))}
+                              onConfirmCreate={(v) => {
+                                setPendingRo((p) => p.includes(v) ? p : [...p, v]);
+                                setRoLedgerEdits((p) => ({ ...p, [row.invoiceNo]: v }));
+                                setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }));
+                              }}
+                              onCancelCreate={() => setRoFreetext((p) => ({ ...p, [row.invoiceNo]: false }))}
+                            />;
+                      })()}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-gray-500 dark:text-gray-400">
+                      {row.isFirst && row.roAmt !== 0 ? row.roAmt.toFixed(2) : ''}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Stock item naming pattern popup */}
+        {stockConfirm && (() => {
+          const sameInvoiceCandidates = displayRows.filter((r) =>
+            r.invoiceNo === stockConfirm.invoiceNo && r.lineIdx !== stockConfirm.lineIdx &&
+            r.itemDesc && r.stockItemSuggested && !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+          );
+          const globalCandidateInvoiceNos = new Set(
+            displayRows.filter((r) =>
+              !(r.invoiceNo === stockConfirm.invoiceNo && r.lineIdx === stockConfirm.lineIdx) &&
+              r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
+              !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+            ).map((r) => r.invoiceNo)
+          );
+          const applyPatternToRows = (targets: SalesFlatDisplayRow[]) => {
+            targets.forEach((r) => {
+              const inv = byInvoice.get(r.invoiceNo);
+              const li = inv?.line_items.find((l) => l.description === r.itemDesc);
+              if (li) {
+                const name = li.hsn ? `${li.hsn} @ ${li.gst_percent ?? 0}%` : `${li.description} @ ${li.gst_percent ?? 0}%`;
+                setStockItemEdits((p) => ({ ...p, [`${r.invoiceNo}_${r.lineIdx}`]: name }));
+              }
+            });
+          };
+          return (
+            <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4">
+                <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Apply HSN naming pattern to all?</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                  You confirmed stock item: <span className="font-mono font-semibold text-indigo-700 dark:text-indigo-300">{stockConfirm.chosenName}</span>
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                  Would you like to apply <span className="font-mono font-semibold">HSN @ GST%</span> naming to other AI-suggested stock items?
+                </p>
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={() => {
+                      setStockItemEdits((p) => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
+                      applyPatternToRows(sameInvoiceCandidates);
+                      setStockConfirm(null);
+                    }}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                  >
+                    <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">Apply to this invoice only</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      {sameInvoiceCandidates.length === 0
+                        ? 'No other suggested items on this invoice'
+                        : `${sameInvoiceCandidates.length} other item${sameInvoiceCandidates.length !== 1 ? 's' : ''} on this invoice will be updated`}
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const allCandidates = displayRows.filter((r) =>
+                        !(r.invoiceNo === stockConfirm.invoiceNo && r.lineIdx === stockConfirm.lineIdx) &&
+                        r.itemDesc && r.stockItemSuggested && !lockedInvoices[r.invoiceNo] &&
+                        !stockItemEdits[`${r.invoiceNo}_${r.lineIdx}`]
+                      );
+                      setStockItemEdits((p) => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
+                      applyPatternToRows(allCandidates);
+                      setStockConfirm(null);
+                    }}
+                    disabled={globalCandidateInvoiceNos.size === 0}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <div className={`text-sm font-semibold ${globalCandidateInvoiceNos.size > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-400 dark:text-gray-500'}`}>
+                      Apply to all {globalCandidateInvoiceNos.size} loaded unaccepted invoice{globalCandidateInvoiceNos.size !== 1 ? 's' : ''}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Session-scoped. All other suggested stock items across all unaccepted invoices are updated.</div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setStockItemEdits((p) => ({ ...p, [`${stockConfirm.invoiceNo}_${stockConfirm.lineIdx}`]: stockConfirm.chosenName }));
+                      setStockConfirm(null);
+                    }}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">No – map individually</div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Only this item is updated.</div>
+                  </button>
+                  <button
+                    onClick={() => setStockConfirm(null)}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <div className="text-sm font-medium text-gray-500 dark:text-gray-400">Cancel</div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ─── Helpers for main page ────────────────────────────────────────────────────
+
+function downloadXmlFile(xml: string, filename: string) {
+  const utf16 = new Uint16Array(xml.length);
+  for (let i = 0; i < xml.length; i++) utf16[i] = xml.charCodeAt(i);
+  const bom = new Uint8Array([0xff, 0xfe]);
+  const body = new Uint8Array(utf16.buffer);
+  const merged = new Uint8Array(bom.length + body.length);
+  merged.set(bom, 0);
+  merged.set(body, bom.length);
+  const blob = new Blob([merged], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+interface CachedMasters {
+  customers: CustomerMaster[];
+  suppliers: SupplierMaster[];
+  dutiesTaxes: DutiesTaxesMaster[];
+  stockItems: StockItemMaster[];
+  salesLedgerMasters: string[];
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+export default function SalesXmlPage() {
+  const router = useRouter();
+  const { company, loading: companyLoading } = useCompany();
+
+  const [selectedFY, setSelectedFY] = useState<string>(currentFY);
+  const [invoices, setInvoices] = useState<StoredInvoice[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  const [cachedMasters, setCachedMasters] = useState<CachedMasters | null>(null);
+  const [cachedHistoricalSL, setCachedHistoricalSL] = useState<Record<string, string> | null>(null);
+  const [cachedCompanyWideSL, setCachedCompanyWideSL] = useState<string | null>(null);
+
+  const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
+
+  const [previewing, setPreviewing] = useState(false);
+  const [previewShown, setPreviewShown] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+
+  const [generatingXml, setGeneratingXml] = useState(false);
+  const [lastXmlFilename, setLastXmlFilename] = useState('');
+
+  // Auth
+  useEffect(() => {
+    if (companyLoading) return;
+    getSession().then((session) => {
+      if (!session) { router.replace('/login'); return; }
+      if (!company) router.replace('/select-company');
+    });
+  }, [company, companyLoading, router]);
+
+  // Load voucher mode from DB
+  useEffect(() => {
+    if (!company?.id) return;
+    getCompany(company.id).then((fresh) => {
+      if (fresh.voucher_mode) setVoucherMode(fresh.voucher_mode);
+    }).catch(() => {});
+  }, [company?.id]);
+
+  // Load invoices on company/FY change
+  useEffect(() => {
+    setPreviewShown(false);
+    setCachedMasters(null);
+    if (!company?.id) { setInvoices([]); return; }
+    setLoadingInvoices(true);
+    setLoadError('');
+    getSalesRegister(company.id, { financialYear: selectedFY || undefined })
+      .then(setInvoices)
+      .catch((e) => setLoadError((e as Error).message ?? 'Failed to load invoices'))
+      .finally(() => setLoadingInvoices(false));
+  }, [company?.id, selectedFY]);
+
+  // Build initialLockedInvoices from loaded invoices
+  const initialLockedInvoices = useMemo<Record<string, LockedSalesInvoice>>(() => {
+    const out: Record<string, LockedSalesInvoice> = {};
+    for (const inv of invoices) {
+      if (inv.tally_ledger_acceptance) {
+        const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown>;
+        out[inv.invoice_number] = {
+          customerLedger: (acc.customerLedger as string) ?? '',
+          salesLedger: (acc.salesLedger as string) ?? '',
+          cgstLedger: (acc.cgstLedger as string) ?? '',
+          sgstLedger: (acc.sgstLedger as string) ?? '',
+          igstLedger: (acc.igstLedger as string) ?? '',
+          roLedger: (acc.roLedger as string) ?? '',
+          stock: (acc.stock as Record<string, string>) ?? {},
+          charges: (acc.charges as Record<string, string>) ?? {},
+        };
+      }
+    }
+    return out;
+  }, [invoices]);
+
+  const fileBase = `${company?.tally_company_name ?? company?.name ?? 'export'}_${selectedFY}`
+    .replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  // ── Preview ──
+  const handlePreview = async () => {
+    if (!company) { alert('No company selected.'); return; }
+    if (invoices.length === 0) { alert('No accepted invoices found for the selected period.'); return; }
+
+    setPreviewing(true);
+    setPreviewError('');
+    try {
+      const [customers, suppliers, dutiesTaxes, stockItems, salesLedgerRaw] = await Promise.all([
+        loadCustomers(company.id),
+        loadSuppliers(company.id),
+        loadDutiesTaxes(company.id),
+        loadStockItems(company.id),
+        loadSalesLedgers(company.id),
+      ]);
+      const salesLedgerMasters = salesLedgerRaw.map((l) => l.tally_ledger_name);
+
+      const buyerKeySet: Record<string, true> = {};
+      for (const inv of invoices) {
+        const k = inv.buyer_gstin ? inv.buyer_gstin : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+        if (k) buyerKeySet[k] = true;
+      }
+      const uniqueBuyerKeys = Object.keys(buyerKeySet);
+      const historicalEntries = await Promise.all(
+        uniqueBuyerKeys.map(async (key) => {
+          const isGstin = !key.startsWith('name:');
+          const result = await getHistoricalSalesLedger(
+            company.id,
+            isGstin ? key : null,
+            isGstin ? null : key.slice(5),
+          );
+          return [key, result] as [string, string | null];
+        })
+      );
+      const historicalSL: Record<string, string> = {};
+      for (const [key, val] of historicalEntries) { if (val) historicalSL[key] = val; }
+
+      const companyWideSL = salesLedgerMasters.length > 1
+        ? await getCompanyWideMostUsedSalesLedger(company.id, salesLedgerMasters)
+        : null;
+
+      setCachedMasters({ customers, suppliers, dutiesTaxes, stockItems, salesLedgerMasters });
+      setCachedHistoricalSL(historicalSL);
+      setCachedCompanyWideSL(companyWideSL);
+      setPreviewShown(true);
+    } catch (e: unknown) {
+      setPreviewError(e instanceof Error ? e.message : 'Preview failed');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // ── Download Excel (preview CSV) ──
+  const handleDownloadExcel = () => {
+    if (!cachedMasters) return;
+    const rows = buildSalesPreview({
+      invoices,
+      customers: cachedMasters.customers,
+      dutiesTaxes: cachedMasters.dutiesTaxes,
+      stockItems: cachedMasters.stockItems,
+      expenseLedgers: [],
+      tallyCompanyName: company?.tally_company_name ?? '',
+      voucherMode,
+      stockItemMode: company?.stock_item_mode,
+    });
+    const header = 'Invoice No,Date,Buyer Name,Ledger Type,Tally Ledger,Amount,Status\n';
+    const csvRows = rows.map((r) =>
+      [r.invoice_number, r.invoice_date, r.buyer_name, r.ledger_type, r.tally_ledger_name, r.amount, r.status].join(',')
+    ).join('\n');
+    const blob = new Blob([header + csvRows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `${fileBase}_preview.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── onAcceptInvoices ──
+  const onAcceptInvoices = async (payloads: SalesAcceptPayload[]) => {
+    if (!company?.id) return;
+    const errs: string[] = [];
+    const seenCustomer = new Set<string>();
+    const seenSL = new Set<string>();
+    const seenStock = new Set<string>();
+    let seenCgst = false;
+    let seenSgst = false;
+    let seenIgst = false;
+    const seenRo = new Set<string>();
+
+    for (const p of payloads) {
+      if (!isBlank(p.customerLedger) && !seenCustomer.has(p.customerName)) {
+        seenCustomer.add(p.customerName);
+        try {
+          await addCustomer(company.id, {
+            customer_name: p.customerName,
+            customer_gstin: p.customerGstin || '',
+            tally_ledger_name: p.customerLedger,
+          });
+        } catch (e) { errs.push(`Customer "${p.customerName}": ${getErrMsg(e)}`); }
+      }
+      if (!isBlank(p.salesLedger) && !seenSL.has(p.salesLedger)) {
+        seenSL.add(p.salesLedger);
+        try { await addSalesLedger(company.id, p.salesLedger); }
+        catch (e) { errs.push(`Sales ledger: ${getErrMsg(e)}`); }
+      }
+      for (const si of p.stockItems) {
+        if (!isBlank(si.tallyName) && !seenStock.has(si.desc)) {
+          seenStock.add(si.desc);
+          try {
+            await addStockItem(company.id, {
+              tally_item_name: si.tallyName,
+              alias_name: si.desc,
+              hsn_code: si.hsn || undefined,
+              unit: si.uom || undefined,
+              gst_percent: si.gst_percent ?? null,
+            });
+          } catch (e) { errs.push(`Stock "${si.desc}": ${getErrMsg(e)}`); }
+        }
+      }
+      if (p.taxType === 'cgst_sgst') {
+        if (!isBlank(p.cgstLedger) && !seenCgst) {
+          seenCgst = true;
+          try { await addDutiesTaxes(company.id, { tax_component: 'CGST', tax_rate: null, tally_ledger_name: p.cgstLedger }); }
+          catch (e) { errs.push(`CGST: ${getErrMsg(e)}`); }
+        }
+        if (!isBlank(p.sgstLedger) && !seenSgst) {
+          seenSgst = true;
+          try { await addDutiesTaxes(company.id, { tax_component: 'SGST', tax_rate: null, tally_ledger_name: p.sgstLedger }); }
+          catch (e) { errs.push(`SGST: ${getErrMsg(e)}`); }
+        }
+      } else if (p.taxType === 'igst') {
+        if (!isBlank(p.igstLedger) && !seenIgst) {
+          seenIgst = true;
+          try { await addDutiesTaxes(company.id, { tax_component: 'IGST', tax_rate: null, tally_ledger_name: p.igstLedger }); }
+          catch (e) { errs.push(`IGST: ${getErrMsg(e)}`); }
+        }
+      }
+      if (!isBlank(p.roLedger) && !seenRo.has(p.roLedger)) {
+        seenRo.add(p.roLedger);
+        try { await addExpenseLedger(company.id, { tally_ledger_name: p.roLedger, expense_keyword: 'Round Off' }); }
+        catch (e) { errs.push(`Round Off: ${getErrMsg(e)}`); }
+      }
+    }
+
+    for (const p of payloads) {
+      const chargesLocked: Record<string, string> = {};
+      p.charges.forEach((ch) => { chargesLocked[ch.keyword] = ch.tallyName; });
+      const acceptance = {
+        customerLedger: p.customerLedger,
+        salesLedger: p.salesLedger,
+        cgstLedger: p.cgstLedger,
+        sgstLedger: p.sgstLedger,
+        igstLedger: p.igstLedger,
+        roLedger: p.roLedger,
+        stock: p.lockedStock,
+        charges: chargesLocked,
+      };
+      try { await saveSalesTallyAcceptance(company.id, p.invoiceId, acceptance); }
+      catch (e) { errs.push(`Save acceptance for ${p.invoiceNo}: ${getErrMsg(e)}`); }
+    }
+    if (errs.length) alert(`Some items failed to save:\n${errs.join('\n')}`);
+  };
+
+  // ── Build XML input ──
+  const buildXmlInput = async () => {
+    if (!company) throw new Error('No company');
+    const fresh = await getCompany(company.id);
+    const [customers, dutiesTaxes, stockItems] = await Promise.all([
+      loadCustomers(company.id),
+      loadDutiesTaxes(company.id),
+      loadStockItems(company.id),
+    ]);
+    return {
+      invoices,
+      customers,
+      dutiesTaxes,
+      stockItems,
+      expenseLedgers: [] as import('@/lib/expenseLedgers').ExpenseLedgerMaster[],
+      tallyCompanyName: company.tally_company_name ?? '',
+      financialYear: selectedFY,
+      voucherMode,
+      companyGstin: fresh.gstin ?? undefined,
+      companyState: undefined,
+      stockItemMode: fresh.stock_item_mode,
+    };
+  };
+
+  // ── Download Masters XML ──
+  const handleDownloadMastersXml = async (type: SalesMasterType, label: string) => {
+    if (!company) { alert('No company selected.'); return; }
+    if (!company.tally_company_name) { alert('Tally Company Name is missing - update it in Companies first.'); return; }
+    if (invoices.length === 0) { alert('No accepted invoices found for the selected period.'); return; }
+    setGeneratingXml(true);
+    try {
+      const input = await buildXmlInput();
+      const xml = generateSalesMastersXml(input, type);
+      const filename = `${fileBase}_masters_${type}.xml`;
+      downloadXmlFile(xml, filename);
+      setLastXmlFilename(filename);
+    } catch (e: unknown) {
+      alert(`Error generating ${label} XML: ${getErrMsg(e)}`);
+    } finally {
+      setGeneratingXml(false);
+    }
+  };
+
+  // ── Download Vouchers XML ──
+  const handleDownloadVouchersXml = async () => {
+    if (!company) { alert('No company selected.'); return; }
+    if (!company.tally_company_name) { alert('Tally Company Name is missing - update it in Companies first.'); return; }
+    if (invoices.length === 0) { alert('No accepted invoices found for the selected period.'); return; }
+    if (voucherMode === 'inventory' && !company.gstin) {
+      const proceed = window.confirm(
+        'Warning: Company GSTIN is not set.\n\nWithout GSTIN, Tally cannot link this voucher to a Company Tax Unit, which is required for GST compliance in inventory mode.\n\nDo you want to continue anyway?'
+      );
+      if (!proceed) return;
+    }
+    setGeneratingXml(true);
+    try {
+      const input = await buildXmlInput();
+      const output = generateSalesVouchers(input);
+      const filename = `${fileBase}_vouchers.xml`;
+      downloadXmlFile(output.xml, filename);
+      setLastXmlFilename(filename);
+      if (output.skippedInvoices.length > 0) {
+        const msgs = output.skippedInvoices.map((s: { invoice_number: string; reason: string }) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
+        alert(`XML generated. ${output.includedCount} voucher(s) included.\n\n${output.skippedInvoices.length} skipped:\n${msgs}`);
+      }
+    } catch (e: unknown) {
+      alert(`Error generating vouchers XML: ${getErrMsg(e)}`);
+    } finally {
+      setGeneratingXml(false);
+    }
+  };
+
+  return (
+    <AppLayout>
+      <main className="flex-1 p-8" style={{ maxWidth: '100%' }}>
+        <div className="mb-7">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Sales Export to Tally</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Analyse ledger assignments and resolve exceptions, then download the XML for import into Tally.
+          </p>
+        </div>
+
+        {/* ── Step 1: Period + Settings ── */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">1</span>
+            Select Period &amp; Settings
+          </h2>
+          <div className="flex items-center gap-4 mb-5">
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1.5">Financial Year</label>
+              <FYPeriodSelector value={selectedFY} onChange={setSelectedFY} />
+            </div>
+            <div className="pt-5 text-sm text-gray-500 dark:text-gray-400">
+              {loadingInvoices ? (
+                <span className="text-gray-400 dark:text-gray-500">Loading…</span>
+              ) : loadError ? (
+                <span className="text-red-600 dark:text-red-400">{loadError}</span>
+              ) : (
+                <span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200">{invoices.length}</span>{' '}
+                  accepted invoice{invoices.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {company && !company.tally_company_name && (
+            <div className="mb-4 flex items-center gap-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2.5 text-sm text-amber-800 dark:text-amber-300">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <span>
+                <strong>Tally Company Name is missing.</strong>{' '}
+                <button onClick={() => router.push('/companies')} className="underline">Update in Companies</button>
+              </span>
+            </div>
+          )}
+
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+            <p className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">Voucher Mode</p>
+            <div className="flex gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio" name="salesVoucherMode" value="accounting_only"
+                  checked={voucherMode === 'accounting_only'}
+                  onChange={() => { setVoucherMode('accounting_only'); if (company) updateCompany(company.id, { voucher_mode: 'accounting_only' }).catch(() => {}); }}
+                  className="accent-indigo-600"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  Accounting only <span className="text-xs text-gray-400 dark:text-gray-500">(HSN-aggregated, no stock items)</span>
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio" name="salesVoucherMode" value="inventory"
+                  checked={voucherMode === 'inventory'}
+                  onChange={() => { setVoucherMode('inventory'); if (company) updateCompany(company.id, { voucher_mode: 'inventory' }).catch(() => {}); }}
+                  className="accent-indigo-600"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  Inventory <span className="text-xs text-gray-400 dark:text-gray-500">(item-level qty, rate, discount)</span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Step 2: Preview ── */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">2</span>
+            Preview Ledger Assignments
+          </h2>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+            The system analyses your accepted sales invoices and shows every ledger entry that will be created in Tally.
+            Accept invoices to lock in the mapping.
+          </p>
+
+          <button
+            onClick={handlePreview}
+            disabled={previewing || !company || invoices.length === 0}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {previewing ? 'Analysing…' : 'Preview'}
+          </button>
+
+          {previewError && (
+            <p className="mt-3 text-sm text-red-600 dark:text-red-400">{previewError}</p>
+          )}
+
+          {previewShown && cachedMasters && (
+            <div className="mt-5">
+              <SalesFlatTable
+                invoices={invoices}
+                customers={cachedMasters.customers}
+                suppliers={cachedMasters.suppliers}
+                dutiesTaxes={cachedMasters.dutiesTaxes}
+                stockItems={cachedMasters.stockItems}
+                stockItemMode={company?.stock_item_mode}
+                salesLedgerMasters={cachedMasters.salesLedgerMasters}
+                historicalSalesLedgers={cachedHistoricalSL ?? {}}
+                companyWideSalesLedger={cachedCompanyWideSL}
+                initialLockedInvoices={initialLockedInvoices}
+                companyId={company!.id}
+                voucherMode={voucherMode}
+                onAcceptInvoices={onAcceptInvoices}
+                onDownloadExcel={handleDownloadExcel}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* ── Step 3: Generate XML ── */}
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-5">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">3</span>
+            Generate &amp; Download XML
+          </h2>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+            Import masters first (each type separately), then import vouchers. Each button downloads one XML file.
+          </p>
+
+          <div className="mb-4">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Masters (import in order)</p>
+            <div className="flex flex-wrap gap-2">
+              {([
+                { type: 'stock_items'  as SalesMasterType, label: 'Stock Items',           color: 'bg-indigo-600 hover:bg-indigo-700' },
+                { type: 'sales_ledgers' as SalesMasterType, label: 'Sales Ledgers',         color: 'bg-blue-600 hover:bg-blue-700' },
+                { type: 'duties_taxes' as SalesMasterType, label: 'Duties & Taxes',         color: 'bg-teal-600 hover:bg-teal-700' },
+                { type: 'customers'    as SalesMasterType, label: 'Sundry Debtors',         color: 'bg-purple-600 hover:bg-purple-700' },
+                { type: 'ledgers_only' as SalesMasterType, label: 'All Ledgers (Combined)', color: 'bg-gray-700 hover:bg-gray-800' },
+              ]).map(({ type, label, color }) => (
+                <button
+                  key={type}
+                  onClick={() => handleDownloadMastersXml(type, label)}
+                  disabled={generatingXml || !company || invoices.length === 0}
+                  className={`flex items-center gap-2 px-4 py-2 ${color} text-white rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors`}
+                >
+                  <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  {generatingXml ? '…' : label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Vouchers (import after all masters succeed)</p>
+            <button
+              onClick={handleDownloadVouchersXml}
+              disabled={generatingXml || !company || invoices.length === 0}
+              className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              {generatingXml ? 'Generating…' : 'Download Vouchers XML'}
+            </button>
+          </div>
+
+          {lastXmlFilename && (
+            <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+              Last downloaded: <span className="font-mono">{lastXmlFilename}</span>
+            </p>
+          )}
+        </div>
+
+        {/* How-to */}
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-5 py-4 text-sm text-blue-800 dark:text-blue-200">
+          <p className="font-semibold mb-2">How to import into Tally</p>
+          <p className="text-xs text-blue-700 dark:text-blue-300 mb-2">
+            Import each master type separately first, then import vouchers. Safe to re-import — Tally silently skips masters that already exist.
+          </p>
+          <ol className="list-decimal list-inside space-y-1.5 text-blue-700 dark:text-blue-300 text-xs">
+            <li>Open Tally &rarr; select company <strong>{company?.tally_company_name ?? '-'}</strong></li>
+            <li>
+              <strong>Import each master:</strong> Gateway of Tally &rarr; Import Data &rarr; Masters &rarr; select the file
+              <span className="block ml-5 mt-0.5 text-blue-600 dark:text-blue-400">
+                Order: Stock Items &rarr; Sales Ledgers &rarr; Duties &amp; Taxes &rarr; Sundry Debtors
+              </span>
+            </li>
+            <li>
+              <strong>Import Vouchers</strong> only after all masters succeed: Import Data &rarr; Vouchers &rarr; select <em>…_vouchers.xml</em>
+            </li>
+          </ol>
+        </div>
+      </main>
     </AppLayout>
   );
 }
