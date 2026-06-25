@@ -1760,6 +1760,10 @@ export default function XmlGeneratorPage() {
   const [cachedHistoricalPL, setCachedHistoricalPL] = useState<Record<string, string> | null>(null);
   const [cachedCompanyWidePL, setCachedCompanyWidePL] = useState<string | null>(null);
 
+  // Invoices whose tally_ledger_acceptance exists but purchaseLedger is missing AND
+  // there are multiple PL masters — cannot be auto-repaired; must be re-accepted.
+  const [plMigrationNeeded, setPlMigrationNeeded] = useState<Set<string>>(new Set());
+
 
   const [voucherMode, setVoucherMode] = useState<'accounting_only' | 'inventory'>('accounting_only');
   const [showSuggestionDrillDown, setShowSuggestionDrillDown] = useState(false);
@@ -1804,6 +1808,43 @@ export default function XmlGeneratorPage() {
       .catch((e) => setLoadError(e.message ?? 'Failed to load invoices'))
       .finally(() => setLoadingInvoices(false));
   }, [company?.id, selectedFY]);
+
+  // One-time migration: repair accepted invoices that were saved before per-invoice
+  // purchaseLedger was introduced (commit 789358b). Runs once per invoices load.
+  //   • Exactly 1 PL master → auto-populate purchaseLedger and persist.
+  //   • Multiple PL masters → cannot guess; add to plMigrationNeeded set for UI warning.
+  //   • 0 PL masters       → leave unchanged (preview/XML will handle it).
+  useEffect(() => {
+    if (!company?.id || invoices.length === 0) return;
+    const broken = invoices.filter(
+      (inv) => inv.tally_ledger_acceptance && !inv.tally_ledger_acceptance.purchaseLedger,
+    );
+    if (broken.length === 0) { setPlMigrationNeeded(new Set()); return; }
+
+    loadPurchaseLedgers(company.id).then((masters) => {
+      const masterNames = masters.map((m) => m.tally_ledger_name);
+      const needsReview = new Set<string>();
+
+      const repairs = broken.map(async (inv) => {
+        if (masterNames.length === 1) {
+          // Unambiguous: exactly one PL master — auto-repair.
+          const repaired = { ...inv.tally_ledger_acceptance!, purchaseLedger: masterNames[0] };
+          try {
+            await saveInvoiceTallyAcceptance(company!.id, inv.invoice_number, repaired);
+            // Patch in-memory invoice so subsequent XML builds use the repaired value.
+            inv.tally_ledger_acceptance = repaired;
+          } catch (_) { /* leave as-is; XML will hard-fail correctly */ }
+        } else if (masterNames.length > 1) {
+          // Ambiguous: cannot pick without user input.
+          needsReview.add(inv.invoice_number);
+        }
+        // 0 masters: do nothing — XML will surface the error naturally.
+      });
+
+      Promise.all(repairs).then(() => setPlMigrationNeeded(needsReview));
+    }).catch(() => { /* non-critical — page still usable */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id, invoices]);
 
   // Restore locked invoice state from DB on invoice load
   const initialLockedInvoices = useMemo<Record<string, LockedInvoice>>(() => {
@@ -2124,6 +2165,23 @@ export default function XmlGeneratorPage() {
           >
             {previewing ? 'Analysing…' : 'Preview'}
           </button>
+
+          {/* Migration warning: accepted invoices that need Purchase Ledger re-mapping */}
+          {plMigrationNeeded.size > 0 && (
+            <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">
+                {plMigrationNeeded.size} invoice{plMigrationNeeded.size !== 1 ? 's' : ''} require re-acceptance — Purchase Ledger is ambiguous
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
+                These invoices were accepted before the per-invoice Purchase Ledger feature was introduced. Multiple Purchase Ledgers are configured, so the correct one cannot be determined automatically. Please unaccept and re-accept each invoice to set the correct Purchase Ledger.
+              </p>
+              <ul className="text-xs font-mono text-amber-800 dark:text-amber-300 space-y-0.5">
+                {Array.from(plMigrationNeeded).map((invNo) => (
+                  <li key={invNo}>• {invNo}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {previewError && (
             <p className="mt-3 text-sm text-red-600 dark:text-red-400">{previewError}</p>
