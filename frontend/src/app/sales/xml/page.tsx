@@ -840,6 +840,7 @@ function SalesFlatTable({
                 <TH> </TH>
                 <TH>Date</TH>
                 <TH>Invoice No</TH>
+                <TH>Voucher</TH>
                 <TH>Customer (Invoice)</TH>
                 <TH>Customer Ledger (Tally)</TH>
                 <TH>GSTIN</TH>
@@ -930,6 +931,10 @@ function SalesFlatTable({
                     <td className="px-3 py-2 whitespace-nowrap font-mono text-gray-600 dark:text-gray-400">{row.invoiceDate}</td>
                     {/* Invoice No */}
                     <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-gray-800 dark:text-gray-200">{row.invoiceNo}</td>
+                    {/* Voucher Type */}
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="inline-block font-mono text-[11px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">Sales</span>
+                    </td>
                     {/* Customer Name */}
                     <td className="px-3 py-2 max-w-[160px] truncate text-gray-700 dark:text-gray-300" title={row.buyerName}>{row.buyerName}</td>
                     {/* Customer Ledger */}
