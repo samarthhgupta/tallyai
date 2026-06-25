@@ -505,8 +505,6 @@ function FlatPreviewTable({
           const cleanHsn = item.hsn.replace(/[\s.]/g, '');
           const match = stockItems.find((s) =>
             s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
-          ) ?? stockItems.find((s) =>
-            s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
           );
           if (match) { resolvedStockItem = match.tally_item_name; resolvedSuggested = false; }
         }

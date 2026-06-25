@@ -422,8 +422,6 @@ function SalesFlatTable({
           const cleanHsn = item.hsn.replace(/[\s.]/g, '');
           const match = stockItems.find(
             (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === item.gst_percent,
-          ) ?? stockItems.find(
-            (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
           );
           if (match) { stockItemName = match.tally_item_name; stockItemSuggested = false; }
           else { stockItemName = item.hsn ? `${item.hsn} @ ${item.gst_percent ?? 0}%` : desc; stockItemSuggested = true; }
