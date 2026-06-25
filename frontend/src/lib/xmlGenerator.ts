@@ -641,13 +641,8 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const entries: string[] = [];
   entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(partyLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(-d.total)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
 
-  // Use accepted purchase ledger; fall back to first configured master for legacy acceptances
-  // that pre-date the per-invoice purchase ledger field (acceptances saved before commit 789358b).
-  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger
-    || input.purchaseLedgers?.[0]?.tally_ledger_name || '';
+  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
   if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
-  if (!inv.tally_ledger_acceptance?.purchaseLedger && purchaseLedger)
-    warnings.push(`Purchase ledger "${purchaseLedger}" inferred from master for invoice "${inv.invoice_number}" - please re-accept to lock`);
 
   for (const row of hsnRows) {
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(purchaseLedger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(row.taxable)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
@@ -903,12 +898,8 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
-  // Use accepted purchase ledger; fall back to first configured master for legacy acceptances.
-  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger
-    || input.purchaseLedgers?.[0]?.tally_ledger_name || '';
+  const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
   if (!purchaseLedger) return { xml: null, skip: `No purchase ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
-  if (!inv.tally_ledger_acceptance?.purchaseLedger && purchaseLedger)
-    warnings.push(`Purchase ledger "${purchaseLedger}" inferred from master for invoice "${inv.invoice_number}" - please re-accept to lock`);
 
   let totalItemsAmount = 0;
   let unmappedItemsAmount = 0;
@@ -2053,13 +2044,10 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -d.total, status: partyStatus, is_suggested: !supplier });
 
+    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
     const suggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
-    // Accepted purchase ledger — fall back to first master for legacy acceptances without this field.
-    // is_suggested=false when invoice is accepted (non-null tally_ledger_acceptance), regardless of field.
-    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger || (inv.tally_ledger_acceptance ? suggestedPurchase : '');
-    const isAccepted = !!inv.tally_ledger_acceptance;
     for (const row of hsnRows) {
-      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: row.taxable, status: isAccepted ? 'OK' : 'Suggested', is_suggested: !isAccepted });
+      rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: row.taxable, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
     }
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
@@ -2126,10 +2114,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
     const partyStatus: PreviewRow['status'] = supplier ? 'OK' : 'Suggested';
     const base = makeBase(inv, partyLedger, voucherTypeName);
-    const invSuggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
-    const isInvAccepted = !!inv.tally_ledger_acceptance;
-    // Fall back to first master for legacy acceptances that pre-date the per-invoice purchase ledger field.
-    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger || (isInvAccepted ? invSuggestedPurchase : '');
+    const acceptedPurchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
 
     for (const item of inv.line_items) {
       const desc = item.description ?? '';
@@ -2153,8 +2138,8 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
     rows.push({ ...base, ledger_type: 'Party', tally_ledger_name: partyLedger, amount: -d.total, status: partyStatus, is_suggested: !supplier });
 
-    // Dedicated Purchase row — is_suggested=false when invoice is accepted, regardless of field.
-    rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || invSuggestedPurchase, amount: 0, status: isInvAccepted ? 'OK' : 'Suggested', is_suggested: !isInvAccepted });
+    const suggestedPurchase = input.purchaseLedgers?.[0]?.tally_ledger_name ?? 'Purchase';
+    rows.push({ ...base, ledger_type: 'Purchase', tally_ledger_name: acceptedPurchaseLedger || suggestedPurchase, amount: 0, status: acceptedPurchaseLedger ? 'OK' : 'Suggested', is_suggested: !acceptedPurchaseLedger });
 
     if ((inv.bill_discount_amount ?? 0) > 0) {
       const goodsGstRate = inv.line_items?.[0]?.gst_percent ?? 0;
