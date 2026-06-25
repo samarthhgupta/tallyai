@@ -105,6 +105,7 @@ export interface StoredInvoice extends ExtractedInvoice {
   company_id: string;
   filename: string;
   original_filename: string | null;
+  invoice_voucher_mode: 'inventory' | 'accounting_only' | null;
   upload_date: string | null;
   upload_time: string | null;
   status: InvoiceStatus;

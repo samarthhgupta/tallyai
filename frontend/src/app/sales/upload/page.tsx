@@ -24,6 +24,7 @@ interface QueueItem {
   readiness: 'ready' | 'warning' | 'critical';
   readinessFlags: string[];
   fyMismatch: boolean;   // true if invoice FY ≠ selected FY
+  voucherMode: 'inventory' | 'accounting_only';
 }
 
 // ─── ReadinessBadge ───────────────────────────────────────────────────────────
@@ -262,6 +263,7 @@ export default function SalesUploadPage() {
   // File + extraction state
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [batchVoucherMode, setBatchVoucherMode] = useState<'inventory' | 'accounting_only'>('inventory');
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState('');
   // Ref to background recovery polling timeout — cancelled when a new extraction starts
@@ -446,11 +448,12 @@ export default function SalesUploadPage() {
           readiness: r.readiness,
           readinessFlags: r.flags,
           fyMismatch: !!invFY && invFY !== financialYear,
+          voucherMode: batchVoucherMode,
         });
       });
     });
     return items;
-  }, [financialYear]);
+  }, [financialYear, batchVoucherMode]);
 
   // ── Extraction ──
   const handleExtract = async () => {
@@ -665,14 +668,14 @@ export default function SalesUploadPage() {
         setAcceptBatchId(activeBatchId);
       }
 
-      const items: Array<{ inv: ExtractedInvoice; filename: string }> = keys
+      const items: Array<{ inv: ExtractedInvoice; filename: string; voucherMode: 'inventory' | 'accounting_only' }> = keys
         .map((key) => {
           const q = queue.find((q) => q.key === key);
           if (!q) return null;
           const inv = invoiceOverrides.get(key) ?? q.inv;
-          return { inv, filename: q.filename };
+          return { inv, filename: q.filename, voucherMode: q.voucherMode };
         })
-        .filter(Boolean) as Array<{ inv: ExtractedInvoice; filename: string }>;
+        .filter(Boolean) as Array<{ inv: ExtractedInvoice; filename: string; voucherMode: 'inventory' | 'accounting_only' }>;
 
       const companyGstin = selectedCompany && 'gstin' in selectedCompany ? selectedCompany.gstin : null;
       const companyName = selectedCompany?.name ?? null;
@@ -794,7 +797,27 @@ export default function SalesUploadPage() {
               </div>
             )}
 
-            <div className="mt-4">
+            <div className="mt-4 flex items-end gap-6 flex-wrap">
+              {/* Voucher Mode selector */}
+              <div>
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Voucher Mode</p>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="salesBatchVoucherMode" value="inventory"
+                      checked={batchVoucherMode === 'inventory'}
+                      onChange={() => setBatchVoucherMode('inventory')}
+                      className="accent-indigo-600" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Inventory (Item-wise)</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="salesBatchVoucherMode" value="accounting_only"
+                      checked={batchVoucherMode === 'accounting_only'}
+                      onChange={() => setBatchVoucherMode('accounting_only')}
+                      className="accent-indigo-600" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Accounting (Service)</span>
+                  </label>
+                </div>
+              </div>
               <button
                 onClick={handleExtract}
                 disabled={!files.length || extracting}
@@ -969,6 +992,23 @@ export default function SalesUploadPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                           <ReadinessBadge readiness={item.readiness} flags={item.readinessFlags} />
+                          {/* Per-invoice voucher mode toggle */}
+                          <div className="flex items-center gap-3 ml-1 pl-2 border-l border-gray-200 dark:border-gray-600">
+                            <label className="flex items-center gap-1 cursor-pointer">
+                              <input type="radio" name={`vm_${item.key}`} value="inventory"
+                                checked={item.voucherMode === 'inventory'}
+                                onChange={() => setQueue((prev) => prev.map((q) => q.key === item.key ? { ...q, voucherMode: 'inventory' } : q))}
+                                className="accent-indigo-600 w-3.5 h-3.5" />
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Inventory</span>
+                            </label>
+                            <label className="flex items-center gap-1 cursor-pointer">
+                              <input type="radio" name={`vm_${item.key}`} value="accounting_only"
+                                checked={item.voucherMode === 'accounting_only'}
+                                onChange={() => setQueue((prev) => prev.map((q) => q.key === item.key ? { ...q, voucherMode: 'accounting_only' } : q))}
+                                className="accent-indigo-600 w-3.5 h-3.5" />
+                              <span className="text-xs text-gray-600 dark:text-gray-400">Accounting</span>
+                            </label>
+                          </div>
                           {isFYMismatch && (() => {
                             const invFY = invoiceFY(inv.invoice_date ?? '');
                             return (

@@ -385,6 +385,7 @@ export async function createBatch(
 export interface InvoiceToSave {
   inv: ExtractedInvoice;
   filename: string;
+  voucherMode?: 'inventory' | 'accounting_only';
   itcStatusOverride?: ITCStatus;
   itcRemarkOverride?: string;
   convertedToNonGst?: boolean;
@@ -404,7 +405,7 @@ export async function insertAcceptedInvoices(
   const now = new Date().toISOString();
   const { periodFromInvoiceDate } = await import('./fyPeriod');
 
-  const rows = items.map(({ inv, filename, itcStatusOverride, itcRemarkOverride, convertedToNonGst, convertedNonGstLedger }) => {
+  const rows = items.map(({ inv, filename, voucherMode, itcStatusOverride, itcRemarkOverride, convertedToNonGst, convertedNonGstLedger }) => {
     const nInv: ExtractedInvoice = { ...inv, line_items: (inv.line_items ?? []).map(normalizeLineItem) };
     const r = computeReadiness(nInv, companyGstin, companyName);
     const finalItcStatus = itcStatusOverride ?? r.itcStatus;
@@ -475,6 +476,7 @@ export async function insertAcceptedInvoices(
       itc_remark: finalItcRemark,
       converted_to_nongst: convertedToNonGst ?? false,
       converted_nongst_ledger: convertedNonGstLedger ?? null,
+      invoice_voucher_mode: voucherMode ?? 'inventory',
       accepted_at: now,
       accepted_by: user?.id ?? null,
     };

@@ -71,6 +71,7 @@ export default function SalesExcelImportPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [fy, setFy] = useState(currentFY());
+  const [batchVoucherMode, setBatchVoucherMode] = useState<'inventory' | 'accounting_only'>('inventory');
   const [allParsedInvoices, setAllParsedInvoices] = useState<ExtractedInvoice[]>([]);
   const [invoices, setInvoices] = useState<ExtractedInvoice[]>([]);
   const [parseErrors, setParseErrors] = useState<Array<{ row: number; reason: string }>>([]);
@@ -226,7 +227,7 @@ export default function SalesExcelImportPage() {
       vendor_name: company!.name,
       vendor_gstin: company!.gstin ?? '',
     }));
-    await insertAcceptedSalesExcelInvoices(companyId, batchId, enriched.map((inv) => ({ inv, filename })), fy);
+    await insertAcceptedSalesExcelInvoices(companyId, batchId, enriched.map((inv) => ({ inv, filename })), fy, batchVoucherMode);
     // Deduplicate by GSTIN so we make at most one learnCustomerName call per customer.
     const seenGstins = new Map<string, string>();
     for (const inv of enriched) {
@@ -584,6 +585,27 @@ export default function SalesExcelImportPage() {
             )}
 
             {/* Action bar */}
+            <div className="flex items-center gap-4 flex-wrap mb-3">
+              <div>
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Voucher Mode</p>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="excelBatchVoucherMode" value="inventory"
+                      checked={batchVoucherMode === 'inventory'}
+                      onChange={() => setBatchVoucherMode('inventory')}
+                      className="accent-indigo-600" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Inventory (Item-wise)</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="excelBatchVoucherMode" value="accounting_only"
+                      checked={batchVoucherMode === 'accounting_only'}
+                      onChange={() => setBatchVoucherMode('accounting_only')}
+                      className="accent-indigo-600" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Accounting (Service)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
             <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={handleImport}

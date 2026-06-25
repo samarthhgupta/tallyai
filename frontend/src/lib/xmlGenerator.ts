@@ -1849,7 +1849,10 @@ function buildMasterMessages(input: XmlGeneratorInput, type: MasterType): string
 
     // In inventory mode, only emit items that appear in the current invoice batch.
     // In standalone masters export (non-inventory), emit all stock items.
-    const itemsToExport = input.voucherMode === 'inventory'
+    const anyInvoiceIsInventory = input.invoices.some(
+      (inv) => (inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only') === 'inventory'
+    );
+    const itemsToExport = anyInvoiceIsInventory
       ? input.stockItems.filter((s) => invoiceRateMap.has(s.tally_item_name))
       : input.stockItems;
 
@@ -1900,10 +1903,10 @@ export function generateCombinedXml(input: XmlGeneratorInput): XmlGeneratorResul
   const skipped: XmlGeneratorResult['skippedInvoices'] = [];
   const allWarnings: XmlGeneratorResult['warnings'] = [];
   const voucherBlocks: string[] = [];
-  const isInventory = input.voucherMode === 'inventory';
 
   for (const inv of input.invoices) {
-    const result = isInventory ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
+    const invMode = inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only';
+    const result = invMode === 'inventory' ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
     if (!result.xml || result.skip) {
       skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });
@@ -1943,7 +1946,6 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
   const skipped: XmlGeneratorResult['skippedInvoices'] = [];
   const allWarnings: XmlGeneratorResult['warnings'] = [];
   const voucherBlocks: string[] = [];
-  const isInventory = input.voucherMode === 'inventory';
 
   // Deduplicate by invoice_number - if the same invoice was uploaded multiple
   // times and accepted, only the first occurrence is exported to avoid Tally
@@ -1960,7 +1962,8 @@ export function generateTallyXml(input: XmlGeneratorInput): XmlGeneratorResult {
   });
 
   for (const inv of invoices) {
-    const result = isInventory ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
+    const invMode = inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only';
+    const result = invMode === 'inventory' ? buildInventoryVoucher(inv, input) : buildAccountingOnlyVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
     if (!result.xml || result.skip) {
       skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });

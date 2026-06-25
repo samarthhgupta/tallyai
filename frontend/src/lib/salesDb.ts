@@ -147,6 +147,7 @@ function buildSalesRow(
   userId: string | null,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   p: { financial_year: string; period_month: string; period_label: string },
+  voucherMode?: 'inventory' | 'accounting_only',
 ): Record<string, unknown> {
   // Normalize line items before any financial derivation so rates are never negative.
   const nInv: ExtractedInvoice = { ...inv, line_items: (inv.line_items ?? []).map(normalizeLineItem) };
@@ -195,6 +196,7 @@ function buildSalesRow(
     period_label: p.period_label,
     itc_status: 'not_applicable',
     itc_remark: null,
+    invoice_voucher_mode: voucherMode ?? 'inventory',
     accepted_at: now,
     accepted_by: userId,
   };
@@ -204,7 +206,7 @@ function buildSalesRow(
 export async function insertAcceptedSalesInvoices(
   companyId: string,
   batchId: string,
-  items: Array<{ inv: ExtractedInvoice; filename: string }>,
+  items: Array<{ inv: ExtractedInvoice; filename: string; voucherMode?: 'inventory' | 'accounting_only' }>,
   financialYear: string,
   companyGstin?: string | null,
   companyName?: string | null,
@@ -214,14 +216,14 @@ export async function insertAcceptedSalesInvoices(
   const now = new Date().toISOString();
   const { periodFromInvoiceDate } = await import('./fyPeriod');
 
-  const rows = items.map(({ inv, filename }) => {
+  const rows = items.map(({ inv, filename, voucherMode }) => {
     // For sales, the seller is always our company. Populate vendor fields if the
     // extraction did not produce them (common for PDF/image sources).
     const enrichedInv: ExtractedInvoice = companyName
       ? { ...inv, vendor_name: inv.vendor_name || companyName, vendor_gstin: inv.vendor_gstin || (companyGstin ?? '') }
       : inv;
     const p = periodFromInvoiceDate(enrichedInv.invoice_date ?? '', financialYear);
-    return buildSalesRow(enrichedInv, filename, companyId, batchId, financialYear, 'pdf_extraction', now, user?.id ?? null, p);
+    return buildSalesRow(enrichedInv, filename, companyId, batchId, financialYear, 'pdf_extraction', now, user?.id ?? null, p, voucherMode);
   });
 
   const { error } = await db().from('invoices').insert(rows);
@@ -234,6 +236,7 @@ export async function insertAcceptedSalesExcelInvoices(
   batchId: string,
   items: Array<{ inv: ExtractedInvoice; filename: string }>,
   financialYear: string,
+  voucherMode?: 'inventory' | 'accounting_only',
 ): Promise<void> {
   if (!items.length) return;
   const user = (await getSupabase().auth.getUser()).data.user;
@@ -242,7 +245,7 @@ export async function insertAcceptedSalesExcelInvoices(
 
   const rows = items.map(({ inv, filename }) => {
     const p = periodFromInvoiceDate(inv.invoice_date ?? '', financialYear);
-    return buildSalesRow(inv, filename, companyId, batchId, financialYear, 'excel_import', now, user?.id ?? null, p);
+    return buildSalesRow(inv, filename, companyId, batchId, financialYear, 'excel_import', now, user?.id ?? null, p, voucherMode);
   });
 
   // Insert in chunks of 50 to avoid Supabase body-size limits and statement timeouts.

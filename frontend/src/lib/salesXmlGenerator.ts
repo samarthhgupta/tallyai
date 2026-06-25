@@ -884,10 +884,9 @@ function buildVouchers(input: SalesXmlGeneratorInput): SalesXmlGeneratorResult {
     return true;
   });
 
-  const isInventory = input.voucherMode === 'inventory';
-
   for (const inv of invoices) {
-    const result = isInventory ? buildSalesInventoryVoucher(inv, input) : buildSalesVoucher(inv, input);
+    const invMode = inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only';
+    const result = invMode === 'inventory' ? buildSalesInventoryVoucher(inv, input) : buildSalesVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
     if (!result.xml || result.skip) {
       skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });
@@ -1151,8 +1150,11 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
     }
   }
 
-  // Stock items (inventory mode only)
-  if (includeStockItems && input.voucherMode === 'inventory' && input.stockItems.length > 0) {
+  // Stock items (inventory mode only — check per-invoice or batch mode)
+  const anyInvoiceIsInventory = input.invoices.some(
+    (inv) => (inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only') === 'inventory'
+  );
+  if (includeStockItems && anyInvoiceIsInventory && input.stockItems.length > 0) {
     const invoiceRateMap = new Map<string, number>();
     for (const inv of input.invoices) {
       const stockMap = (inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined ?? {};
