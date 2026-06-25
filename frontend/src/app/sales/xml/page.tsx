@@ -9,7 +9,7 @@ import { loadCustomers, addCustomer } from '@/lib/customers';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { loadStockItems, addStockItem } from '@/lib/stockItems';
-import { addExpenseLedger } from '@/lib/expenseLedgers';
+import { loadExpenseLedgers, addExpenseLedger, type ExpenseLedgerMaster } from '@/lib/expenseLedgers';
 import { loadSalesLedgers, addSalesLedger, getBatchHistoricalSalesLedgers, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
 import { generateSalesVouchers, generateSalesMastersXml, buildSalesPreview, type SalesMasterType } from '@/lib/salesXmlGenerator';
 import { deriveInvoiceFinancials } from '@/lib/invoiceCalculations';
@@ -212,7 +212,7 @@ interface SalesFlatDisplayRow {
 function SalesFlatTable({
   invoices, customers, suppliers, dutiesTaxes, stockItems, stockItemMode,
   salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger,
-  initialLockedInvoices, companyId, voucherMode,
+  initialLockedInvoices, companyId, voucherMode, expenseLedgers,
   onAcceptInvoices, onDownloadExcel,
 }: {
   invoices: StoredInvoice[];
@@ -227,6 +227,7 @@ function SalesFlatTable({
   initialLockedInvoices: Record<string, LockedSalesInvoice>;
   companyId: string;
   voucherMode: 'accounting_only' | 'inventory';
+  expenseLedgers: ExpenseLedgerMaster[];
   onAcceptInvoices: (payloads: SalesAcceptPayload[]) => Promise<void>;
   onDownloadExcel: () => void;
 }) {
@@ -1235,11 +1236,14 @@ function SalesFlatTable({
                     {/* Round Off */}
                     <td className="px-3 py-2 min-w-[160px]">
                       {row.isFirst && row.roAmt !== 0 && (() => {
+                        const roOpts = expenseLedgers
+                          .filter((e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off')
+                          .map((e) => e.tally_ledger_name);
                         return isLocked
                           ? <span className="font-mono font-medium text-gray-600 dark:text-gray-400">{effectiveRo || '-'}</span>
                           : <CreatableLedgerDropdown
                               value={roLedgerEdits[row.invoiceNo] ?? row.roLedger}
-                              options={[]}
+                              options={roOpts}
                               pendingOptions={pendingRo}
                               suggested={row.roSuggested}
                               freetext={roFreetext[row.invoiceNo] ?? false}
@@ -1396,6 +1400,7 @@ interface CachedMasters {
   dutiesTaxes: DutiesTaxesMaster[];
   stockItems: StockItemMaster[];
   salesLedgerMasters: string[];
+  expenseLedgers: ExpenseLedgerMaster[];
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -1484,12 +1489,13 @@ export default function SalesXmlPage() {
     setPreviewing(true);
     setPreviewError('');
     try {
-      const [customers, suppliers, dutiesTaxes, stockItems, salesLedgerRaw] = await Promise.all([
+      const [customers, suppliers, dutiesTaxes, stockItems, salesLedgerRaw, expenseLedgers] = await Promise.all([
         loadCustomers(company.id),
         loadSuppliers(company.id),
         loadDutiesTaxes(company.id),
         loadStockItems(company.id),
         loadSalesLedgers(company.id),
+        loadExpenseLedgers(company.id),
       ]);
       const salesLedgerMasters = salesLedgerRaw.map((l) => l.tally_ledger_name);
 
@@ -1499,7 +1505,7 @@ export default function SalesXmlPage() {
         ? await getCompanyWideMostUsedSalesLedger(company.id, salesLedgerMasters)
         : null;
 
-      setCachedMasters({ customers, suppliers, dutiesTaxes, stockItems, salesLedgerMasters });
+      setCachedMasters({ customers, suppliers, dutiesTaxes, stockItems, salesLedgerMasters, expenseLedgers });
       setCachedHistoricalSL(historicalSL);
       setCachedCompanyWideSL(companyWideSL);
       setPreviewShown(true);
@@ -1518,7 +1524,7 @@ export default function SalesXmlPage() {
       customers: cachedMasters.customers,
       dutiesTaxes: cachedMasters.dutiesTaxes,
       stockItems: cachedMasters.stockItems,
-      expenseLedgers: [],
+      expenseLedgers: cachedMasters.expenseLedgers,
       tallyCompanyName: company?.tally_company_name ?? '',
       voucherMode,
       stockItemMode: company?.stock_item_mode,
@@ -1623,17 +1629,18 @@ export default function SalesXmlPage() {
   const buildXmlInput = async () => {
     if (!company) throw new Error('No company');
     const fresh = await getCompany(company.id);
-    const [customers, dutiesTaxes, stockItems] = await Promise.all([
+    const [customers, dutiesTaxes, stockItems, expenseLedgers] = await Promise.all([
       loadCustomers(company.id),
       loadDutiesTaxes(company.id),
       loadStockItems(company.id),
+      loadExpenseLedgers(company.id),
     ]);
     return {
       invoices,
       customers,
       dutiesTaxes,
       stockItems,
-      expenseLedgers: [] as import('@/lib/expenseLedgers').ExpenseLedgerMaster[],
+      expenseLedgers,
       tallyCompanyName: company.tally_company_name ?? '',
       financialYear: selectedFY,
       voucherMode,
@@ -1805,6 +1812,7 @@ export default function SalesXmlPage() {
                 initialLockedInvoices={initialLockedInvoices}
                 companyId={company!.id}
                 voucherMode={voucherMode}
+                expenseLedgers={cachedMasters.expenseLedgers}
                 onAcceptInvoices={onAcceptInvoices}
                 onDownloadExcel={handleDownloadExcel}
               />
