@@ -366,8 +366,11 @@ function SalesFlatTable({
     const sgstAmt = invFinancials.sgst;
     const igstAmt = invFinancials.igst;
     const roAmt = invFinancials.round_off;
-    const roLedger = lockedInv?.roLedger ?? '';
-    const roSuggested = !lockedInv;
+    const defaultRoLedger = expenseLedgers.find(
+      (e) => e.expense_keyword === 'Round Off' || e.expense_keyword === 'round off'
+    )?.tally_ledger_name ?? '';
+    const roLedger = lockedInv?.roLedger ?? defaultRoLedger;
+    const roSuggested = !lockedInv && !!defaultRoLedger;
 
     const charges: SalesFlatDisplayRow['charges'] = (inv.charges ?? []).map((ch) => {
       const keyword = ch.description ?? '';
@@ -459,7 +462,7 @@ function SalesFlatTable({
   return { invoiceOrder, byInvoice, displayRows };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoices, lockedInvoices, customers, suppliers, dutiesTaxes, stockItems, stockItemMode,
-      salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger, voucherMode]);
+      salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger, voucherMode, expenseLedgers]);
 
   const maxCharges = Math.max(0, ...displayRows.map((r) => r.charges.length));
 
