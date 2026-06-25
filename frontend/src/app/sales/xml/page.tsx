@@ -275,7 +275,7 @@ function SalesFlatTable({
   const [visibleInvoiceCount, setVisibleInvoiceCount] = React.useState(100);
 
   // ── Build invoice index + display rows (memoized — avoids recompute on every render) ──
-  const { invoiceOrder, byInvoice, displayRows } = React.useMemo(() => {
+  const { invoiceOrder, byInvoice, displayRows, duplicateInvoiceNos } = React.useMemo(() => {
   const invoiceOrder: string[] = [];
   const byInvoice = new Map<string, StoredInvoice>();
   const duplicateInvoiceNos: string[] = [];
