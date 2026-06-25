@@ -1228,7 +1228,7 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
     // Phantom items: referenced in acceptance records but missing from DB masters
     // (caused by old seenStock-by-desc bug). Synthesize minimal master blocks for them.
     const defaultUnit = resolveUom(null, null);
-    for (const [name, info] of invoiceItemInfo) {
+    for (const [name, info] of Array.from(invoiceItemInfo)) {
       if (exportedNames.has(name)) continue;
       if (!seenUnits.has(defaultUnit)) { seenUnits.add(defaultUnit); messages.push(buildUnitMasterBlock(defaultUnit, fyStart)); }
       const phantom: StockItemMaster = {
