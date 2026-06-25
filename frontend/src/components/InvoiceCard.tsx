@@ -260,7 +260,7 @@ function CellInput({
 // ─── InvoiceCard ───────────────────────────────────────────────────────────────
 
 export function InvoiceCard({
-  inv, sourceUrl, company, historyMatch, isBatchNew, onReject, onSave,
+  inv, sourceUrl, company, historyMatch, isBatchNew, onReject, onSave, voucherClass = 'purchase',
 }: {
   inv: ExtractedInvoice;
   sourceUrl?: string;
@@ -269,6 +269,7 @@ export function InvoiceCard({
   isBatchNew: boolean;
   onReject: () => void;
   onSave?: (updated: ExtractedInvoice) => void;
+  voucherClass?: 'purchase' | 'sales';
 }) {
   const [displayInv, setDisplayInv] = useState<ExtractedInvoice>(() => deepClone(inv));
   const [editMode, setEditMode] = useState(false);
@@ -341,8 +342,14 @@ export function InvoiceCard({
 
   // ─── Company match ─────────────────────────────────────────────────────────
 
+  // Purchase: our company is the buyer — match buyer fields.
+  // Sales: our company is the seller (vendor) — match vendor fields.
   const matchResult: MatchResult = company
-    ? matchCompany(company, current.buyer_gstin, current.buyer_name)
+    ? matchCompany(
+        company,
+        voucherClass === 'sales' ? current.vendor_gstin : current.buyer_gstin,
+        voucherClass === 'sales' ? current.vendor_name : current.buyer_name,
+      )
     : 'no_buyer_data';
 
   const vendorState = current.vendor_gstin ? getStateFromGstin(current.vendor_gstin) : null;
@@ -474,7 +481,10 @@ export function InvoiceCard({
           {company && <CompanyMatchBadge match={matchResult} />}
           {matchResult === 'mismatch' && (
             <span className="text-xs text-red-600 dark:text-red-400">
-              Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; - not {company?.name}
+              {voucherClass === 'sales'
+                ? <>Seller on invoice is &ldquo;{current.vendor_name || current.vendor_gstin}&rdquo; - not {company?.name}</>
+                : <>Invoice addressed to &ldquo;{current.buyer_name || current.buyer_gstin}&rdquo; - not {company?.name}</>
+              }
             </span>
           )}
           {needsReview && !editMode && (

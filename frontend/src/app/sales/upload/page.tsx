@@ -1028,6 +1028,7 @@ export default function SalesUploadPage() {
                           inv={inv}
                           sourceUrl={fileUrls[item.filename]}
                           company={selectedCompany ? { id: selectedCompany.id, name: selectedCompany.name, gstin: selectedCompany.gstin ?? '' } : undefined}
+                          voucherClass="sales"
                           historyMatch={historyMatch}
                           isBatchNew={true}
                           onReject={() => doReject([item.key])}
