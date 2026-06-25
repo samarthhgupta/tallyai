@@ -17,6 +17,7 @@ const NAV = [
       { label: 'Sundry Debtors', href: '/masters/customers', icon: '🧑‍💼' },
       { label: 'Stock Items', href: '/masters/stock-items', icon: '📦' },
       { label: 'Purchase Ledgers', href: '/masters/purchase-ledger', icon: '📒' },
+      { label: 'Sales Ledgers', href: '/masters/sales-ledger', icon: '📒' },
       { label: 'Expense Ledgers', href: '/masters/expense-ledgers', icon: '💸' },
       { label: 'Duties & Taxes', href: '/masters/duties-taxes', icon: '🏛️' },
       { label: 'Voucher Types', href: '/masters/voucher-types', icon: '🏷️' },

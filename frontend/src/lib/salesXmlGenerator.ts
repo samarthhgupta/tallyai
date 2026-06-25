@@ -16,7 +16,7 @@ import type { CustomerMaster } from './customers';
 import type { DutiesTaxesMaster } from './dutiesTaxes';
 import type { StockItemMaster } from './stockItems';
 import type { ExpenseLedgerMaster } from './expenseLedgers';
-import { calcLineAmount } from '@/types/invoice';
+import { calcLineAmount, buildFullTaxSummary } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
 import { isPooledLedger } from './partyKey';
 
@@ -108,26 +108,6 @@ function findOutputTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string
   return (output ?? consolidated[0]).tally_ledger_name;
 }
 
-interface HsnRow { hsn: string; gst_percent: number; taxable: number; cgst: number; sgst: number; igst: number; }
-
-function buildHsnRows(items: LineItem[], taxType: 'cgst_sgst' | 'igst', billDiscount: number): HsnRow[] {
-  const map: Record<string, HsnRow> = {};
-  for (const item of items) {
-    const hsn = (item.hsn || '').replace(/[\s.]/g, '') || '-';
-    const key = `${hsn}__${item.gst_percent}`;
-    if (!map[key]) map[key] = { hsn, gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
-    map[key].taxable += calcLineAmount(item);
-  }
-  const rows = Object.values(map);
-  const totalTaxable = rows.reduce((s, r) => s + r.taxable, 0);
-  for (const row of rows) {
-    if (billDiscount > 0 && totalTaxable > 0) row.taxable -= billDiscount * (row.taxable / totalTaxable);
-    const tax = row.taxable * row.gst_percent / 100;
-    if (taxType === 'cgst_sgst') { row.cgst = tax / 2; row.sgst = tax / 2; }
-    else { row.igst = tax; }
-  }
-  return rows;
-}
 
 // ─── Accounting-only voucher ──────────────────────────────────────────────────
 
@@ -156,47 +136,56 @@ function wrapSalesVoucher(inv: StoredInvoice, partyLedger: string, ledgerXml: st
 function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const d = deriveInvoiceFinancials(inv);
-  const customer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
-  const partyLedger = customer?.tally_ledger_name ?? (inv.buyer_name ?? '');
-  if (!partyLedger) return { xml: null, skip: 'No customer ledger and no customer name', warnings };
-  if (!customer) warnings.push(`Customer "${inv.buyer_name}" not in master - using customer name as ledger`);
+  const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
 
-  // Sales ledger comes from the per-invoice tally_ledger_acceptance (key: salesLedger)
-  const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
-  const salesLedger = (acc?.salesLedger as string) ?? '';
+  // Party ledger: acceptance takes precedence; fall back to master resolution then raw name.
+  const accCustomer = acc?.customerLedger?.trim() ?? '';
+  const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+  const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+  if (!partyLedger) return { xml: null, skip: 'No customer ledger and no customer name', warnings };
+  if (!accCustomer && !resolvedCustomer) warnings.push(`Customer "${inv.buyer_name}" not in master - using customer name as ledger`);
+
+  // Sales ledger: must come from per-invoice acceptance.
+  const salesLedger = acc?.salesLedger?.trim() ?? '';
   if (!salesLedger) return { xml: null, skip: `No sales ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
 
-  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0);
+  // HSN rows from shared canonical engine (same values as DB and UI).
+  const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, inv.tax_type, inv.bill_discount_amount ?? 0);
 
   const entries: string[] = [];
 
-  // 1. Customer ledger: DEBIT (positive) = customer owes us
+  // 1. Customer ledger: DEBIT (positive) — customer owes us.
   entries.push(ledgerEntry(partyLedger, 'Yes', d.total));
 
-  // 2. Sales ledger: CREDIT (negative) per HSN taxable
+  // 2. Sales ledger: CREDIT (negative) split by HSN group taxable.
   for (const row of hsnRows) {
-    entries.push(ledgerEntry(salesLedger, 'No', -row.taxable));
+    if (Math.abs(row.taxable) > 0.001) {
+      entries.push(ledgerEntry(salesLedger, 'No', -row.taxable));
+    }
   }
 
-  // 3. Output tax ledgers: CREDIT (negative)
-  const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+  // 3. Output tax ledgers: CREDIT (negative).
+  //    Use per-invoice accepted ledger names when set; fall back to master resolution.
   if (inv.tax_type === 'cgst_sgst') {
-    if (d.cgst > 0) {
-      const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
-      const l = findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
-      if (!l) return { xml: null, skip: 'No CGST ledger configured in Duties & Taxes master', warnings };
+    if (Math.abs(d.cgst) > 0.001) {
+      const l = acc?.cgstLedger?.trim()
+        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', Math.round(d.cgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
+      if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
       entries.push(ledgerEntry(l, 'No', -d.cgst));
     }
-    if (d.sgst > 0) {
-      const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
-      const l = findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
-      if (!l) return { xml: null, skip: 'No SGST ledger configured in Duties & Taxes master', warnings };
+    if (Math.abs(d.sgst) > 0.001) {
+      const l = acc?.sgstLedger?.trim()
+        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', Math.round(d.sgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
+      if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
       entries.push(ledgerEntry(l, 'No', -d.sgst));
     }
-  } else if (d.igst > 0) {
-    const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
-    const l = findOutputTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
-    if (!l) return { xml: null, skip: 'No IGST ledger configured in Duties & Taxes master', warnings };
+  } else if (Math.abs(d.igst) > 0.001) {
+    const l = acc?.igstLedger?.trim()
+      || findOutputTaxLedger(input.dutiesTaxes, 'IGST', Math.round(d.igst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+      || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
+    if (!l) return { xml: null, skip: 'No IGST ledger configured', warnings };
     entries.push(ledgerEntry(l, 'No', -d.igst));
   }
 
@@ -215,11 +204,11 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
     }
   }
 
-  // 5. Round-off
-  if (d.round_off && Math.abs(d.round_off) > 0.001) {
-    const el = input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'));
-    const roLedger = el?.tally_ledger_name ?? 'Round Off';
-    // round_off > 0 increases customer total → credit side balances with debit on customer.
+  // 5. Round-off: use accepted roLedger, then expense master, then default.
+  if (Math.abs(d.round_off) > 0.001) {
+    const roLedger = acc?.roLedger?.trim()
+      || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+      || 'Round Off';
     entries.push(ledgerEntry(roLedger, d.round_off > 0 ? 'No' : 'Yes', -d.round_off));
   }
 
@@ -419,4 +408,82 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
+}
+
+// ─── Export Preview ───────────────────────────────────────────────────────────
+
+export interface SalesPreviewRow {
+  invoice_number: string;
+  invoice_date: string;
+  buyer_name: string;
+  party_ledger: string;
+  ledger_type: 'Customer' | 'Sales' | 'CGST' | 'SGST' | 'IGST' | 'Expense' | 'Round Off';
+  tally_ledger_name: string;
+  amount: number;  // positive = debit, negative = credit (Tally sign convention)
+  status: 'OK' | 'Skipped' | 'Warning';
+  skip_reason?: string;
+  warning?: string;
+}
+
+export function buildSalesPreview(input: SalesXmlGeneratorInput): SalesPreviewRow[] {
+  const rows: SalesPreviewRow[] = [];
+
+  for (const inv of input.invoices) {
+    const d = deriveInvoiceFinancials(inv);
+    const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
+
+    const accCustomer = acc?.customerLedger?.trim() ?? '';
+    const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+    const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+    const salesLedger = acc?.salesLedger?.trim() ?? '';
+    const base = { invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, buyer_name: inv.buyer_name ?? '', party_ledger: partyLedger };
+
+    if (!salesLedger) {
+      rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: 'Skipped', skip_reason: 'Accept invoice to set sales ledger' });
+      continue;
+    }
+
+    const partyStatus: SalesPreviewRow['status'] = (!accCustomer && !resolvedCustomer) ? 'Warning' : 'OK';
+    rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: partyStatus, warning: partyStatus === 'Warning' ? 'Customer not in master' : undefined });
+
+    const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, inv.tax_type, inv.bill_discount_amount ?? 0);
+    for (const row of hsnRows) {
+      if (Math.abs(row.taxable) > 0.001) {
+        rows.push({ ...base, ledger_type: 'Sales', tally_ledger_name: salesLedger, amount: -row.taxable, status: 'OK' });
+      }
+    }
+
+    if (inv.tax_type === 'cgst_sgst') {
+      if (Math.abs(d.cgst) > 0.001) {
+        const l = acc?.cgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0) || 'CGST';
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l, amount: -d.cgst, status: 'OK' });
+      }
+      if (Math.abs(d.sgst) > 0.001) {
+        const l = acc?.sgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0) || 'SGST';
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l, amount: -d.sgst, status: 'OK' });
+      }
+    } else if (Math.abs(d.igst) > 0.001) {
+      const l = acc?.igstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0) || 'IGST';
+      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l, amount: -d.igst, status: 'OK' });
+    }
+
+    if (inv.charges?.length) {
+      for (const charge of inv.charges) {
+        if (!charge.amount || charge.amount === 0) continue;
+        const q = norm(charge.description);
+        const el = input.expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === q)
+          ?? input.expenseLedgers.find((l) => norm(l.tally_ledger_name) === q);
+        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: el?.tally_ledger_name ?? charge.description, amount: -Math.abs(charge.amount), status: el ? 'OK' : 'Warning', warning: el ? undefined : `No ledger for "${charge.description}"` });
+      }
+    }
+
+    if (Math.abs(d.round_off) > 0.001) {
+      const roLedger = acc?.roLedger?.trim()
+        || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+        || 'Round Off';
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: roLedger, amount: -d.round_off, status: 'OK' });
+    }
+  }
+
+  return rows;
 }

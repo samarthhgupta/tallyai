@@ -10,7 +10,8 @@ import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
 import { loadSalesLedgers, addSalesLedger } from '@/lib/salesLedgerConfig';
-import { generateSalesVouchersXml, generateSalesMastersXml } from '@/lib/salesXmlGenerator';
+import { generateSalesVouchersXml, generateSalesMastersXml, generateSalesVouchers, buildSalesPreview } from '@/lib/salesXmlGenerator';
+import type { SalesPreviewRow } from '@/lib/salesXmlGenerator';
 import type { CustomerMaster } from '@/lib/customers';
 import type { SupplierMaster } from '@/lib/suppliers';
 import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
@@ -626,6 +627,102 @@ function StatCard({
   );
 }
 
+// ─── Preview table ────────────────────────────────────────────────────────────
+
+const STATUS_CLS: Record<string, string> = {
+  OK:      'text-green-700 dark:text-green-400',
+  Warning: 'text-amber-600 dark:text-amber-400',
+  Skipped: 'text-red-500 dark:text-red-400',
+};
+
+function SalesPreviewTable({ rows, onClose, onDownload }: { rows: SalesPreviewRow[]; onClose: () => void; onDownload: () => void }) {
+  const ok      = rows.filter((r) => r.status === 'OK').length;
+  const warned  = rows.filter((r) => r.status === 'Warning').length;
+  const skipped = rows.filter((r) => r.status === 'Skipped').length;
+  return (
+    <div className="mt-6 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Export Preview</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{rows.length} rows · {ok} OK · {warned} warnings · {skipped} skipped</span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onDownload}
+            className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          >
+            Download Excel
+          </button>
+          <button
+            onClick={onClose}
+            className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+          >
+            Close ✕
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+            <tr className="border-b border-gray-200 dark:border-gray-700">
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Invoice #</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Date</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Customer</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Type</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Tally Ledger</th>
+              <th className="text-right px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Amount</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Status</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Note</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {rows.map((r, i) => (
+              <tr key={i} className={`${r.status === 'Skipped' ? 'opacity-50' : ''} hover:bg-gray-50 dark:hover:bg-gray-800/50`}>
+                <td className="px-3 py-1.5 font-mono text-gray-700 dark:text-gray-300">{r.invoice_number}</td>
+                <td className="px-3 py-1.5 text-gray-500 dark:text-gray-400 tabular-nums">{r.invoice_date}</td>
+                <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300 max-w-[120px] truncate" title={r.buyer_name}>{r.buyer_name || '—'}</td>
+                <td className="px-3 py-1.5">
+                  <span className={`inline-block px-1.5 py-0.5 rounded font-medium ${BADGE[r.ledger_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {r.ledger_type}
+                  </span>
+                </td>
+                <td className="px-3 py-1.5 font-mono text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={r.tally_ledger_name}>{r.tally_ledger_name}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums font-mono ${r.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                  {r.amount >= 0 ? '+' : ''}{r.amount.toFixed(2)}
+                </td>
+                <td className={`px-3 py-1.5 font-medium ${STATUS_CLS[r.status] ?? 'text-gray-500'}`}>{r.status}</td>
+                <td className="px-3 py-1.5 text-gray-400 dark:text-gray-500 max-w-[200px] truncate" title={r.skip_reason ?? r.warning ?? ''}>
+                  {r.skip_reason ?? r.warning ?? ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function downloadPreviewExcel(rows: SalesPreviewRow[], fy: string) {
+  const header = ['Invoice #', 'Date', 'Customer', 'Party Ledger', 'Ledger Type', 'Tally Ledger', 'Amount', 'Status', 'Note'];
+  const lines = [
+    header.join('\t'),
+    ...rows.map((r) => [
+      r.invoice_number, r.invoice_date, r.buyer_name, r.party_ledger,
+      r.ledger_type, r.tally_ledger_name,
+      r.amount.toFixed(2),
+      r.status,
+      r.skip_reason ?? r.warning ?? '',
+    ].join('\t')),
+  ];
+  const content = lines.join('\n');
+  const blob = new Blob([content], { type: 'text/tab-separated-values;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `sales_export_preview_${fy}.tsv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function SalesXmlPage() {
@@ -654,6 +751,7 @@ export default function SalesXmlPage() {
   const [search,             setSearch]              = useState('');
   const [selectedInvoices,   setSelectedInvoices]    = useState<Set<string>>(new Set());
   const [editingInvoice,     setEditingInvoice]      = useState<StoredInvoice | null>(null);
+  const [previewRows,        setPreviewRows]         = useState<SalesPreviewRow[] | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -894,6 +992,21 @@ export default function SalesXmlPage() {
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
   };
 
+  const handlePreview = () => {
+    if (!mappedInvoices.length) { setExportMsg('No accepted invoices to preview.'); return; }
+    setExportMsg(null);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
+      const rows = buildSalesPreview({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      setPreviewRows(rows);
+      const { includedCount, skippedInvoices } = generateSalesVouchers({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      if (skippedInvoices.length > 0) {
+        setExportMsg(`Preview: ${includedCount} vouchers ready · ${skippedInvoices.length} will be skipped`);
+      }
+    } catch (e) { setExportMsg(`Preview failed: ${getErrMsg(e)}`); }
+  };
+
   return (
     <AppLayout>
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -950,6 +1063,13 @@ export default function SalesXmlPage() {
               className="px-4 py-2 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {bulkMapping ? 'Mapping…' : `Auto-Map ${unmappedCount} Remaining`}
+            </button>
+            <button
+              onClick={handlePreview}
+              disabled={mappedCount === 0}
+              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Export Preview
             </button>
             <button
               onClick={handleExportMasters}
@@ -1175,6 +1295,16 @@ export default function SalesXmlPage() {
           </div>
         )}
       </div>
+
+      {previewRows && (
+        <div className="max-w-7xl mx-auto px-4 pb-8">
+          <SalesPreviewTable
+            rows={previewRows}
+            onClose={() => setPreviewRows(null)}
+            onDownload={() => downloadPreviewExcel(previewRows, fy)}
+          />
+        </div>
+      )}
 
       {editingInvoice && (
         <InvoiceEditPanel
