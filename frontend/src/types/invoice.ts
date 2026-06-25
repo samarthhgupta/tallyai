@@ -145,7 +145,11 @@ export interface HsnRow {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export function calcLineAmount(item: LineItem): number {
-  return r2(item.qty * item.rate * (1 - item.disc_percent / 100));
+  const disc = item.disc_percent ?? 0;
+  if (disc === 0 && (item.amount ?? 0) !== 0) {
+    return item.amount!;
+  }
+  return r2(item.qty * item.rate * (1 - disc / 100));
 }
 
 /**
@@ -176,7 +180,10 @@ export function normalizeLineItem(item: LineItem): LineItem {
     }
   }
 
-  const amount = r2(qty * rate * (1 - disc / 100));
+  // Preserve source amount when available and no discount — do not overwrite with recomputed value.
+  const amount = (rawAmount !== 0 && disc === 0)
+    ? rawAmount
+    : r2(qty * rate * (1 - disc / 100));
   return { ...item, qty, rate, amount };
 }
 
@@ -192,25 +199,26 @@ export function buildHsnSummary(items: LineItem[], taxType: 'cgst_sgst' | 'igst'
     if (!map[key]) {
       map[key] = { hsn, gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
     }
-    map[key].taxable += calcLineAmount(item);
+    const lineAmt = calcLineAmount(item);
+    map[key].taxable += lineAmt;
+    // Accumulate GST per-line to match supplier billing methodology.
+    if (taxType === 'cgst_sgst') {
+      map[key].cgst += r2(lineAmt * item.gst_percent / 200);
+      map[key].sgst += r2(lineAmt * item.gst_percent / 200);
+    } else {
+      map[key].igst += r2(lineAmt * item.gst_percent / 100);
+    }
   }
 
-  // Pro-rate bill discount across HSN rows proportional to each row's share of total taxable.
-  // Use Math.abs for the denominator so return invoices (negative totalTaxable) still apply
-  // discount correctly — discount shares subtract from the absolute taxable value.
+  // Pro-rate bill discount against taxable only. GST is already accumulated per-line above.
   const totalTaxable = Object.values(map).reduce((s, r) => s + r.taxable, 0);
   const absTotalTaxable = Math.abs(totalTaxable);
   for (const row of Object.values(map)) {
     const discountShare = absTotalTaxable > 0 && billDiscount > 0
-      ? billDiscount * (row.taxable / totalTaxable)  // preserves sign; proportional to signed share
+      ? billDiscount * (row.taxable / totalTaxable)
       : 0;
     row.taxable = r2(row.taxable - discountShare);
-    if (taxType === 'cgst_sgst') {
-      row.cgst = r2(row.taxable * row.gst_percent / 200);
-      row.sgst = r2(row.taxable * row.gst_percent / 200);
-    } else {
-      row.igst = r2(row.taxable * row.gst_percent / 100);
-    }
+    // Do not recompute cgst/sgst/igst from group taxable — already accumulated per-line.
   }
 
   return Object.values(map);

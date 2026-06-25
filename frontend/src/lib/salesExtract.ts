@@ -359,7 +359,7 @@ function assembleInvoices(groups: Map<string, InvoiceRow[]>): ExtractedInvoice[]
       //   normal:  taxable=100, qty=2  → rate=50   ✓
       //   return:  taxable=-100, qty=-1 → rate=100  ✓
       // Fall back to abs(taxable) when qty is zero (degenerate row).
-      const rawRate = r.rate || (qty !== 0 ? r2(taxable / qty) : Math.abs(taxable));
+      const rawRate = r.rate || (qty !== 0 ? taxable / qty : Math.abs(taxable));
       const rate = Math.abs(rawRate); // guard: rate is never negative
       return {
         description: r.item_description || (r.hsn?.trim() ? r.hsn.trim() : 'UNKNOWN ITEM'),
