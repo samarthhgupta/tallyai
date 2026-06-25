@@ -10,6 +10,8 @@ import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
 import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
+import { loadStockItems, addStockItem } from '@/lib/stockItems';
+import type { StockItemMaster } from '@/lib/stockItems';
 import * as XLSX from 'xlsx';
 import { generateSalesVouchersXml, generateSalesMastersXml, generateSalesVouchers, buildSalesPreview } from '@/lib/salesXmlGenerator';
 import type { SalesPreviewRow } from '@/lib/salesXmlGenerator';
@@ -59,6 +61,7 @@ interface SalesTallyAcceptance {
   sgstLedger: string;
   igstLedger: string;
   roLedger: string;
+  stock?: Record<string, string>;  // desc → tally_item_name (inventory mode)
 }
 
 function parseSalesAcceptance(inv: StoredInvoice): SalesTallyAcceptance | null {
@@ -73,6 +76,7 @@ function parseSalesAcceptance(inv: StoredInvoice): SalesTallyAcceptance | null {
     sgstLedger:     a.sgstLedger ?? '',
     igstLedger:     a.igstLedger ?? '',
     roLedger:       a.roLedger ?? '',
+    stock:          a.stock ?? undefined,
   };
 }
 
@@ -293,6 +297,8 @@ interface MappingPanelProps {
   initialAcc: SalesTallyAcceptance | null;
   historicalSalesLedgers: Record<string, string>;
   companyWideSalesLedger: string | null;
+  voucherMode: 'accounting_only' | 'inventory';
+  stockItems: StockItemMaster[];
   onSave: (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => void;
   onUnmapRequest: () => void;
 }
@@ -300,6 +306,7 @@ interface MappingPanelProps {
 function MappingPanel({
   inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, pendingSalesLedgers,
   companyId, companyState, initialAcc, historicalSalesLedgers, companyWideSalesLedger,
+  voucherMode, stockItems,
   onSave, onUnmapRequest,
 }: MappingPanelProps) {
   const d = deriveInvoiceFinancials(inv);
@@ -321,6 +328,15 @@ function MappingPanel({
   const [roLedger,    setRoLedger]    = useState(initialAcc?.roLedger ?? '');
   const [saving,      setSaving]      = useState(false);
   const [err,         setErr]         = useState<string | null>(null);
+
+  // Inventory mode: per-line-item stock mapping (desc → tally_item_name)
+  const [stockMapping, setStockMapping] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (initialAcc?.stock) Object.assign(initial, initialAcc.stock);
+    return initial;
+  });
+  const [stockFreetext, setStockFreetext] = useState<Record<string, boolean>>({});
+  const [pendingStockItems, setPendingStockItems] = useState<string[]>([]);
 
   // Freetext create state (one per field)
   const [customerFree, setCustomerFree] = useState(false);
@@ -381,7 +397,10 @@ function MappingPanel({
     if (isBlank(salesLedger)) { setErr('Sales ledger is required'); return; }
     setSaving(true); setErr(null);
     try {
-      const acc: SalesTallyAcceptance = { customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger };
+      const acc: SalesTallyAcceptance = {
+        customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger,
+        ...(voucherMode === 'inventory' && Object.keys(stockMapping).length > 0 ? { stock: stockMapping } : {}),
+      };
       await saveSalesTallyAcceptance(companyId, inv.id, acc as unknown as Record<string, unknown>);
 
       // Customer master
@@ -396,6 +415,21 @@ function MappingPanel({
       // Sales ledger master
       if (!isBlank(salesLedger)) {
         await addSalesLedger(companyId, salesLedger).catch(() => {});
+      }
+      // Stock item masters (inventory mode)
+      if (voucherMode === 'inventory') {
+        for (const [desc, tallyName] of Object.entries(stockMapping)) {
+          if (!isBlank(tallyName) && pendingStockItems.includes(tallyName)) {
+            const lineItem = inv.line_items?.find((li) => (li.description ?? '') === desc);
+            await addStockItem(companyId, {
+              tally_item_name: tallyName,
+              hsn_code: lineItem?.hsn ?? undefined,
+              gst_percent: lineItem?.gst_percent ?? undefined,
+              unit: lineItem?.uom ?? undefined,
+              alias_name: desc !== tallyName ? desc : undefined,
+            }).catch(() => {});
+          }
+        }
       }
       // Tax ledger masters
       const taxWrites: Array<[TaxComponent, string]> = [];
@@ -585,6 +619,62 @@ function MappingPanel({
         )}
       </div>
 
+      {/* Inventory mode: per-line-item stock mapping */}
+      {voucherMode === 'inventory' && inv.line_items && inv.line_items.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+            Stock Item Mapping
+            <span className="ml-2 text-gray-400 font-normal">({inv.line_items.length} item{inv.line_items.length !== 1 ? 's' : ''})</span>
+          </div>
+          <div className="space-y-2">
+            {inv.line_items.map((item, idx) => {
+              const desc = item.description ?? '';
+              const key = `${inv.id}_${idx}`;
+              const currentVal = stockMapping[desc] ?? '';
+              const stockOptions = stockItems.map((s) => s.tally_item_name);
+              const allOpts = [...stockOptions, ...pendingStockItems];
+              const isGhost = currentVal !== '' && !allOpts.includes(currentVal);
+              return (
+                <div key={key} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate" title={desc}>{desc || '(no description)'}</div>
+                    <div className="text-[10px] text-gray-400 dark:text-gray-500">HSN: {item.hsn || '—'} · {item.gst_percent ?? 0}% GST · Qty: {item.qty}</div>
+                  </div>
+                  <div className="w-52 flex-shrink-0">
+                    {stockFreetext[key] ? (
+                      <InlineCreateInput
+                        placeholder="New stock item name…"
+                        onConfirm={(v) => {
+                          setStockMapping((prev) => ({ ...prev, [desc]: v }));
+                          setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
+                          setStockFreetext((p) => ({ ...p, [key]: false }));
+                        }}
+                        onCancel={() => setStockFreetext((p) => ({ ...p, [key]: false }))}
+                      />
+                    ) : (
+                      <select
+                        value={currentVal}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') { setStockFreetext((p) => ({ ...p, [key]: true })); return; }
+                          setStockMapping((prev) => ({ ...prev, [desc]: e.target.value }));
+                        }}
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100"
+                      >
+                        <option value="">— select stock item —</option>
+                        {isGhost && <option value={currentVal}>{currentVal} (current)</option>}
+                        {stockOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                        {pendingStockItems.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
+                        <option value="__new__">+ Create new…</option>
+                      </select>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {err && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{err}</p>}
 
       <div className="flex items-center gap-2">
@@ -752,9 +842,12 @@ export default function SalesXmlPage() {
   const [customers,          setCustomers]           = useState<CustomerMaster[]>([]);
   const [suppliers,          setSuppliers]           = useState<SupplierMaster[]>([]);
   const [dutiesTaxes,        setDutiesTaxes]         = useState<DutiesTaxesMaster[]>([]);
+  const [stockItems,         setStockItems]          = useState<StockItemMaster[]>([]);
   const [tallyCompanyName,   setTallyCompanyName]    = useState('');
   const [companyGstin,       setCompanyGstin]        = useState('');
   const [companyState,       setCompanyState]        = useState('');
+  const [voucherMode,        setVoucherMode]         = useState<'accounting_only' | 'inventory'>('accounting_only');
+  const [stockItemMode,      setStockItemMode]       = useState<'hsn_driven' | null>(null);
   const [loading,            setLoading]             = useState(true);
   const [bulkMapping,        setBulkMapping]         = useState(false);
   const [bulkSaving,         setBulkSaving]          = useState(false);
@@ -780,21 +873,25 @@ export default function SalesXmlPage() {
       if (!session) { router.push('/login'); return; }
       if (!company) { router.push('/select-company'); return; }
       try {
-        const [invData, custData, suppData, dtData, comp, importedSalesLedgers] = await Promise.all([
+        const [invData, custData, suppData, dtData, comp, importedSalesLedgers, stockData] = await Promise.all([
           getSalesRegister(company.id, { financialYear: fy }),
           loadCustomers(company.id),
           loadSuppliers(company.id),
           loadDutiesTaxes(company.id),
           getCompany(company.id),
           loadSalesLedgers(company.id),
+          loadStockItems(company.id),
         ]);
         setInvoices(invData);
         setCustomers(custData);
         setSuppliers(suppData);
         setDutiesTaxes(dtData);
+        setStockItems(stockData);
         setTallyCompanyName(comp.tally_company_name ?? comp.name);
         setCompanyGstin(comp.gstin ?? '');
         setCompanyState(comp.state_name ?? '');
+        setVoucherMode(comp.voucher_mode === 'inventory' ? 'inventory' : 'accounting_only');
+        setStockItemMode(comp.stock_item_mode ?? null);
 
         const ledgerSet = new Set<string>(importedSalesLedgers.map((l) => l.tally_ledger_name));
         for (const inv of invData) {
@@ -907,7 +1004,21 @@ export default function SalesXmlPage() {
         if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
         if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
 
-        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '' };
+        // Auto-map stock items for inventory mode
+        let stock: Record<string, string> | undefined;
+        if (voucherMode === 'inventory' && inv.line_items?.length) {
+          stock = {};
+          for (const item of inv.line_items) {
+            const desc = item.description ?? '';
+            const si = stockItems.find((s) => {
+              const q = desc.toLowerCase().trim();
+              return (s.alias_name && s.alias_name.toLowerCase().trim() === q) || s.tally_item_name.toLowerCase().trim() === q;
+            }) ?? stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === (item.hsn ?? '').replace(/[\s.]/g, '') && s.gst_percent === item.gst_percent);
+            if (si && desc) stock[desc] = si.tally_item_name;
+          }
+          if (Object.keys(stock).length === 0) stock = undefined;
+        }
+        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '', ...(stock ? { stock } : {}) };
         await saveSalesTallyAcceptance(company.id, inv.id, acc as unknown as Record<string, unknown>).catch(() => {});
         setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
         mapped++;
@@ -1037,7 +1148,7 @@ export default function SalesXmlPage() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesVouchersXml({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const xml = generateSalesVouchersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       downloadXmlFile(xml, `sales_vouchers_${fy}.xml`);
       setExportMsg(`✓ Exported ${mappedInvoices.length} vouchers.`);
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
@@ -1049,7 +1160,7 @@ export default function SalesXmlPage() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesMastersXml({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const xml = generateSalesMastersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       downloadXmlFile(xml, `sales_masters_${fy}.xml`);
       setExportMsg('✓ Masters XML downloaded.');
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
@@ -1061,9 +1172,9 @@ export default function SalesXmlPage() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const rows = buildSalesPreview({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const rows = buildSalesPreview({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       setPreviewRows(rows);
-      const { includedCount, skippedInvoices } = generateSalesVouchers({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const { includedCount, skippedInvoices } = generateSalesVouchers({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       if (skippedInvoices.length > 0) {
         setExportMsg(`Preview: ${includedCount} vouchers ready · ${skippedInvoices.length} will be skipped`);
       }
@@ -1338,6 +1449,8 @@ export default function SalesXmlPage() {
                       initialAcc={acc ?? null}
                       historicalSalesLedgers={historicalSalesLedgers}
                       companyWideSalesLedger={companyWideSalesLedger}
+                      voucherMode={voucherMode}
+                      stockItems={stockItems}
                       onSave={handleSave}
                       onUnmapRequest={() => handleUnmap(inv.id)}
                     />
