@@ -1483,7 +1483,7 @@ export default function SalesXmlPage() {
   const initialLockedInvoices = useMemo<Record<string, LockedSalesInvoice>>(() => {
     const out: Record<string, LockedSalesInvoice> = {};
     for (const inv of invoices) {
-      if (inv.tally_ledger_acceptance) {
+      if (inv.tally_ledger_acceptance && !out[inv.invoice_number]) {
         const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown>;
         out[inv.invoice_number] = {
           customerLedger: (acc.customerLedger as string) ?? '',
@@ -1590,8 +1590,8 @@ export default function SalesXmlPage() {
         catch (e) { errs.push(`Sales ledger: ${getErrMsg(e)}`); }
       }
       for (const si of p.stockItems) {
-        if (!isBlank(si.tallyName) && !seenStock.has(si.desc)) {
-          seenStock.add(si.desc);
+        if (!isBlank(si.tallyName) && !seenStock.has(si.tallyName)) {
+          seenStock.add(si.tallyName);
           try {
             await addStockItem(company.id, {
               tally_item_name: si.tallyName,

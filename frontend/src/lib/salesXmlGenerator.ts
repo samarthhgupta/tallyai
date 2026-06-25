@@ -1174,7 +1174,7 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
   const anyInvoiceIsInventory = input.invoices.some(
     (inv) => (inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only') === 'inventory'
   );
-  if (includeStockItems && anyInvoiceIsInventory && input.stockItems.length > 0) {
+  if (includeStockItems && anyInvoiceIsInventory) {
     // Map: tally_item_name → { rate, hsn } from invoice line items (used when master record has nulls)
     const invoiceItemInfo = new Map<string, { rate: number; hsn: string }>();
     for (const inv of input.invoices) {
@@ -1191,15 +1191,30 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
             hsn: item.hsn ?? '',
           });
         }
+        // If the acceptance record references a name not found in DB masters, still emit a master block
+        // for it so Tally can resolve the reference. Parse rate/HSN from the name pattern.
+        if (mappedName && !invoiceItemInfo.has(mappedName)) {
+          const nameRateM = mappedName.match(/@\s*(\d+(?:\.\d+)?)\s*%/i);
+          const derivedRate = nameRateM ? Number(nameRateM[1]) : (item.gst_percent ?? 0);
+          // HSN is the part before "@" stripped of spaces, or use invoice HSN
+          const derivedHsn = nameRateM
+            ? mappedName.slice(0, mappedName.indexOf('@')).replace(/[\s.]/g, '')
+            : (item.hsn ?? '');
+          invoiceItemInfo.set(mappedName, { rate: derivedRate, hsn: derivedHsn });
+        }
       }
     }
+
+    // Items present in DB masters — emit normally
     const itemsToExport = input.stockItems.filter((s) => invoiceItemInfo.has(s.tally_item_name));
     const seenUnits = new Set<string>();
     for (const s of itemsToExport) {
       const unit = resolveUom(s.unit, null);
       if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitMasterBlock(unit, fyStart)); }
     }
+    const exportedNames = new Set<string>();
     for (const stockItem of itemsToExport) {
+      exportedNames.add(stockItem.tally_item_name);
       const info = invoiceItemInfo.get(stockItem.tally_item_name)!;
       // Rate: prefer master DB value; fall back to invoice line item; last resort: extract from name (e.g. "4601 @ 5%" → 5)
       const nameRateMatch = stockItem.tally_item_name.match(/@\s*(\d+(?:\.\d+)?)\s*%/i);
@@ -1208,6 +1223,20 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
       // HSN: prefer master DB value; fall back to invoice line item HSN
       const enriched: StockItemMaster = stockItem.hsn_code ? stockItem : { ...stockItem, hsn_code: info.hsn || null };
       messages.push(buildStockItemMasterBlock(enriched, rate, fyStart));
+    }
+
+    // Phantom items: referenced in acceptance records but missing from DB masters
+    // (caused by old seenStock-by-desc bug). Synthesize minimal master blocks for them.
+    const defaultUnit = resolveUom(null, null);
+    for (const [name, info] of invoiceItemInfo) {
+      if (exportedNames.has(name)) continue;
+      if (!seenUnits.has(defaultUnit)) { seenUnits.add(defaultUnit); messages.push(buildUnitMasterBlock(defaultUnit, fyStart)); }
+      const phantom: StockItemMaster = {
+        id: '', company_id: '', tally_item_name: name, alias_name: null,
+        unit: defaultUnit, hsn_code: info.hsn || null, gst_percent: info.rate || null,
+        created_at: '', updated_at: '',
+      };
+      messages.push(buildStockItemMasterBlock(phantom, info.rate, fyStart));
     }
   }
 

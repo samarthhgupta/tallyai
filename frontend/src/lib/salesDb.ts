@@ -120,7 +120,7 @@ export async function getSalesRegister(
   companyId: string,
   filters: { financialYear?: string; periodMonth?: string } = {},
 ): Promise<StoredInvoice[]> {
-  return fetchAllRows(() => {
+  const rows = await fetchAllRows(() => {
     let q = db()
       .from('invoices')
       .select('*')
@@ -132,6 +132,16 @@ export async function getSalesRegister(
     if (filters.financialYear) q = q.eq('financial_year', filters.financialYear);
     if (filters.periodMonth) q = q.eq('period_month', filters.periodMonth);
     return q;
+  });
+  // Deduplicate: if the DB has multiple accepted rows for the same invoice_number
+  // (from duplicate imports), keep only the most recently accepted one.
+  // The query is already ordered by accepted_at DESC so the first occurrence wins.
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = `${row.invoice_number}__${row.financial_year ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 
