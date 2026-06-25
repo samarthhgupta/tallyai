@@ -9,7 +9,8 @@ import { loadCustomers, addCustomer } from '@/lib/customers';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
-import { loadSalesLedgers, addSalesLedger } from '@/lib/salesLedgerConfig';
+import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
+import * as XLSX from 'xlsx';
 import { generateSalesVouchersXml, generateSalesMastersXml, generateSalesVouchers, buildSalesPreview } from '@/lib/salesXmlGenerator';
 import type { SalesPreviewRow } from '@/lib/salesXmlGenerator';
 import type { CustomerMaster } from '@/lib/customers';
@@ -290,13 +291,16 @@ interface MappingPanelProps {
   companyId: string;
   companyState: string;
   initialAcc: SalesTallyAcceptance | null;
+  historicalSalesLedgers: Record<string, string>;
+  companyWideSalesLedger: string | null;
   onSave: (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => void;
   onUnmapRequest: () => void;
 }
 
 function MappingPanel({
   inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, pendingSalesLedgers,
-  companyId, companyState, initialAcc, onSave, onUnmapRequest,
+  companyId, companyState, initialAcc, historicalSalesLedgers, companyWideSalesLedger,
+  onSave, onUnmapRequest,
 }: MappingPanelProps) {
   const d = deriveInvoiceFinancials(inv);
   const isCgstSgst = inv.tax_type === 'cgst_sgst';
@@ -330,15 +334,27 @@ function MappingPanel({
   // Lock state: start locked if already accepted, then user can click "Edit Mapping"
   const [editing, setEditing] = useState(!initialAcc);
 
-  // Auto-fill from preferences on first open
+  // Auto-fill using 4-case hierarchy (mirrors purchase suggestion logic):
+  // Case 1: per-customer learned preferences, Case 2: historical per-customer,
+  // Case 3: company-wide most used, Case 4: first in master list.
   useEffect(() => {
     if (!editing) return;
     getCustomerLedgerPreferences(companyId, inv.buyer_gstin, inv.buyer_name).then((prefs) => {
-      if (prefs.sales && !salesLedger) setSalesLedger(prefs.sales);
-      if (prefs.CGST  && !cgstLedger)  setCgstLedger(prefs.CGST);
-      if (prefs.SGST  && !sgstLedger)  setSgstLedger(prefs.SGST);
-      if (prefs.IGST  && !igstLedger)  setIgstLedger(prefs.IGST);
-      // Fall back to masters
+      if (!salesLedger) {
+        const buyerKey = inv.buyer_gstin
+          ? inv.buyer_gstin
+          : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+        const suggested = (prefs as Record<string, string>).sales    // Case 1: preference
+          || historicalSalesLedgers[buyerKey]                        // Case 2: historical
+          || companyWideSalesLedger                                   // Case 3: company-wide
+          || salesLedgerOptions[0]                                    // Case 4: first in master
+          || '';
+        if (suggested) setSalesLedger(suggested);
+      }
+      if (prefs.CGST && !cgstLedger) setCgstLedger(prefs.CGST);
+      if (prefs.SGST && !sgstLedger) setSgstLedger(prefs.SGST);
+      if (prefs.IGST && !igstLedger) setIgstLedger(prefs.IGST);
+      // Fall back to masters for tax ledgers
       if (isCgstSgst) {
         const cgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'CGST'));
         const sgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'SGST'));
@@ -704,23 +720,25 @@ function SalesPreviewTable({ rows, onClose, onDownload }: { rows: SalesPreviewRo
 }
 
 function downloadPreviewExcel(rows: SalesPreviewRow[], fy: string) {
-  const header = ['Invoice #', 'Date', 'Customer', 'Party Ledger', 'Ledger Type', 'Tally Ledger', 'Amount', 'Status', 'Note'];
-  const lines = [
-    header.join('\t'),
+  const wsData = [
+    ['Invoice No', 'Date', 'Customer (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
     ...rows.map((r) => [
       r.invoice_number, r.invoice_date, r.buyer_name, r.party_ledger,
-      r.ledger_type, r.tally_ledger_name,
-      r.amount.toFixed(2),
-      r.status,
+      r.ledger_type, r.tally_ledger_name, r.amount, r.status,
       r.skip_reason ?? r.warning ?? '',
-    ].join('\t')),
+    ]),
   ];
-  const content = lines.join('\n');
-  const blob = new Blob([content], { type: 'text/tab-separated-values;charset=utf-8' });
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sales Preview');
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `sales_export_preview_${fy}.tsv`; a.click();
-  URL.revokeObjectURL(url);
+  a.href = url; a.download = `sales_export_preview_${fy}.xlsx`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -752,6 +770,8 @@ export default function SalesXmlPage() {
   const [selectedInvoices,   setSelectedInvoices]    = useState<Set<string>>(new Set());
   const [editingInvoice,     setEditingInvoice]      = useState<StoredInvoice | null>(null);
   const [previewRows,        setPreviewRows]         = useState<SalesPreviewRow[] | null>(null);
+  const [historicalSalesLedgers,    setHistoricalSalesLedgers]    = useState<Record<string, string>>({});
+  const [companyWideSalesLedger,    setCompanyWideSalesLedger]    = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -790,6 +810,28 @@ export default function SalesXmlPage() {
           if (acc) map[inv.id] = acc;
         }
         setAcceptedMap(map);
+
+        // Load historical and company-wide sales ledger suggestions (async, non-blocking)
+        const masterNames = importedSalesLedgers.map((l) => l.tally_ledger_name);
+        const uniqueKeys: Record<string, true> = {};
+        for (const inv of invData) {
+          const k = inv.buyer_gstin ? inv.buyer_gstin : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+          if (k) uniqueKeys[k] = true;
+        }
+        const [historicalEntries, companyWide] = await Promise.all([
+          Promise.all(
+            Object.keys(uniqueKeys).map(async (key) => {
+              const isGstin = !key.startsWith('name:');
+              const result = await getHistoricalSalesLedger(company.id, isGstin ? key : null, isGstin ? null : key.slice(5));
+              return [key, result] as [string, string | null];
+            })
+          ),
+          masterNames.length > 0 ? getCompanyWideMostUsedSalesLedger(company.id, masterNames) : Promise.resolve(null),
+        ]);
+        const histMap: Record<string, string> = {};
+        for (const [key, val] of historicalEntries) { if (val) histMap[key] = val; }
+        setHistoricalSalesLedgers(histMap);
+        setCompanyWideSalesLedger(companyWide);
       } catch (e) {
         setError(getErrMsg(e));
       } finally {
@@ -829,19 +871,34 @@ export default function SalesXmlPage() {
   };
 
   // Auto-map all unmapped invoices using preferences + masters
+  // 4-case sales ledger suggestion hierarchy (mirrors purchase 4-case logic):
+  // Case 1: per-customer learned preferences (customerLedgerPreferences)
+  // Case 2: per-customer historical from accepted invoices (getHistoricalSalesLedger)
+  // Case 3: company-wide most used (getCompanyWideMostUsedSalesLedger)
+  // Case 4: first in master list (bootstrap default)
+  const resolveSalesLedger = (prefs: Record<string, string>, buyerGstin: string | null, buyerName: string | null): string => {
+    const buyerKey = buyerGstin ? buyerGstin : `name:${(buyerName ?? '').toLowerCase().trim()}`;
+    return prefs.sales                          // Case 1: per-customer preference
+      || historicalSalesLedgers[buyerKey]       // Case 2: historical per-customer
+      || companyWideSalesLedger                 // Case 3: company-wide most used
+      || salesLedgerOptions[0]                  // Case 4: first in master list
+      || '';
+  };
+
   const handleAutoMapAll = async () => {
     if (!company || invoices.length === 0) return;
     setBulkMapping(true);
     setError(null);
     let mapped = 0;
+    let skipped = 0;
     try {
       for (const inv of invoices) {
         if (acceptedMap[inv.id]) continue;
         const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
         const resolved = resolveCustomerLedger(inv, customers, suppliers);
         const custLedger = resolved || inv.buyer_name || '';
-        const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
-        if (!salesL) continue;
+        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
+        if (!salesL) { skipped++; continue; }
 
         let cgstL = (prefs as Record<string, string>).CGST || '';
         let sgstL = (prefs as Record<string, string>).SGST || '';
@@ -855,7 +912,11 @@ export default function SalesXmlPage() {
         setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
         mapped++;
       }
-      setExportMsg(`✓ Auto-mapped ${mapped} invoices.`);
+      setExportMsg(
+        skipped > 0
+          ? `✓ Auto-mapped ${mapped} invoices. ${skipped} skipped — add a Sales Ledger in Masters first.`
+          : `✓ Auto-mapped ${mapped} invoices.`
+      );
     } catch (e) {
       setError(getErrMsg(e));
     } finally {
@@ -863,20 +924,21 @@ export default function SalesXmlPage() {
     }
   };
 
-  // Bulk accept selected (uses same auto-map logic but only for selected)
+  // Bulk accept selected (uses same 4-case hierarchy as auto-map)
   const handleBulkAcceptSelected = async () => {
     if (!company || selectedInvoices.size === 0) return;
     setBulkSaving(true);
     setError(null);
     let mapped = 0;
+    let skipped = 0;
     try {
       const toMap = invoices.filter((inv) => selectedInvoices.has(inv.id) && !acceptedMap[inv.id]);
       for (const inv of toMap) {
         const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
         const resolved = resolveCustomerLedger(inv, customers, suppliers);
         const custLedger = resolved || inv.buyer_name || '';
-        const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
-        if (!salesL) continue;
+        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
+        if (!salesL) { skipped++; continue; }
 
         let cgstL = (prefs as Record<string, string>).CGST || '';
         let sgstL = (prefs as Record<string, string>).SGST || '';
@@ -891,7 +953,8 @@ export default function SalesXmlPage() {
         mapped++;
       }
       setSelectedInvoices(new Set());
-      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoices.`);
+      if (skipped > 0) setError(`${skipped} invoice${skipped === 1 ? '' : 's'} could not be mapped — no Sales Ledger available. Add one in Masters → Sales Ledgers.`);
+      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoice${mapped === 1 ? '' : 's'}.`);
     } catch (e) {
       setError(getErrMsg(e));
     } finally {
@@ -1273,6 +1336,8 @@ export default function SalesXmlPage() {
                       companyId={company!.id}
                       companyState={companyState}
                       initialAcc={acc ?? null}
+                      historicalSalesLedgers={historicalSalesLedgers}
+                      companyWideSalesLedger={companyWideSalesLedger}
                       onSave={handleSave}
                       onUnmapRequest={() => handleUnmap(inv.id)}
                     />

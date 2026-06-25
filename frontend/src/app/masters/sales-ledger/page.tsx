@@ -9,6 +9,7 @@ import {
   loadSalesLedgers,
   addSalesLedger,
   deleteSalesLedger,
+  updateSalesLedger,
   type SalesLedgerMaster,
 } from '@/lib/salesLedgerConfig';
 
@@ -108,8 +109,7 @@ export default function SalesLedgerPage() {
     setFormError('');
     try {
       if (editingName && editingName !== name) {
-        await deleteSalesLedger(company!.id, editingName);
-        await addSalesLedger(company!.id, name);
+        await updateSalesLedger(company!.id, editingName, name);
       } else if (!editingName) {
         await addSalesLedger(company!.id, name);
       }
