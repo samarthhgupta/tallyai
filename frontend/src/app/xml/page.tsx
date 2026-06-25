@@ -560,16 +560,14 @@ function FlatPreviewTable({
   }, [cardFilter, statusFilter, vendorFilter, invoiceFilter, gstinFilter, mappingFilter,
       rows, lockedInvoices, pendingStockItems, stockItemEdits]);
 
-  // One checkbox per INVOICE - only for invoices that have at least one suggested field.
-  // All unlocked invoices can be selected for acceptance (not just ones with suggestions)
+  // One checkbox per INVOICE — only unlocked (not yet accepted) invoices can be selected.
   const suggestableInvoices: string[] = [];
   {
     const seen = new Set<string>();
     for (const row of displayRows) {
       if (!seen.has(row.invoiceNo)) {
         seen.add(row.invoiceNo);
-        const hasSuggestions = rows.some((r) => r.invoice_number === row.invoiceNo && r.is_suggested);
-        if (!lockedInvoices[row.invoiceNo] || hasSuggestions) suggestableInvoices.push(row.invoiceNo);
+        if (!lockedInvoices[row.invoiceNo]) suggestableInvoices.push(row.invoiceNo);
       }
     }
   }
@@ -970,12 +968,9 @@ function FlatPreviewTable({
               const prevRow = displayRows[i - 1];
               const isNewInvoice = !prevRow || prevRow.invoiceNo !== row.invoiceNo;
               const locked = lockedInvoices[row.invoiceNo];
-              // If any preview row for this invoice has a fresh AI suggestion, treat it as
-              // needing re-acceptance even if it was previously accepted.
-              const invHasSuggestions = rows.some(
-                (r: PreviewRow) => r.invoice_number === row.invoiceNo && r.is_suggested
-              );
-              const isLocked = !!locked && !invHasSuggestions;
+              // Accepted invoices are always locked regardless of new AI suggestions.
+              // New suggestions are shown as amber badges on locked rows but never unlock them.
+              const isLocked = !!locked;
               const rowBg = isLocked ? 'bg-green-50/30 dark:bg-green-900/20' : (isNewInvoice ? 'bg-white dark:bg-gray-800' : 'bg-blue-50/20 dark:bg-blue-900/20');
               const borderTop = isNewInvoice && i > 0 ? 'border-t-2 border-gray-300 dark:border-gray-600' : 'border-t border-gray-100 dark:border-gray-700';
               const isInvSuggestable = !isLocked && suggestableInvoices.includes(row.invoiceNo);
