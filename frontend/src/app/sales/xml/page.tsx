@@ -9,8 +9,12 @@ import { loadCustomers, addCustomer } from '@/lib/customers';
 import { loadSuppliers } from '@/lib/suppliers';
 import { loadDutiesTaxes, addDutiesTaxes } from '@/lib/dutiesTaxes';
 import { upsertCustomerLedgerPreference, getCustomerLedgerPreferences } from '@/lib/customerLedgerPreferences';
-import { loadSalesLedgers, addSalesLedger } from '@/lib/salesLedgerConfig';
-import { generateSalesVouchersXml, generateSalesMastersXml } from '@/lib/salesXmlGenerator';
+import { loadSalesLedgers, addSalesLedger, getHistoricalSalesLedger, getCompanyWideMostUsedSalesLedger } from '@/lib/salesLedgerConfig';
+import { loadStockItems, addStockItem } from '@/lib/stockItems';
+import type { StockItemMaster } from '@/lib/stockItems';
+import * as XLSX from 'xlsx';
+import { generateSalesVouchersXml, generateSalesMastersXml, generateSalesVouchers, buildSalesPreview } from '@/lib/salesXmlGenerator';
+import type { SalesPreviewRow } from '@/lib/salesXmlGenerator';
 import type { CustomerMaster } from '@/lib/customers';
 import type { SupplierMaster } from '@/lib/suppliers';
 import type { DutiesTaxesMaster } from '@/lib/dutiesTaxes';
@@ -57,6 +61,7 @@ interface SalesTallyAcceptance {
   sgstLedger: string;
   igstLedger: string;
   roLedger: string;
+  stock?: Record<string, string>;  // desc → tally_item_name (inventory mode)
 }
 
 function parseSalesAcceptance(inv: StoredInvoice): SalesTallyAcceptance | null {
@@ -71,6 +76,7 @@ function parseSalesAcceptance(inv: StoredInvoice): SalesTallyAcceptance | null {
     sgstLedger:     a.sgstLedger ?? '',
     igstLedger:     a.igstLedger ?? '',
     roLedger:       a.roLedger ?? '',
+    stock:          a.stock ?? undefined,
   };
 }
 
@@ -289,13 +295,19 @@ interface MappingPanelProps {
   companyId: string;
   companyState: string;
   initialAcc: SalesTallyAcceptance | null;
+  historicalSalesLedgers: Record<string, string>;
+  companyWideSalesLedger: string | null;
+  voucherMode: 'accounting_only' | 'inventory';
+  stockItems: StockItemMaster[];
   onSave: (id: string, acc: SalesTallyAcceptance, newSalesLedger?: string) => void;
   onUnmapRequest: () => void;
 }
 
 function MappingPanel({
   inv, customers, suppliers, dutiesTaxes, salesLedgerOptions, pendingSalesLedgers,
-  companyId, companyState, initialAcc, onSave, onUnmapRequest,
+  companyId, companyState, initialAcc, historicalSalesLedgers, companyWideSalesLedger,
+  voucherMode, stockItems,
+  onSave, onUnmapRequest,
 }: MappingPanelProps) {
   const d = deriveInvoiceFinancials(inv);
   const isCgstSgst = inv.tax_type === 'cgst_sgst';
@@ -317,6 +329,15 @@ function MappingPanel({
   const [saving,      setSaving]      = useState(false);
   const [err,         setErr]         = useState<string | null>(null);
 
+  // Inventory mode: per-line-item stock mapping (desc → tally_item_name)
+  const [stockMapping, setStockMapping] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (initialAcc?.stock) Object.assign(initial, initialAcc.stock);
+    return initial;
+  });
+  const [stockFreetext, setStockFreetext] = useState<Record<string, boolean>>({});
+  const [pendingStockItems, setPendingStockItems] = useState<string[]>([]);
+
   // Freetext create state (one per field)
   const [customerFree, setCustomerFree] = useState(false);
   const [salesFree,    setSalesFree]    = useState(false);
@@ -329,15 +350,27 @@ function MappingPanel({
   // Lock state: start locked if already accepted, then user can click "Edit Mapping"
   const [editing, setEditing] = useState(!initialAcc);
 
-  // Auto-fill from preferences on first open
+  // Auto-fill using 4-case hierarchy (mirrors purchase suggestion logic):
+  // Case 1: per-customer learned preferences, Case 2: historical per-customer,
+  // Case 3: company-wide most used, Case 4: first in master list.
   useEffect(() => {
     if (!editing) return;
     getCustomerLedgerPreferences(companyId, inv.buyer_gstin, inv.buyer_name).then((prefs) => {
-      if (prefs.sales && !salesLedger) setSalesLedger(prefs.sales);
-      if (prefs.CGST  && !cgstLedger)  setCgstLedger(prefs.CGST);
-      if (prefs.SGST  && !sgstLedger)  setSgstLedger(prefs.SGST);
-      if (prefs.IGST  && !igstLedger)  setIgstLedger(prefs.IGST);
-      // Fall back to masters
+      if (!salesLedger) {
+        const buyerKey = inv.buyer_gstin
+          ? inv.buyer_gstin
+          : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+        const suggested = (prefs as Record<string, string>).sales    // Case 1: preference
+          || historicalSalesLedgers[buyerKey]                        // Case 2: historical
+          || companyWideSalesLedger                                   // Case 3: company-wide
+          || salesLedgerOptions[0]                                    // Case 4: first in master
+          || '';
+        if (suggested) setSalesLedger(suggested);
+      }
+      if (prefs.CGST && !cgstLedger) setCgstLedger(prefs.CGST);
+      if (prefs.SGST && !sgstLedger) setSgstLedger(prefs.SGST);
+      if (prefs.IGST && !igstLedger) setIgstLedger(prefs.IGST);
+      // Fall back to masters for tax ledgers
       if (isCgstSgst) {
         const cgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'CGST'));
         const sgst = preferOutput(dutiesTaxes.filter((x) => x.tax_component === 'SGST'));
@@ -364,7 +397,10 @@ function MappingPanel({
     if (isBlank(salesLedger)) { setErr('Sales ledger is required'); return; }
     setSaving(true); setErr(null);
     try {
-      const acc: SalesTallyAcceptance = { customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger };
+      const acc: SalesTallyAcceptance = {
+        customerLedger, salesLedger, cgstLedger, sgstLedger, igstLedger, roLedger,
+        ...(voucherMode === 'inventory' && Object.keys(stockMapping).length > 0 ? { stock: stockMapping } : {}),
+      };
       await saveSalesTallyAcceptance(companyId, inv.id, acc as unknown as Record<string, unknown>);
 
       // Customer master
@@ -379,6 +415,21 @@ function MappingPanel({
       // Sales ledger master
       if (!isBlank(salesLedger)) {
         await addSalesLedger(companyId, salesLedger).catch(() => {});
+      }
+      // Stock item masters (inventory mode)
+      if (voucherMode === 'inventory') {
+        for (const [desc, tallyName] of Object.entries(stockMapping)) {
+          if (!isBlank(tallyName) && pendingStockItems.includes(tallyName)) {
+            const lineItem = inv.line_items?.find((li) => (li.description ?? '') === desc);
+            await addStockItem(companyId, {
+              tally_item_name: tallyName,
+              hsn_code: lineItem?.hsn ?? undefined,
+              gst_percent: lineItem?.gst_percent ?? undefined,
+              unit: lineItem?.uom ?? undefined,
+              alias_name: desc !== tallyName ? desc : undefined,
+            }).catch(() => {});
+          }
+        }
       }
       // Tax ledger masters
       const taxWrites: Array<[TaxComponent, string]> = [];
@@ -568,6 +619,62 @@ function MappingPanel({
         )}
       </div>
 
+      {/* Inventory mode: per-line-item stock mapping */}
+      {voucherMode === 'inventory' && inv.line_items && inv.line_items.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">
+            Stock Item Mapping
+            <span className="ml-2 text-gray-400 font-normal">({inv.line_items.length} item{inv.line_items.length !== 1 ? 's' : ''})</span>
+          </div>
+          <div className="space-y-2">
+            {inv.line_items.map((item, idx) => {
+              const desc = item.description ?? '';
+              const key = `${inv.id}_${idx}`;
+              const currentVal = stockMapping[desc] ?? '';
+              const stockOptions = stockItems.map((s) => s.tally_item_name);
+              const allOpts = [...stockOptions, ...pendingStockItems];
+              const isGhost = currentVal !== '' && !allOpts.includes(currentVal);
+              return (
+                <div key={key} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate" title={desc}>{desc || '(no description)'}</div>
+                    <div className="text-[10px] text-gray-400 dark:text-gray-500">HSN: {item.hsn || '—'} · {item.gst_percent ?? 0}% GST · Qty: {item.qty}</div>
+                  </div>
+                  <div className="w-52 flex-shrink-0">
+                    {stockFreetext[key] ? (
+                      <InlineCreateInput
+                        placeholder="New stock item name…"
+                        onConfirm={(v) => {
+                          setStockMapping((prev) => ({ ...prev, [desc]: v }));
+                          setPendingStockItems((p) => p.includes(v) ? p : [...p, v]);
+                          setStockFreetext((p) => ({ ...p, [key]: false }));
+                        }}
+                        onCancel={() => setStockFreetext((p) => ({ ...p, [key]: false }))}
+                      />
+                    ) : (
+                      <select
+                        value={currentVal}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') { setStockFreetext((p) => ({ ...p, [key]: true })); return; }
+                          setStockMapping((prev) => ({ ...prev, [desc]: e.target.value }));
+                        }}
+                        className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-xs bg-white dark:bg-gray-700 dark:text-gray-100"
+                      >
+                        <option value="">— select stock item —</option>
+                        {isGhost && <option value={currentVal}>{currentVal} (current)</option>}
+                        {stockOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                        {pendingStockItems.map((o) => <option key={`p_${o}`} value={o}>{o} (new)</option>)}
+                        <option value="__new__">+ Create new…</option>
+                      </select>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {err && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{err}</p>}
 
       <div className="flex items-center gap-2">
@@ -626,6 +733,104 @@ function StatCard({
   );
 }
 
+// ─── Preview table ────────────────────────────────────────────────────────────
+
+const STATUS_CLS: Record<string, string> = {
+  OK:      'text-green-700 dark:text-green-400',
+  Warning: 'text-amber-600 dark:text-amber-400',
+  Skipped: 'text-red-500 dark:text-red-400',
+};
+
+function SalesPreviewTable({ rows, onClose, onDownload }: { rows: SalesPreviewRow[]; onClose: () => void; onDownload: () => void }) {
+  const ok      = rows.filter((r) => r.status === 'OK').length;
+  const warned  = rows.filter((r) => r.status === 'Warning').length;
+  const skipped = rows.filter((r) => r.status === 'Skipped').length;
+  return (
+    <div className="mt-6 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">Export Preview</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{rows.length} rows · {ok} OK · {warned} warnings · {skipped} skipped</span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onDownload}
+            className="px-3 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          >
+            Download Excel
+          </button>
+          <button
+            onClick={onClose}
+            className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+          >
+            Close ✕
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+            <tr className="border-b border-gray-200 dark:border-gray-700">
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Invoice #</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Date</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Customer</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Type</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Tally Ledger</th>
+              <th className="text-right px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Amount</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Status</th>
+              <th className="text-left px-3 py-2 text-gray-500 dark:text-gray-400 font-semibold">Note</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {rows.map((r, i) => (
+              <tr key={i} className={`${r.status === 'Skipped' ? 'opacity-50' : ''} hover:bg-gray-50 dark:hover:bg-gray-800/50`}>
+                <td className="px-3 py-1.5 font-mono text-gray-700 dark:text-gray-300">{r.invoice_number}</td>
+                <td className="px-3 py-1.5 text-gray-500 dark:text-gray-400 tabular-nums">{r.invoice_date}</td>
+                <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300 max-w-[120px] truncate" title={r.buyer_name}>{r.buyer_name || '—'}</td>
+                <td className="px-3 py-1.5">
+                  <span className={`inline-block px-1.5 py-0.5 rounded font-medium ${BADGE[r.ledger_type] ?? 'bg-gray-100 text-gray-600'}`}>
+                    {r.ledger_type}
+                  </span>
+                </td>
+                <td className="px-3 py-1.5 font-mono text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={r.tally_ledger_name}>{r.tally_ledger_name}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums font-mono ${r.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                  {r.amount >= 0 ? '+' : ''}{r.amount.toFixed(2)}
+                </td>
+                <td className={`px-3 py-1.5 font-medium ${STATUS_CLS[r.status] ?? 'text-gray-500'}`}>{r.status}</td>
+                <td className="px-3 py-1.5 text-gray-400 dark:text-gray-500 max-w-[200px] truncate" title={r.skip_reason ?? r.warning ?? ''}>
+                  {r.skip_reason ?? r.warning ?? ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function downloadPreviewExcel(rows: SalesPreviewRow[], fy: string) {
+  const wsData = [
+    ['Invoice No', 'Date', 'Customer (as on invoice)', 'Party Ledger', 'Entry Type', 'Tally Ledger Name', 'Amount (Dr+/Cr-)', 'Status', 'Notes'],
+    ...rows.map((r) => [
+      r.invoice_number, r.invoice_date, r.buyer_name, r.party_ledger,
+      r.ledger_type, r.tally_ledger_name, r.amount, r.status,
+      r.skip_reason ?? r.warning ?? '',
+    ]),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 35 }, { wch: 16 }, { wch: 8 }, { wch: 40 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sales Preview');
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `sales_export_preview_${fy}.xlsx`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function SalesXmlPage() {
@@ -637,9 +842,12 @@ export default function SalesXmlPage() {
   const [customers,          setCustomers]           = useState<CustomerMaster[]>([]);
   const [suppliers,          setSuppliers]           = useState<SupplierMaster[]>([]);
   const [dutiesTaxes,        setDutiesTaxes]         = useState<DutiesTaxesMaster[]>([]);
+  const [stockItems,         setStockItems]          = useState<StockItemMaster[]>([]);
   const [tallyCompanyName,   setTallyCompanyName]    = useState('');
   const [companyGstin,       setCompanyGstin]        = useState('');
   const [companyState,       setCompanyState]        = useState('');
+  const [voucherMode,        setVoucherMode]         = useState<'accounting_only' | 'inventory'>('accounting_only');
+  const [stockItemMode,      setStockItemMode]       = useState<'hsn_driven' | null>(null);
   const [loading,            setLoading]             = useState(true);
   const [bulkMapping,        setBulkMapping]         = useState(false);
   const [bulkSaving,         setBulkSaving]          = useState(false);
@@ -654,6 +862,9 @@ export default function SalesXmlPage() {
   const [search,             setSearch]              = useState('');
   const [selectedInvoices,   setSelectedInvoices]    = useState<Set<string>>(new Set());
   const [editingInvoice,     setEditingInvoice]      = useState<StoredInvoice | null>(null);
+  const [previewRows,        setPreviewRows]         = useState<SalesPreviewRow[] | null>(null);
+  const [historicalSalesLedgers,    setHistoricalSalesLedgers]    = useState<Record<string, string>>({});
+  const [companyWideSalesLedger,    setCompanyWideSalesLedger]    = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -662,21 +873,25 @@ export default function SalesXmlPage() {
       if (!session) { router.push('/login'); return; }
       if (!company) { router.push('/select-company'); return; }
       try {
-        const [invData, custData, suppData, dtData, comp, importedSalesLedgers] = await Promise.all([
+        const [invData, custData, suppData, dtData, comp, importedSalesLedgers, stockData] = await Promise.all([
           getSalesRegister(company.id, { financialYear: fy }),
           loadCustomers(company.id),
           loadSuppliers(company.id),
           loadDutiesTaxes(company.id),
           getCompany(company.id),
           loadSalesLedgers(company.id),
+          loadStockItems(company.id),
         ]);
         setInvoices(invData);
         setCustomers(custData);
         setSuppliers(suppData);
         setDutiesTaxes(dtData);
+        setStockItems(stockData);
         setTallyCompanyName(comp.tally_company_name ?? comp.name);
         setCompanyGstin(comp.gstin ?? '');
         setCompanyState(comp.state_name ?? '');
+        setVoucherMode(comp.voucher_mode === 'inventory' ? 'inventory' : 'accounting_only');
+        setStockItemMode(comp.stock_item_mode ?? null);
 
         const ledgerSet = new Set<string>(importedSalesLedgers.map((l) => l.tally_ledger_name));
         for (const inv of invData) {
@@ -692,6 +907,28 @@ export default function SalesXmlPage() {
           if (acc) map[inv.id] = acc;
         }
         setAcceptedMap(map);
+
+        // Load historical and company-wide sales ledger suggestions (async, non-blocking)
+        const masterNames = importedSalesLedgers.map((l) => l.tally_ledger_name);
+        const uniqueKeys: Record<string, true> = {};
+        for (const inv of invData) {
+          const k = inv.buyer_gstin ? inv.buyer_gstin : `name:${(inv.buyer_name ?? '').toLowerCase().trim()}`;
+          if (k) uniqueKeys[k] = true;
+        }
+        const [historicalEntries, companyWide] = await Promise.all([
+          Promise.all(
+            Object.keys(uniqueKeys).map(async (key) => {
+              const isGstin = !key.startsWith('name:');
+              const result = await getHistoricalSalesLedger(company.id, isGstin ? key : null, isGstin ? null : key.slice(5));
+              return [key, result] as [string, string | null];
+            })
+          ),
+          masterNames.length > 0 ? getCompanyWideMostUsedSalesLedger(company.id, masterNames) : Promise.resolve(null),
+        ]);
+        const histMap: Record<string, string> = {};
+        for (const [key, val] of historicalEntries) { if (val) histMap[key] = val; }
+        setHistoricalSalesLedgers(histMap);
+        setCompanyWideSalesLedger(companyWide);
       } catch (e) {
         setError(getErrMsg(e));
       } finally {
@@ -731,19 +968,34 @@ export default function SalesXmlPage() {
   };
 
   // Auto-map all unmapped invoices using preferences + masters
+  // 4-case sales ledger suggestion hierarchy (mirrors purchase 4-case logic):
+  // Case 1: per-customer learned preferences (customerLedgerPreferences)
+  // Case 2: per-customer historical from accepted invoices (getHistoricalSalesLedger)
+  // Case 3: company-wide most used (getCompanyWideMostUsedSalesLedger)
+  // Case 4: first in master list (bootstrap default)
+  const resolveSalesLedger = (prefs: Record<string, string>, buyerGstin: string | null, buyerName: string | null): string => {
+    const buyerKey = buyerGstin ? buyerGstin : `name:${(buyerName ?? '').toLowerCase().trim()}`;
+    return prefs.sales                          // Case 1: per-customer preference
+      || historicalSalesLedgers[buyerKey]       // Case 2: historical per-customer
+      || companyWideSalesLedger                 // Case 3: company-wide most used
+      || salesLedgerOptions[0]                  // Case 4: first in master list
+      || '';
+  };
+
   const handleAutoMapAll = async () => {
     if (!company || invoices.length === 0) return;
     setBulkMapping(true);
     setError(null);
     let mapped = 0;
+    let skipped = 0;
     try {
       for (const inv of invoices) {
         if (acceptedMap[inv.id]) continue;
         const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
         const resolved = resolveCustomerLedger(inv, customers, suppliers);
         const custLedger = resolved || inv.buyer_name || '';
-        const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
-        if (!salesL) continue;
+        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
+        if (!salesL) { skipped++; continue; }
 
         let cgstL = (prefs as Record<string, string>).CGST || '';
         let sgstL = (prefs as Record<string, string>).SGST || '';
@@ -752,12 +1004,30 @@ export default function SalesXmlPage() {
         if (!sgstL) sgstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'SGST'))?.tally_ledger_name ?? '';
         if (!igstL) igstL = preferOutput(dutiesTaxes.filter((d) => d.tax_component === 'IGST'))?.tally_ledger_name ?? '';
 
-        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '' };
+        // Auto-map stock items for inventory mode
+        let stock: Record<string, string> | undefined;
+        if (voucherMode === 'inventory' && inv.line_items?.length) {
+          stock = {};
+          for (const item of inv.line_items) {
+            const desc = item.description ?? '';
+            const si = stockItems.find((s) => {
+              const q = desc.toLowerCase().trim();
+              return (s.alias_name && s.alias_name.toLowerCase().trim() === q) || s.tally_item_name.toLowerCase().trim() === q;
+            }) ?? stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === (item.hsn ?? '').replace(/[\s.]/g, '') && s.gst_percent === item.gst_percent);
+            if (si && desc) stock[desc] = si.tally_item_name;
+          }
+          if (Object.keys(stock).length === 0) stock = undefined;
+        }
+        const acc: SalesTallyAcceptance = { customerLedger: custLedger, salesLedger: salesL, cgstLedger: cgstL, sgstLedger: sgstL, igstLedger: igstL, roLedger: '', ...(stock ? { stock } : {}) };
         await saveSalesTallyAcceptance(company.id, inv.id, acc as unknown as Record<string, unknown>).catch(() => {});
         setAcceptedMap((prev) => ({ ...prev, [inv.id]: acc }));
         mapped++;
       }
-      setExportMsg(`✓ Auto-mapped ${mapped} invoices.`);
+      setExportMsg(
+        skipped > 0
+          ? `✓ Auto-mapped ${mapped} invoices. ${skipped} skipped — add a Sales Ledger in Masters first.`
+          : `✓ Auto-mapped ${mapped} invoices.`
+      );
     } catch (e) {
       setError(getErrMsg(e));
     } finally {
@@ -765,20 +1035,21 @@ export default function SalesXmlPage() {
     }
   };
 
-  // Bulk accept selected (uses same auto-map logic but only for selected)
+  // Bulk accept selected (uses same 4-case hierarchy as auto-map)
   const handleBulkAcceptSelected = async () => {
     if (!company || selectedInvoices.size === 0) return;
     setBulkSaving(true);
     setError(null);
     let mapped = 0;
+    let skipped = 0;
     try {
       const toMap = invoices.filter((inv) => selectedInvoices.has(inv.id) && !acceptedMap[inv.id]);
       for (const inv of toMap) {
         const prefs = await getCustomerLedgerPreferences(company.id, inv.buyer_gstin, inv.buyer_name).catch(() => ({} as Record<string, string>));
         const resolved = resolveCustomerLedger(inv, customers, suppliers);
         const custLedger = resolved || inv.buyer_name || '';
-        const salesL = (prefs as Record<string, string>).sales || salesLedgerOptions[0] || '';
-        if (!salesL) continue;
+        const salesL = resolveSalesLedger(prefs as Record<string, string>, inv.buyer_gstin, inv.buyer_name);
+        if (!salesL) { skipped++; continue; }
 
         let cgstL = (prefs as Record<string, string>).CGST || '';
         let sgstL = (prefs as Record<string, string>).SGST || '';
@@ -793,7 +1064,8 @@ export default function SalesXmlPage() {
         mapped++;
       }
       setSelectedInvoices(new Set());
-      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoices.`);
+      if (skipped > 0) setError(`${skipped} invoice${skipped === 1 ? '' : 's'} could not be mapped — no Sales Ledger available. Add one in Masters → Sales Ledgers.`);
+      if (mapped > 0) setExportMsg(`✓ Accepted ${mapped} invoice${mapped === 1 ? '' : 's'}.`);
     } catch (e) {
       setError(getErrMsg(e));
     } finally {
@@ -876,7 +1148,7 @@ export default function SalesXmlPage() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesVouchersXml({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const xml = generateSalesVouchersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       downloadXmlFile(xml, `sales_vouchers_${fy}.xml`);
       setExportMsg(`✓ Exported ${mappedInvoices.length} vouchers.`);
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
@@ -888,10 +1160,25 @@ export default function SalesXmlPage() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
-      const xml = generateSalesMastersXml({ invoices: enriched, customers, dutiesTaxes, stockItems: [], expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin });
+      const xml = generateSalesMastersXml({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
       downloadXmlFile(xml, `sales_masters_${fy}.xml`);
       setExportMsg('✓ Masters XML downloaded.');
     } catch (e) { setExportMsg(`Export failed: ${getErrMsg(e)}`); }
+  };
+
+  const handlePreview = () => {
+    if (!mappedInvoices.length) { setExportMsg('No accepted invoices to preview.'); return; }
+    setExportMsg(null);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const enriched = mappedInvoices.map((inv) => ({ ...inv, tally_ledger_acceptance: acceptedMap[inv.id] as unknown as any })) as StoredInvoice[];
+      const rows = buildSalesPreview({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
+      setPreviewRows(rows);
+      const { includedCount, skippedInvoices } = generateSalesVouchers({ invoices: enriched, customers, dutiesTaxes, stockItems, expenseLedgers: [], tallyCompanyName, financialYear: fy, companyGstin, voucherMode, stockItemMode: stockItemMode ?? undefined });
+      if (skippedInvoices.length > 0) {
+        setExportMsg(`Preview: ${includedCount} vouchers ready · ${skippedInvoices.length} will be skipped`);
+      }
+    } catch (e) { setExportMsg(`Preview failed: ${getErrMsg(e)}`); }
   };
 
   return (
@@ -950,6 +1237,13 @@ export default function SalesXmlPage() {
               className="px-4 py-2 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {bulkMapping ? 'Mapping…' : `Auto-Map ${unmappedCount} Remaining`}
+            </button>
+            <button
+              onClick={handlePreview}
+              disabled={mappedCount === 0}
+              className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Export Preview
             </button>
             <button
               onClick={handleExportMasters}
@@ -1153,6 +1447,10 @@ export default function SalesXmlPage() {
                       companyId={company!.id}
                       companyState={companyState}
                       initialAcc={acc ?? null}
+                      historicalSalesLedgers={historicalSalesLedgers}
+                      companyWideSalesLedger={companyWideSalesLedger}
+                      voucherMode={voucherMode}
+                      stockItems={stockItems}
                       onSave={handleSave}
                       onUnmapRequest={() => handleUnmap(inv.id)}
                     />
@@ -1175,6 +1473,16 @@ export default function SalesXmlPage() {
           </div>
         )}
       </div>
+
+      {previewRows && (
+        <div className="max-w-7xl mx-auto px-4 pb-8">
+          <SalesPreviewTable
+            rows={previewRows}
+            onClose={() => setPreviewRows(null)}
+            onDownload={() => downloadPreviewExcel(previewRows, fy)}
+          />
+        </div>
+      )}
 
       {editingInvoice && (
         <InvoiceEditPanel

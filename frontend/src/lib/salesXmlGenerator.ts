@@ -16,9 +16,11 @@ import type { CustomerMaster } from './customers';
 import type { DutiesTaxesMaster } from './dutiesTaxes';
 import type { StockItemMaster } from './stockItems';
 import type { ExpenseLedgerMaster } from './expenseLedgers';
-import { calcLineAmount } from '@/types/invoice';
+import { calcLineAmount, buildFullTaxSummary } from '@/types/invoice';
 import { deriveInvoiceFinancials } from './invoiceCalculations';
 import { isPooledLedger } from './partyKey';
+import { resolveUom, getCanonical } from './uomRegistry';
+import { suggestStockItem } from './xmlGenerator';
 
 const GSTIN_STATE_FULL: Record<string, string> = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
@@ -108,26 +110,6 @@ function findOutputTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string
   return (output ?? consolidated[0]).tally_ledger_name;
 }
 
-interface HsnRow { hsn: string; gst_percent: number; taxable: number; cgst: number; sgst: number; igst: number; }
-
-function buildHsnRows(items: LineItem[], taxType: 'cgst_sgst' | 'igst', billDiscount: number): HsnRow[] {
-  const map: Record<string, HsnRow> = {};
-  for (const item of items) {
-    const hsn = (item.hsn || '').replace(/[\s.]/g, '') || '-';
-    const key = `${hsn}__${item.gst_percent}`;
-    if (!map[key]) map[key] = { hsn, gst_percent: item.gst_percent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
-    map[key].taxable += calcLineAmount(item);
-  }
-  const rows = Object.values(map);
-  const totalTaxable = rows.reduce((s, r) => s + r.taxable, 0);
-  for (const row of rows) {
-    if (billDiscount > 0 && totalTaxable > 0) row.taxable -= billDiscount * (row.taxable / totalTaxable);
-    const tax = row.taxable * row.gst_percent / 100;
-    if (taxType === 'cgst_sgst') { row.cgst = tax / 2; row.sgst = tax / 2; }
-    else { row.igst = tax; }
-  }
-  return rows;
-}
 
 // ─── Accounting-only voucher ──────────────────────────────────────────────────
 
@@ -156,47 +138,56 @@ function wrapSalesVoucher(inv: StoredInvoice, partyLedger: string, ledgerXml: st
 function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
   const d = deriveInvoiceFinancials(inv);
-  const customer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
-  const partyLedger = customer?.tally_ledger_name ?? (inv.buyer_name ?? '');
-  if (!partyLedger) return { xml: null, skip: 'No customer ledger and no customer name', warnings };
-  if (!customer) warnings.push(`Customer "${inv.buyer_name}" not in master - using customer name as ledger`);
+  const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
 
-  // Sales ledger comes from the per-invoice tally_ledger_acceptance (key: salesLedger)
-  const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
-  const salesLedger = (acc?.salesLedger as string) ?? '';
+  // Party ledger: acceptance takes precedence; fall back to master resolution then raw name.
+  const accCustomer = acc?.customerLedger?.trim() ?? '';
+  const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+  const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+  if (!partyLedger) return { xml: null, skip: 'No customer ledger and no customer name', warnings };
+  if (!accCustomer && !resolvedCustomer) warnings.push(`Customer "${inv.buyer_name}" not in master - using customer name as ledger`);
+
+  // Sales ledger: must come from per-invoice acceptance.
+  const salesLedger = acc?.salesLedger?.trim() ?? '';
   if (!salesLedger) return { xml: null, skip: `No sales ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
 
-  const hsnRows = buildHsnRows(inv.line_items, inv.tax_type, inv.bill_discount_amount ?? 0);
+  // HSN rows from shared canonical engine (same values as DB and UI).
+  const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, inv.tax_type, inv.bill_discount_amount ?? 0);
 
   const entries: string[] = [];
 
-  // 1. Customer ledger: DEBIT (positive) = customer owes us
+  // 1. Customer ledger: DEBIT (positive) — customer owes us.
   entries.push(ledgerEntry(partyLedger, 'Yes', d.total));
 
-  // 2. Sales ledger: CREDIT (negative) per HSN taxable
+  // 2. Sales ledger: CREDIT (negative) split by HSN group taxable.
   for (const row of hsnRows) {
-    entries.push(ledgerEntry(salesLedger, 'No', -row.taxable));
+    if (Math.abs(row.taxable) > 0.001) {
+      entries.push(ledgerEntry(salesLedger, 'No', -row.taxable));
+    }
   }
 
-  // 3. Output tax ledgers: CREDIT (negative)
-  const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+  // 3. Output tax ledgers: CREDIT (negative).
+  //    Use per-invoice accepted ledger names when set; fall back to master resolution.
   if (inv.tax_type === 'cgst_sgst') {
-    if (d.cgst > 0) {
-      const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
-      const l = findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
-      if (!l) return { xml: null, skip: 'No CGST ledger configured in Duties & Taxes master', warnings };
+    if (Math.abs(d.cgst) > 0.001) {
+      const l = acc?.cgstLedger?.trim()
+        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', Math.round(d.cgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
+      if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
       entries.push(ledgerEntry(l, 'No', -d.cgst));
     }
-    if (d.sgst > 0) {
-      const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
-      const l = findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
-      if (!l) return { xml: null, skip: 'No SGST ledger configured in Duties & Taxes master', warnings };
+    if (Math.abs(d.sgst) > 0.001) {
+      const l = acc?.sgstLedger?.trim()
+        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', Math.round(d.sgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
+      if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
       entries.push(ledgerEntry(l, 'No', -d.sgst));
     }
-  } else if (d.igst > 0) {
-    const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
-    const l = findOutputTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
-    if (!l) return { xml: null, skip: 'No IGST ledger configured in Duties & Taxes master', warnings };
+  } else if (Math.abs(d.igst) > 0.001) {
+    const l = acc?.igstLedger?.trim()
+      || findOutputTaxLedger(input.dutiesTaxes, 'IGST', Math.round(d.igst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+      || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
+    if (!l) return { xml: null, skip: 'No IGST ledger configured', warnings };
     entries.push(ledgerEntry(l, 'No', -d.igst));
   }
 
@@ -215,15 +206,655 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
     }
   }
 
-  // 5. Round-off
-  if (d.round_off && Math.abs(d.round_off) > 0.001) {
-    const el = input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'));
-    const roLedger = el?.tally_ledger_name ?? 'Round Off';
-    // round_off > 0 increases customer total → credit side balances with debit on customer.
+  // 5. Round-off: use accepted roLedger, then expense master, then default.
+  if (Math.abs(d.round_off) > 0.001) {
+    const roLedger = acc?.roLedger?.trim()
+      || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+      || 'Round Off';
     entries.push(ledgerEntry(roLedger, d.round_off > 0 ? 'No' : 'Yes', -d.round_off));
   }
 
   return { xml: wrapSalesVoucher(inv, partyLedger, entries.join('')), warnings };
+}
+
+// ─── Inventory-mode helpers ───────────────────────────────────────────────────
+
+function generateGuid(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function findSalesStockItem(
+  stockItems: StockItemMaster[],
+  description: string,
+  hsn?: string,
+  gstRate?: number,
+  mode?: 'hsn_driven' | null,
+): StockItemMaster | null {
+  if (mode === 'hsn_driven') {
+    if (!hsn) return null;
+    const cleanHsn = hsn.replace(/[\s.]/g, '');
+    if (gstRate != null) {
+      const byHsn = stockItems.find(
+        (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === gstRate,
+      );
+      if (byHsn) return byHsn;
+    }
+    return stockItems.find((s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn) ?? null;
+  }
+  const q = norm(description);
+  const byAlias = stockItems.find((s) => s.alias_name && norm(s.alias_name) === q);
+  if (byAlias) return byAlias;
+  const byName = stockItems.find((s) => norm(s.tally_item_name) === q);
+  if (byName) return byName;
+  const partialAlias = stockItems.find(
+    (s) => s.alias_name && (norm(s.alias_name).includes(q) || q.includes(norm(s.alias_name))),
+  );
+  if (partialAlias) return partialAlias;
+  const fuzzy = suggestStockItem(stockItems, description);
+  if (fuzzy) return fuzzy;
+  if (hsn && gstRate != null) {
+    const cleanHsn = hsn.replace(/[\s.]/g, '');
+    const byHsn = stockItems.find(
+      (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn && s.gst_percent === gstRate,
+    );
+    if (byHsn) return byHsn;
+    const byHsnOnly = stockItems.find(
+      (s) => s.hsn_code && s.hsn_code.replace(/[\s.]/g, '') === cleanHsn,
+    );
+    if (byHsnOnly) return byHsnOnly;
+  }
+  return null;
+}
+
+/** LEDGERENTRIES.LIST block for sales inventory mode — mirrors invLedgerEntry from xmlGenerator.ts */
+function invSalesLedgerEntry(opts: {
+  ledgerName: string;
+  isdeemedpositive: 'Yes' | 'No';
+  isPartyledger: 'Yes' | 'No';
+  islastdeemedpositive: 'Yes' | 'No';
+  amount: number;
+  billRefName?: string;
+  rateOfInvoiceTax?: number;
+}): string {
+  const rateBlock = opts.rateOfInvoiceTax != null
+    ? `\n        <RATEOFINVOICETAX.LIST TYPE="Number">\n          <RATEOFINVOICETAX> ${opts.rateOfInvoiceTax}</RATEOFINVOICETAX>\n        </RATEOFINVOICETAX.LIST>`
+    : '';
+  const billAlloc = opts.billRefName
+    ? `\n        <BILLALLOCATIONS.LIST>\n          <NAME>${esc(opts.billRefName)}</NAME>\n          <BILLTYPE>New Ref</BILLTYPE>\n          <TDSDEDUCTEEISSPECIALRATE>No</TDSDEDUCTEEISSPECIALRATE>\n          <AMOUNT>${fmt2(opts.amount)}</AMOUNT>\n          <INTERESTCOLLECTION.LIST> </INTERESTCOLLECTION.LIST>\n          <STBILLCATEGORIES.LIST> </STBILLCATEGORIES.LIST>\n        </BILLALLOCATIONS.LIST>`
+    : `\n        <BILLALLOCATIONS.LIST> </BILLALLOCATIONS.LIST>`;
+  return (
+    `\n      <LEDGERENTRIES.LIST>` +
+    `\n        <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>` +
+    rateBlock +
+    `\n        <LEDGERNAME>${esc(opts.ledgerName)}</LEDGERNAME>` +
+    `\n        <GSTCLASS> Not Applicable</GSTCLASS>` +
+    `\n        <ISDEEMEDPOSITIVE>${opts.isdeemedpositive}</ISDEEMEDPOSITIVE>` +
+    `\n        <LEDGERFROMITEM>No</LEDGERFROMITEM>` +
+    `\n        <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>` +
+    `\n        <ISPARTYLEDGER>${opts.isPartyledger}</ISPARTYLEDGER>` +
+    `\n        <GSTOVERRIDDEN>No</GSTOVERRIDDEN>` +
+    `\n        <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>` +
+    `\n        <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>` +
+    `\n        <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>` +
+    `\n        <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>` +
+    `\n        <CONTENTNEGISPOS>No</CONTENTNEGISPOS>` +
+    `\n        <ISLASTDEEMEDPOSITIVE>${opts.islastdeemedpositive}</ISLASTDEEMEDPOSITIVE>` +
+    `\n        <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>` +
+    `\n        <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>` +
+    `\n        <AMOUNT>${fmt2(opts.amount)}</AMOUNT>` +
+    billAlloc +
+    `\n        <SERVICETAXDETAILS.LIST> </SERVICETAXDETAILS.LIST>` +
+    `\n        <BANKALLOCATIONS.LIST> </BANKALLOCATIONS.LIST>` +
+    `\n        <INTERESTCOLLECTION.LIST> </INTERESTCOLLECTION.LIST>` +
+    `\n        <OLDAUDITENTRIES.LIST> </OLDAUDITENTRIES.LIST>` +
+    `\n        <ACCOUNTAUDITENTRIES.LIST> </ACCOUNTAUDITENTRIES.LIST>` +
+    `\n        <AUDITENTRIES.LIST> </AUDITENTRIES.LIST>` +
+    `\n        <INPUTCRALLOCS.LIST> </INPUTCRALLOCS.LIST>` +
+    `\n        <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>` +
+    `\n        <EXCISEDUTYHEADDETAILS.LIST> </EXCISEDUTYHEADDETAILS.LIST>` +
+    `\n        <RATEDETAILS.LIST> </RATEDETAILS.LIST>` +
+    `\n        <SUMMARYALLOCS.LIST> </SUMMARYALLOCS.LIST>` +
+    `\n        <CENVATDUTYALLOCATIONS.LIST> </CENVATDUTYALLOCATIONS.LIST>` +
+    `\n        <STPYMTDETAILS.LIST> </STPYMTDETAILS.LIST>` +
+    `\n        <EXCISEPAYMENTALLOCATIONS.LIST> </EXCISEPAYMENTALLOCATIONS.LIST>` +
+    `\n        <TAXBILLALLOCATIONS.LIST> </TAXBILLALLOCATIONS.LIST>` +
+    `\n        <TAXOBJECTALLOCATIONS.LIST> </TAXOBJECTALLOCATIONS.LIST>` +
+    `\n        <TDSEXPENSEALLOCATIONS.LIST> </TDSEXPENSEALLOCATIONS.LIST>` +
+    `\n        <VATSTATUTORYDETAILS.LIST> </VATSTATUTORYDETAILS.LIST>` +
+    `\n        <COSTTRACKALLOCATIONS.LIST> </COSTTRACKALLOCATIONS.LIST>` +
+    `\n        <REFVOUCHERDETAILS.LIST> </REFVOUCHERDETAILS.LIST>` +
+    `\n        <INVOICEWISEDETAILS.LIST> </INVOICEWISEDETAILS.LIST>` +
+    `\n        <VATITCDETAILS.LIST> </VATITCDETAILS.LIST>` +
+    `\n        <ADVANCETAXDETAILS.LIST> </ADVANCETAXDETAILS.LIST>` +
+    `\n        <TAXTYPEALLOCATIONS.LIST> </TAXTYPEALLOCATIONS.LIST>` +
+    `\n      </LEDGERENTRIES.LIST>`
+  );
+}
+
+/** Simpler LEDGERENTRIES.LIST for income/charge ledgers in sales inventory mode */
+function invSalesIncomeLedgerEntry(ledgerName: string, amount: number): string {
+  return (
+    `\n      <LEDGERENTRIES.LIST>` +
+    `\n        <LEDGERNAME>${esc(ledgerName)}</LEDGERNAME>` +
+    `\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>` +
+    `\n        <ISPARTYLEDGER>No</ISPARTYLEDGER>` +
+    `\n        <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>` +
+    `\n        <AMOUNT>${fmt2(amount)}</AMOUNT>` +
+    `\n        <BILLALLOCATIONS.LIST> </BILLALLOCATIONS.LIST>` +
+    `\n        <SERVICETAXDETAILS.LIST> </SERVICETAXDETAILS.LIST>` +
+    `\n        <BANKALLOCATIONS.LIST> </BANKALLOCATIONS.LIST>` +
+    `\n        <OLDAUDITENTRIES.LIST> </OLDAUDITENTRIES.LIST>` +
+    `\n        <ACCOUNTAUDITENTRIES.LIST> </ACCOUNTAUDITENTRIES.LIST>` +
+    `\n        <AUDITENTRIES.LIST> </AUDITENTRIES.LIST>` +
+    `\n        <INPUTCRALLOCS.LIST> </INPUTCRALLOCS.LIST>` +
+    `\n        <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>` +
+    `\n        <EXCISEPAYMENTALLOCATIONS.LIST> </EXCISEPAYMENTALLOCATIONS.LIST>` +
+    `\n        <TAXOBJECTALLOCATIONS.LIST> </TAXOBJECTALLOCATIONS.LIST>` +
+    `\n        <TDSEXPENSEALLOCATIONS.LIST> </TDSEXPENSEALLOCATIONS.LIST>` +
+    `\n        <VATSTATUTORYDETAILS.LIST> </VATSTATUTORYDETAILS.LIST>` +
+    `\n        <COSTTRACKALLOCATIONS.LIST> </COSTTRACKALLOCATIONS.LIST>` +
+    `\n        <REFVOUCHERDETAILS.LIST> </REFVOUCHERDETAILS.LIST>` +
+    `\n        <INVOICEWISEDETAILS.LIST> </INVOICEWISEDETAILS.LIST>` +
+    `\n        <VATITCDETAILS.LIST> </VATITCDETAILS.LIST>` +
+    `\n        <ADVANCETAXDETAILS.LIST> </ADVANCETAXDETAILS.LIST>` +
+    `\n      </LEDGERENTRIES.LIST>`
+  );
+}
+
+/** ALLINVENTORYENTRIES.LIST for one sales line item — stock OUT */
+function buildSalesAllInventoryEntry(
+  stockItem: StockItemMaster,
+  item: LineItem,
+  salesLedger: string,
+): string {
+  const itemNet = calcLineAmount(item);
+  const uom = resolveUom(stockItem.unit, item.uom);
+  // Sales: stock goes OUT. Positive amount, ISDEEMEDPOSITIVE=No (opposite of purchase).
+  const posAmt = itemNet;
+  const discLine = item.disc_percent > 0 ? `\n        <DISCOUNT> ${fmt2(item.disc_percent)}</DISCOUNT>` : '';
+  const hsnCode = item.hsn ? item.hsn.replace(/[\s.]/g, '') : '';
+  const hsnBlock = hsnCode
+    ? `\n        <GSTHSNNAME>${esc(hsnCode)}</GSTHSNNAME>\n        <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>`
+    : '';
+  const gstRate = item.gst_percent ?? 0;
+  const halfRate = gstRate / 2;
+
+  return (
+    `\n      <ALLINVENTORYENTRIES.LIST>` +
+    `\n        <STOCKITEMNAME>${esc(stockItem.tally_item_name)}</STOCKITEMNAME>` +
+    `\n        <GSTOVRDNINELIGIBLEITC> Not Applicable</GSTOVRDNINELIGIBLEITC>` +
+    `\n        <GSTOVRDNISREVCHARGEAPPL> Not Applicable</GSTOVRDNISREVCHARGEAPPL>` +
+    `\n        <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>` +
+    `\n        <GSTSOURCETYPE>Stock Item</GSTSOURCETYPE>` +
+    `\n        <GSTITEMSOURCE>${esc(stockItem.tally_item_name)}</GSTITEMSOURCE>` +
+    `\n        <HSNSOURCETYPE>Stock Item</HSNSOURCETYPE>` +
+    `\n        <HSNITEMSOURCE>${esc(stockItem.tally_item_name)}</HSNITEMSOURCE>` +
+    `\n        <GSTOVRDNSTOREDNATURE/>` +
+    `\n        <GSTOVRDNTYPEOFSUPPLY>Goods</GSTOVRDNTYPEOFSUPPLY>` +
+    `\n        <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>` +
+    hsnBlock +
+    `\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>` +
+    `\n        <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>` +
+    `\n        <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>` +
+    `\n        <CONTENTNEGISPOS>No</CONTENTNEGISPOS>` +
+    `\n        <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>` +
+    `\n        <ISAUTONEGATE>No</ISAUTONEGATE>` +
+    `\n        <ISCUSTOMSCLEARANCE>No</ISCUSTOMSCLEARANCE>` +
+    `\n        <ISTRACKCOMPONENT>No</ISTRACKCOMPONENT>` +
+    `\n        <ISTRACKPRODUCTION>No</ISTRACKPRODUCTION>` +
+    `\n        <ISPRIMARYITEM>No</ISPRIMARYITEM>` +
+    `\n        <ISSCRAP>No</ISSCRAP>` +
+    `\n        <RATE>${fmt2(Math.abs(item.rate))}/${esc(uom)}</RATE>` +
+    discLine +
+    `\n        <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
+    `\n        <ACTUALQTY> ${fmt2(item.qty)} ${esc(uom)}</ACTUALQTY>` +
+    `\n        <BILLEDQTY> ${fmt2(item.qty)} ${esc(uom)}</BILLEDQTY>` +
+    `\n        <BATCHALLOCATIONS.LIST>` +
+    `\n          <GODOWNNAME>Main Location</GODOWNNAME>` +
+    `\n          <BATCHNAME>Primary Batch</BATCHNAME>` +
+    `\n          <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>` +
+    `\n          <INDENTNO> Not Applicable</INDENTNO>` +
+    `\n          <ORDERNO> Not Applicable</ORDERNO>` +
+    `\n          <TRACKINGNUMBER> Not Applicable</TRACKINGNUMBER>` +
+    `\n          <DYNAMICCSTISCLEARED>No</DYNAMICCSTISCLEARED>` +
+    `\n          <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
+    `\n          <ACTUALQTY> ${fmt2(item.qty)} ${esc(uom)}</ACTUALQTY>` +
+    `\n          <BILLEDQTY> ${fmt2(item.qty)} ${esc(uom)}</BILLEDQTY>` +
+    `\n          <ADDITIONALDETAILS.LIST> </ADDITIONALDETAILS.LIST>` +
+    `\n          <VOUCHERCOMPONENTLIST.LIST> </VOUCHERCOMPONENTLIST.LIST>` +
+    `\n        </BATCHALLOCATIONS.LIST>` +
+    `\n        <ACCOUNTINGALLOCATIONS.LIST>` +
+    `\n          <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>` +
+    `\n          <LEDGERNAME>${esc(salesLedger)}</LEDGERNAME>` +
+    `\n          <GSTCLASS> Not Applicable</GSTCLASS>` +
+    `\n          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>` +
+    `\n          <LEDGERFROMITEM>No</LEDGERFROMITEM>` +
+    `\n          <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>` +
+    `\n          <ISPARTYLEDGER>No</ISPARTYLEDGER>` +
+    `\n          <GSTOVERRIDDEN>No</GSTOVERRIDDEN>` +
+    `\n          <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>` +
+    `\n          <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>` +
+    `\n          <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>` +
+    `\n          <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>` +
+    `\n          <CONTENTNEGISPOS>No</CONTENTNEGISPOS>` +
+    `\n          <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>` +
+    `\n          <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>` +
+    `\n          <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>` +
+    `\n          <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
+    `\n          <SERVICETAXDETAILS.LIST> </SERVICETAXDETAILS.LIST>` +
+    `\n          <BANKALLOCATIONS.LIST> </BANKALLOCATIONS.LIST>` +
+    `\n          <BILLALLOCATIONS.LIST> </BILLALLOCATIONS.LIST>` +
+    `\n          <INTERESTCOLLECTION.LIST> </INTERESTCOLLECTION.LIST>` +
+    `\n          <OLDAUDITENTRIES.LIST> </OLDAUDITENTRIES.LIST>` +
+    `\n          <ACCOUNTAUDITENTRIES.LIST> </ACCOUNTAUDITENTRIES.LIST>` +
+    `\n          <AUDITENTRIES.LIST> </AUDITENTRIES.LIST>` +
+    `\n          <INPUTCRALLOCS.LIST> </INPUTCRALLOCS.LIST>` +
+    `\n          <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>` +
+    `\n          <EXCISEPAYMENTALLOCATIONS.LIST> </EXCISEPAYMENTALLOCATIONS.LIST>` +
+    `\n          <TAXOBJECTALLOCATIONS.LIST> </TAXOBJECTALLOCATIONS.LIST>` +
+    `\n          <TDSEXPENSEALLOCATIONS.LIST> </TDSEXPENSEALLOCATIONS.LIST>` +
+    `\n          <VATSTATUTORYDETAILS.LIST> </VATSTATUTORYDETAILS.LIST>` +
+    `\n          <COSTTRACKALLOCATIONS.LIST> </COSTTRACKALLOCATIONS.LIST>` +
+    `\n          <REFVOUCHERDETAILS.LIST> </REFVOUCHERDETAILS.LIST>` +
+    `\n          <INVOICEWISEDETAILS.LIST> </INVOICEWISEDETAILS.LIST>` +
+    `\n          <VATITCDETAILS.LIST> </VATITCDETAILS.LIST>` +
+    `\n          <ADVANCETAXDETAILS.LIST> </ADVANCETAXDETAILS.LIST>` +
+    `\n        </ACCOUNTINGALLOCATIONS.LIST>` +
+    `\n        <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>` +
+    `\n        <RATEDETAILS.LIST>` +
+    `\n          <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>` +
+    `\n          <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>` +
+    `\n          <GSTRATE> ${halfRate}</GSTRATE>` +
+    `\n        </RATEDETAILS.LIST>` +
+    `\n        <RATEDETAILS.LIST>` +
+    `\n          <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>` +
+    `\n          <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>` +
+    `\n          <GSTRATE> ${halfRate}</GSTRATE>` +
+    `\n        </RATEDETAILS.LIST>` +
+    `\n        <RATEDETAILS.LIST>` +
+    `\n          <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>` +
+    `\n          <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>` +
+    `\n          <GSTRATE> ${gstRate}</GSTRATE>` +
+    `\n        </RATEDETAILS.LIST>` +
+    `\n        <RATEDETAILS.LIST>` +
+    `\n          <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>` +
+    `\n          <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>` +
+    `\n        </RATEDETAILS.LIST>` +
+    `\n        <SUPPLEMENTARYDUTYHEADDETAILS.LIST> </SUPPLEMENTARYDUTYHEADDETAILS.LIST>` +
+    `\n        <TAXOBJECTALLOCATIONS.LIST> </TAXOBJECTALLOCATIONS.LIST>` +
+    `\n        <REFVOUCHERDETAILS.LIST> </REFVOUCHERDETAILS.LIST>` +
+    `\n        <EXCISEALLOCATIONS.LIST> </EXCISEALLOCATIONS.LIST>` +
+    `\n        <EXPENSEALLOCATIONS.LIST> </EXPENSEALLOCATIONS.LIST>` +
+    `\n      </ALLINVENTORYENTRIES.LIST>`
+  );
+}
+
+/** Full inventory-mode Sales voucher wrapper — mirrors purchase wrapVoucher but for buyer info */
+function wrapSalesInventoryVoucher(
+  inv: StoredInvoice,
+  partyLedger: string,
+  ledgerXml: string,
+  inventoryXml: string,
+  input: SalesXmlGeneratorInput,
+): string {
+  const NA = ' Not Applicable';
+  const guid = generateGuid();
+  const d = tallyDate(inv.invoice_date);
+  const buyerGstin = inv.buyer_gstin ?? '';
+  const buyerState = stateFromGstin(buyerGstin);
+  const regType = buyerGstin ? 'Regular' : 'Unregistered';
+  const cmpGstin = input.companyGstin ?? '';
+  const cmpState = input.companyState ?? stateFromGstin(cmpGstin);
+  const cmpTaxUnit = cmpState ? `${cmpState} Registration` : '';
+  const buyerName = esc(inv.buyer_name ?? '');
+  const narration = `${buyerName} | ${esc(inv.invoice_number)} | ${inv.invoice_date}`;
+
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <VOUCHER VCHTYPE="${esc(SALES_VOUCHER_TYPE)}" ACTION="Create" OBJVIEW="Invoice Voucher View">
+        <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>
+        <DATE>${d}</DATE>
+        <REFERENCEDATE>${d}</REFERENCEDATE>
+        <VCHSTATUSDATE>${d}</VCHSTATUSDATE>
+        <GUID>${guid}</GUID>
+        <GSTREGISTRATIONTYPE>${regType}</GSTREGISTRATIONTYPE>
+        <VATDEALERTYPE>${regType}</VATDEALERTYPE>
+        <STATENAME>${esc(buyerState)}</STATENAME>
+        <OBJECTUPDATEACTION>Create</OBJECTUPDATEACTION>
+        <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>${buyerGstin ? `\n        <PARTYGSTIN>${esc(buyerGstin)}</PARTYGSTIN>` : ''}
+        <PLACEOFSUPPLY>${esc(buyerState)}</PLACEOFSUPPLY>
+        <VOUCHERTYPENAME>${esc(SALES_VOUCHER_TYPE)}</VOUCHERTYPENAME>
+        <ISINVENTORYAFFECTED>Yes</ISINVENTORYAFFECTED>
+        <PARTYNAME>${buyerName}</PARTYNAME>${cmpGstin ? `\n        <CMPGSTIN>${esc(cmpGstin)}</CMPGSTIN>` : ''}
+        <PARTYLEDGERNAME>${esc(partyLedger)}</PARTYLEDGERNAME>
+        <VOUCHERNUMBER>${esc(inv.invoice_number)}</VOUCHERNUMBER>${cmpGstin ? '\n        <CMPGSTREGISTRATIONTYPE>Regular</CMPGSTREGISTRATIONTYPE>' : ''}${cmpState ? `\n        <CMPGSTSTATE>${esc(cmpState)}</CMPGSTSTATE>` : ''}
+        <BASICBASEPARTYNAME>${buyerName}</BASICBASEPARTYNAME>
+        <PARTYMAILINGNAME>${buyerName}</PARTYMAILINGNAME>
+        <REFERENCE>${esc(inv.invoice_number)}</REFERENCE>
+        <NARRATION>${narration}</NARRATION>
+        <NUMBERINGSTYLE>Auto Renumber</NUMBERINGSTYLE>
+        <CSTFORMISSUETYPE>${NA}</CSTFORMISSUETYPE>
+        <CSTFORMRECVTYPE>${NA}</CSTFORMRECVTYPE>
+        <FBTPAYMENTTYPE>Default</FBTPAYMENTTYPE>
+        <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
+        <VCHSTATUSTAXADJUSTMENT>Default</VCHSTATUSTAXADJUSTMENT>
+        <VCHSTATUSVOUCHERTYPE>${esc(SALES_VOUCHER_TYPE)}</VCHSTATUSVOUCHERTYPE>${cmpTaxUnit ? `\n        <VCHSTATUSTAXUNIT>${esc(cmpTaxUnit)}</VCHSTATUSTAXUNIT>` : ''}
+        <VCHGSTCLASS>${NA}</VCHGSTCLASS>
+        <VCHENTRYMODE>Item Invoice</VCHENTRYMODE>
+        <DIFFACTUALQTY>No</DIFFACTUALQTY>
+        <ISMSTFROMSYNC>No</ISMSTFROMSYNC>
+        <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>No</ASORIGINAL>
+        <AUDITED>No</AUDITED>
+        <ISCOMMONPARTY>No</ISCOMMONPARTY>
+        <FORJOBCOSTING>No</FORJOBCOSTING>
+        <ISOPTIONAL>No</ISOPTIONAL>
+        <EFFECTIVEDATE>${d}</EFFECTIVEDATE>
+        <USEFOREXCISE>No</USEFOREXCISE>
+        <ISFORJOBWORKIN>No</ISFORJOBWORKIN>
+        <ALLOWCONSUMPTION>No</ALLOWCONSUMPTION>
+        <USEFORINTEREST>No</USEFORINTEREST>
+        <USEFORGAINLOSS>No</USEFORGAINLOSS>
+        <USEFORGODOWNTRANSFER>No</USEFORGODOWNTRANSFER>
+        <USEFORCOMPOUND>No</USEFORCOMPOUND>
+        <USEFORSERVICETAX>No</USEFORSERVICETAX>
+        <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+        <ISSYSTEM>No</ISSYSTEM>
+        <ISFETCHEDONLY>No</ISFETCHEDONLY>
+        <ISGSTOVERRIDDEN>No</ISGSTOVERRIDDEN>
+        <ISCANCELLED>No</ISCANCELLED>
+        <ISONHOLD>No</ISONHOLD>
+        <ISSUMMARY>No</ISSUMMARY>
+        <ISECOMMERCESUPPLY>No</ISECOMMERCESUPPLY>
+        <ISBOENOTAPPLICABLE>No</ISBOENOTAPPLICABLE>
+        <ISGSTSECSEVENAPPLICABLE>No</ISGSTSECSEVENAPPLICABLE>
+        <IGNOREEINVVALIDATION>No</IGNOREEINVVALIDATION>
+        <CMPGSTISOTHTERRITORYASSESSEE>No</CMPGSTISOTHTERRITORYASSESSEE>
+        <PARTYGSTISOTHTERRITORYASSESSEE>No</PARTYGSTISOTHTERRITORYASSESSEE>
+        <IRNJSONEXPORTED>No</IRNJSONEXPORTED>
+        <IRNCANCELLED>No</IRNCANCELLED>
+        <IGNOREGSTCONFLICTINMIG>No</IGNOREGSTCONFLICTINMIG>
+        <ISOPBALTRANSACTION>No</ISOPBALTRANSACTION>
+        <IGNOREGSTFORMATVALIDATION>No</IGNOREGSTFORMATVALIDATION>
+        <ISELIGIBLEFORITC>No</ISELIGIBLEFORITC>
+        <IGNOREGSTOPTIONALUNCERTAIN>No</IGNOREGSTOPTIONALUNCERTAIN>
+        <UPDATESUMMARYVALUES>No</UPDATESUMMARYVALUES>
+        <ISEWAYBILLAPPLICABLE>No</ISEWAYBILLAPPLICABLE>
+        <ISDELETEDRETAINED>No</ISDELETEDRETAINED>
+        <ISNULL>No</ISNULL>
+        <ISEXCISEVOUCHER>No</ISEXCISEVOUCHER>
+        <EXCISETAXOVERRIDE>No</EXCISETAXOVERRIDE>
+        <USEFORTAXUNITTRANSFER>No</USEFORTAXUNITTRANSFER>
+        <ISEXER1NOPOVERWRITE>No</ISEXER1NOPOVERWRITE>
+        <ISEXF2NOPOVERWRITE>No</ISEXF2NOPOVERWRITE>
+        <ISEXER3NOPOVERWRITE>No</ISEXER3NOPOVERWRITE>
+        <IGNOREPOSVALIDATION>No</IGNOREPOSVALIDATION>
+        <EXCISEOPENING>No</EXCISEOPENING>
+        <USEFORFINALPRODUCTION>No</USEFORFINALPRODUCTION>
+        <ISTDSOVERRIDDEN>No</ISTDSOVERRIDDEN>
+        <ISTCSOVERRIDDEN>No</ISTCSOVERRIDDEN>
+        <ISTDSTCSCASHVCH>No</ISTDSTCSCASHVCH>
+        <INCLUDEADVPYMTVCH>No</INCLUDEADVPYMTVCH>
+        <ISSUBWORKSCONTRACT>No</ISSUBWORKSCONTRACT>
+        <ISVATOVERRIDDEN>No</ISVATOVERRIDDEN>
+        <IGNOREORIGVCHDATE>No</IGNOREORIGVCHDATE>
+        <ISVATPAIDATCUSTOMS>No</ISVATPAIDATCUSTOMS>
+        <ISDECLAREDTOCUSTOMS>No</ISDECLAREDTOCUSTOMS>
+        <VATADVANCEPAYMENT>No</VATADVANCEPAYMENT>
+        <VATADVPAY>No</VATADVPAY>
+        <ISCSTDELCAREDGOODSSALES>No</ISCSTDELCAREDGOODSSALES>
+        <ISVATRESTAXINV>No</ISVATRESTAXINV>
+        <ISSERVICETAXOVERRIDDEN>No</ISSERVICETAXOVERRIDDEN>
+        <ISISDVOUCHER>No</ISISDVOUCHER>
+        <ISEXCISEOVERRIDDEN>No</ISEXCISEOVERRIDDEN>
+        <ISEXCISESUPPLYVCH>No</ISEXCISESUPPLYVCH>
+        <GSTNOTEXPORTED>No</GSTNOTEXPORTED>
+        <IGNOREGSTINVALIDATION>No</IGNOREGSTINVALIDATION>
+        <ISGSTREFUND>No</ISGSTREFUND>
+        <OVRDNEWAYBILLAPPLICABILITY>No</OVRDNEWAYBILLAPPLICABILITY>
+        <ISVATPRINCIPALACCOUNT>No</ISVATPRINCIPALACCOUNT>
+        <VCHSTATUSISVCHNUMUSED>No</VCHSTATUSISVCHNUMUSED>
+        <VCHGSTSTATUSISINCLUDED>Yes</VCHGSTSTATUSISINCLUDED>
+        <VCHGSTSTATUSISUNCERTAIN>No</VCHGSTSTATUSISUNCERTAIN>
+        <VCHGSTSTATUSISEXCLUDED>No</VCHGSTSTATUSISEXCLUDED>
+        <VCHGSTSTATUSISAPPLICABLE>Yes</VCHGSTSTATUSISAPPLICABLE>
+        <VCHGSTSTATUSISGSTR2BRECONCILED>No</VCHGSTSTATUSISGSTR2BRECONCILED>
+        <VCHGSTSTATUSISGSTR2BONLYINPORTAL>No</VCHGSTSTATUSISGSTR2BONLYINPORTAL>
+        <VCHGSTSTATUSISGSTR2BONLYINBOOKS>No</VCHGSTSTATUSISGSTR2BONLYINBOOKS>
+        <VCHGSTSTATUSISGSTR2BMISMATCH>No</VCHGSTSTATUSISGSTR2BMISMATCH>
+        <VCHGSTSTATUSISGSTR2BINDIFFPERIOD>No</VCHGSTSTATUSISGSTR2BINDIFFPERIOD>
+        <VCHGSTSTATUSISRETEFFDATEOVERRDN>No</VCHGSTSTATUSISRETEFFDATEOVERRDN>
+        <VCHGSTSTATUSISOVERRDN>No</VCHGSTSTATUSISOVERRDN>
+        <VCHGSTSTATUSISSTATINDIFFDATE>No</VCHGSTSTATUSISSTATINDIFFDATE>
+        <VCHGSTSTATUSISRETINDIFFDATE>No</VCHGSTSTATUSISRETINDIFFDATE>
+        <VCHGSTSTATUSMAINSECTIONEXCLUDED>No</VCHGSTSTATUSMAINSECTIONEXCLUDED>
+        <VCHGSTSTATUSISBRANCHTRANSFEROUT>No</VCHGSTSTATUSISBRANCHTRANSFEROUT>
+        <VCHGSTSTATUSISSYSTEMSUMMARY>No</VCHGSTSTATUSISSYSTEMSUMMARY>
+        <VCHSTATUSISUNREGISTEREDRCM>No</VCHSTATUSISUNREGISTEREDRCM>
+        <VCHSTATUSISOPTIONAL>No</VCHSTATUSISOPTIONAL>
+        <VCHSTATUSISCANCELLED>No</VCHSTATUSISCANCELLED>
+        <VCHSTATUSISDELETED>No</VCHSTATUSISDELETED>
+        <VCHSTATUSISOPENINGBALANCE>No</VCHSTATUSISOPENINGBALANCE>
+        <VCHSTATUSISFETCHEDONLY>No</VCHSTATUSISFETCHEDONLY>
+        <VCHGSTSTATUSISOPTIONALUNCERTAIN>No</VCHGSTSTATUSISOPTIONALUNCERTAIN>
+        <VCHSTATUSISREACCEPTFORHSNDONE>No</VCHSTATUSISREACCEPTFORHSNDONE>
+        <VCHSTATUSISREACCEPHSNSIXONEDONE>Yes</VCHSTATUSISREACCEPHSNSIXONEDONE>
+        <PAYMENTLINKHASMULTIREF>No</PAYMENTLINKHASMULTIREF>
+        <ISSHIPPINGWITHINSTATE>No</ISSHIPPINGWITHINSTATE>
+        <ISOVERSEASTOURISTTRANS>No</ISOVERSEASTOURISTTRANS>
+        <ISDESIGNATEDZONEPARTY>No</ISDESIGNATEDZONEPARTY>
+        <HASCASHFLOW>No</HASCASHFLOW>
+        <ISPOSTDATED>No</ISPOSTDATED>
+        <USETRACKINGNUMBER>No</USETRACKINGNUMBER>
+        <ISINVOICE>Yes</ISINVOICE>
+        <MFGJOURNAL>No</MFGJOURNAL>
+        <HASDISCOUNTS>No</HASDISCOUNTS>
+        <ASPAYSLIP>No</ASPAYSLIP>
+        <ISCOSTCENTRE>No</ISCOSTCENTRE>
+        <ISSTXNONREALIZEDVCH>No</ISSTXNONREALIZEDVCH>
+        <ISEXCISEMANUFACTURERON>No</ISEXCISEMANUFACTURERON>
+        <ISBLANKCHEQUE>No</ISBLANKCHEQUE>
+        <ISVOID>No</ISVOID>
+        <ORDERLINESTATUS>No</ORDERLINESTATUS>
+        <VATISAGNSTCANCSALES>No</VATISAGNSTCANCSALES>
+        <VATISPURCEXEMPTED>No</VATISPURCEXEMPTED>
+        <ISVATRESTAXINVOICE>No</ISVATRESTAXINVOICE>
+        <VATISASSESABLECALCVCH>No</VATISASSESABLECALCVCH>
+        <ISVATDUTYPAID>Yes</ISVATDUTYPAID>
+        <ISDELIVERYSAMEASCONSIGNEE>No</ISDELIVERYSAMEASCONSIGNEE>
+        <ISDISPATCHSAMEASCONSIGNOR>No</ISDISPATCHSAMEASCONSIGNOR>
+        <ISDELETEDVCHRETAINED>No</ISDELETEDVCHRETAINED>
+        <VCHONLYADDLINFOUPDATED>No</VCHONLYADDLINFOUPDATED>
+        <CHANGEVCHMODE>No</CHANGEVCHMODE>
+        <RESETIRNQRCODE>No</RESETIRNQRCODE>
+        <EWAYBILLDETAILS.LIST> </EWAYBILLDETAILS.LIST>
+        <EXCLUDEDTAXATIONS.LIST> </EXCLUDEDTAXATIONS.LIST>
+        <OLDAUDITENTRIES.LIST> </OLDAUDITENTRIES.LIST>
+        <ACCOUNTAUDITENTRIES.LIST> </ACCOUNTAUDITENTRIES.LIST>
+        <AUDITENTRIES.LIST> </AUDITENTRIES.LIST>
+        <DUTYHEADDETAILS.LIST> </DUTYHEADDETAILS.LIST>
+        <GSTADVADJDETAILS.LIST> </GSTADVADJDETAILS.LIST>${inventoryXml}
+        <CONTRITRANS.LIST> </CONTRITRANS.LIST>
+        <EWAYBILLERRORLIST.LIST> </EWAYBILLERRORLIST.LIST>
+        <IRNERRORLIST.LIST> </IRNERRORLIST.LIST>
+        <HARYANAVAT.LIST> </HARYANAVAT.LIST>
+        <SUPPLEMENTARYDUTYHEADDETAILS.LIST> </SUPPLEMENTARYDUTYHEADDETAILS.LIST>
+        <INVOICEDELNOTES.LIST> </INVOICEDELNOTES.LIST>
+        <INVOICEORDERLIST.LIST> </INVOICEORDERLIST.LIST>
+        <INVOICEINDENTLIST.LIST> </INVOICEINDENTLIST.LIST>
+        <ATTENDANCEENTRIES.LIST> </ATTENDANCEENTRIES.LIST>
+        <ORIGINVOICEDETAILS.LIST> </ORIGINVOICEDETAILS.LIST>
+        <INVOICEEXPORTLIST.LIST> </INVOICEEXPORTLIST.LIST>${ledgerXml}
+      </VOUCHER>
+    </TALLYMESSAGE>`;
+}
+
+function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): VoucherResult {
+  const warnings: string[] = [];
+  const d = deriveInvoiceFinancials(inv);
+  const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
+
+  const accCustomer = (acc?.customerLedger as string | undefined)?.trim() ?? '';
+  const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+  const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+  if (!partyLedger) return { xml: null, skip: 'No customer ledger and no customer name', warnings };
+  if (!accCustomer && !resolvedCustomer) warnings.push(`Customer "${inv.buyer_name}" not in master - using customer name as ledger`);
+
+  const salesLedger = (acc?.salesLedger as string | undefined)?.trim() ?? '';
+  if (!salesLedger) return { xml: null, skip: `No sales ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
+
+  // Acceptance stock map: desc → tally_item_name
+  const stockMap = (acc?.stock as Record<string, string> | undefined) ?? {};
+
+  let totalItemsAmount = 0;
+  let unmappedItemsAmount = 0;
+  const invEntries: string[] = [];
+
+  for (const item of inv.line_items) {
+    const desc = item.description ?? '';
+    const mappedItemName = stockMap[desc];
+    let stockItem: StockItemMaster | null = null;
+    if (mappedItemName) {
+      stockItem = input.stockItems.find((s) => s.tally_item_name === mappedItemName) ?? null;
+    }
+    if (!stockItem) {
+      stockItem = findSalesStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
+    }
+    const itemNet = calcLineAmount(item);
+    if (!stockItem) {
+      warnings.push(`Stock item "${desc}" (HSN ${item.hsn}) not mapped - booking to sales ledger`);
+      unmappedItemsAmount += itemNet;
+      continue;
+    }
+    totalItemsAmount += itemNet;
+    invEntries.push(buildSalesAllInventoryEntry(stockItem, item, salesLedger));
+  }
+
+  if (invEntries.length === 0) {
+    // Fall back to accounting-only mode so the invoice is not lost
+    warnings.push('No line items could be mapped to stock items - falling back to accounting-only mode');
+    return buildSalesVoucher(inv, input);
+  }
+
+  const ledgerEntries: string[] = [];
+
+  // 1. Customer (debtor) — DEBIT, positive total, ISDEEMEDPOSITIVE=Yes
+  ledgerEntries.push(invSalesLedgerEntry({
+    ledgerName: partyLedger,
+    isdeemedpositive: 'Yes',
+    isPartyledger: 'Yes',
+    islastdeemedpositive: 'Yes',
+    amount: d.total,
+    billRefName: inv.invoice_number,
+  }));
+
+  // 2. Output tax ledgers — CREDIT, ISDEEMEDPOSITIVE=No
+  const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+  const roundHalf = (r: number) => Math.round(r * 2) / 2;
+  if (inv.tax_type === 'cgst_sgst') {
+    if (d.cgst > 0) {
+      const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
+      const l = ((acc?.cgstLedger as string | undefined)?.trim()) ||
+        findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ||
+        findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
+      if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: l,
+        isdeemedpositive: 'No',
+        isPartyledger: 'No',
+        islastdeemedpositive: 'No',
+        amount: -d.cgst,
+        rateOfInvoiceTax: rate || undefined,
+      }));
+    }
+    if (d.sgst > 0) {
+      const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
+      const l = ((acc?.sgstLedger as string | undefined)?.trim()) ||
+        findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ||
+        findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
+      if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: l,
+        isdeemedpositive: 'No',
+        isPartyledger: 'No',
+        islastdeemedpositive: 'No',
+        amount: -d.sgst,
+        rateOfInvoiceTax: rate || undefined,
+      }));
+    }
+  } else if (d.igst > 0) {
+    const rate = taxBase > 0 ? roundHalf((d.igst / taxBase) * 100) : 0;
+    const l = ((acc?.igstLedger as string | undefined)?.trim()) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'IGST', rate) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
+    if (!l) return { xml: null, skip: 'No IGST ledger configured', warnings };
+    ledgerEntries.push(invSalesLedgerEntry({
+      ledgerName: l,
+      isdeemedpositive: 'No',
+      isPartyledger: 'No',
+      islastdeemedpositive: 'No',
+      amount: -d.igst,
+      rateOfInvoiceTax: rate || undefined,
+    }));
+  }
+
+  // 3. Charges (income) — CREDIT via invSalesIncomeLedgerEntry
+  let mappedChargesTotal = 0;
+  let unmappedChargesTotal = 0;
+  if (inv.charges?.length) {
+    for (const charge of inv.charges) {
+      if (!charge.amount || charge.amount === 0) continue;
+      const el = input.expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === norm(charge.description))
+        ?? input.expenseLedgers.find((l) => norm(l.tally_ledger_name) === norm(charge.description));
+      if (!el) {
+        warnings.push(`No ledger mapped for charge "${charge.description}" - booking to sales ledger`);
+        unmappedChargesTotal += charge.amount;
+        continue;
+      }
+      mappedChargesTotal += charge.amount;
+      ledgerEntries.push(invSalesIncomeLedgerEntry(el.tally_ledger_name, -Math.abs(charge.amount)));
+    }
+  }
+
+  // 4. Round-off
+  let roundOffAmount = 0;
+  if (d.round_off && Math.abs(d.round_off) > 0.001) {
+    const roLedger = ((acc?.roLedger as string | undefined)?.trim())
+      || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+      || 'Round Off';
+    roundOffAmount = d.round_off;
+    if (d.round_off > 0) {
+      // Round-off income → credit
+      ledgerEntries.push(invSalesIncomeLedgerEntry(roLedger, -d.round_off));
+    } else {
+      // Round-off expense → debit
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: roLedger,
+        isdeemedpositive: 'Yes',
+        isPartyledger: 'No',
+        islastdeemedpositive: 'Yes',
+        amount: Math.abs(d.round_off),
+      }));
+    }
+  }
+
+  // 5. Balance catch-up: any remaining gap goes to sales ledger
+  const taxes = d.cgst + d.sgst + d.igst;
+  const totalCredits = totalItemsAmount + unmappedItemsAmount + taxes + mappedChargesTotal + unmappedChargesTotal + Math.abs(roundOffAmount);
+  const gap = parseFloat((d.total - totalCredits).toFixed(2));
+  const netSalesLedgerAdj = unmappedItemsAmount + unmappedChargesTotal + gap;
+  if (Math.abs(netSalesLedgerAdj) > 0.01) {
+    ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, -netSalesLedgerAdj));
+  }
+
+  return {
+    xml: wrapSalesInventoryVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join(''), input),
+    warnings,
+  };
 }
 
 // ─── Vouchers XML ─────────────────────────────────────────────────────────────
@@ -253,8 +884,10 @@ function buildVouchers(input: SalesXmlGeneratorInput): SalesXmlGeneratorResult {
     return true;
   });
 
+  const isInventory = input.voucherMode === 'inventory';
+
   for (const inv of invoices) {
-    const result = buildSalesVoucher(inv, input);
+    const result = isInventory ? buildSalesInventoryVoucher(inv, input) : buildSalesVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
     if (!result.xml || result.skip) {
       skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });
@@ -368,6 +1001,109 @@ function buildTaxLedgerBlock(dt: DutiesTaxesMaster): string {
     </TALLYMESSAGE>`;
 }
 
+function buildStockItemMasterBlock(s: StockItemMaster, gstPercent: number, fyStart: string): string {
+  const halfRate = gstPercent / 2;
+  const unit = resolveUom(s.unit, null);
+  const gstDetailsBlock = gstPercent > 0 ? `
+        <GSTDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+          <CALCULATIONTYPE>On Value</CALCULATIONTYPE>
+          <TAXABILITY>Taxable</TAXABILITY>
+          <SRCOFGSTDETAILS>Specify Details Here</SRCOFGSTDETAILS>
+          <GSTCALCSLABONMRP>No</GSTCALCSLABONMRP>
+          <ISREVERSECHARGEAPPLICABLE>No</ISREVERSECHARGEAPPLICABLE>
+          <ISNONGSTGOODS>No</ISNONGSTGOODS>
+          <GSTINELIGIBLEITC>No</GSTINELIGIBLEITC>
+          <INCLUDEEXPFORSLABCALC>No</INCLUDEEXPFORSLABCALC>
+          <STATEWISEDETAILS.LIST>
+            <STATENAME> Any</STATENAME>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${halfRate}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+              <GSTRATE> ${gstPercent}</GSTRATE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE> Not Applicable</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <RATEDETAILS.LIST>
+              <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+              <GSTRATEVALUATIONTYPE>Based on Value</GSTRATEVALUATIONTYPE>
+            </RATEDETAILS.LIST>
+            <GSTSLABRATES.LIST>        </GSTSLABRATES.LIST>
+          </STATEWISEDETAILS.LIST>
+          <TEMPGSTITEMSLABRATES.LIST>       </TEMPGSTITEMSLABRATES.LIST>
+          <TEMPGSTDETAILSLABRATES.LIST>       </TEMPGSTDETAILSLABRATES.LIST>
+        </GSTDETAILS.LIST>` : '';
+  const hsnBlock = s.hsn_code ? `
+        <HSNDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+          <HSNCODE>${esc(s.hsn_code)}</HSNCODE>
+          <SRCOFHSNDETAILS>Specify Details Here</SRCOFHSNDETAILS>
+        </HSNDETAILS.LIST>` : '';
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <STOCKITEM NAME="${esc(s.tally_item_name)}" RESERVEDNAME="">
+        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
+        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
+        <PARENT/>
+        <GSTAPPLICABLE> Applicable</GSTAPPLICABLE>
+        <GSTTYPEOFSUPPLY>Goods</GSTTYPEOFSUPPLY>
+        <BASEUNITS>${esc(unit)}</BASEUNITS>
+        <ISCOSTCENTRESON>No</ISCOSTCENTRESON>
+        <ISBATCHWISEON>No</ISBATCHWISEON>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>${gstDetailsBlock}${hsnBlock}
+        <LANGUAGENAME.LIST>
+          <NAME.LIST TYPE="String">
+            <NAME>${esc(s.tally_item_name)}</NAME>
+          </NAME.LIST>
+          <LANGUAGEID> 1033</LANGUAGEID>
+        </LANGUAGENAME.LIST>
+      </STOCKITEM>
+    </TALLYMESSAGE>`;
+}
+
+function buildUnitMasterBlock(unitName: string, fyStart: string): string {
+  const entry = getCanonical(unitName);
+  const formalName = entry?.fullName ?? unitName;
+  const gstCode = entry?.gstCode ?? unitName.toUpperCase().replace(/\s+/g, '');
+  const gstRepUom = `${gstCode}-${formalName.replace(/\s+/g, '').toUpperCase()}`;
+  return `
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <UNIT NAME="${esc(unitName)}" RESERVEDNAME="">
+        <NAME>${esc(unitName)}</NAME>
+        <TYPEOFUPDATEACTIVITY>Migration</TYPEOFUPDATEACTIVITY>
+        <OBJECTUPDATEACTION>Alter</OBJECTUPDATEACTION>
+        <ORIGINALNAME>${esc(formalName)}</ORIGINALNAME>
+        <GSTREPORUOM>${esc(gstRepUom)}</GSTREPORUOM>
+        <ISUPDATINGTARGETID>No</ISUPDATINGTARGETID>
+        <ISDELETED>No</ISDELETED>
+        <ISSECURITYONWHENENTERED>No</ISSECURITYONWHENENTERED>
+        <ASORIGINAL>Yes</ASORIGINAL>
+        <ISGSTEXCLUDED>No</ISGSTEXCLUDED>
+        <ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>
+        <DECIMALPLACES>2</DECIMALPLACES>
+        <REPORTINGUQCDETAILS.LIST>
+          <APPLICABLEFROM>${fyStart}</APPLICABLEFROM>
+          <REPORTINGUQCNAME>${esc(gstRepUom)}</REPORTINGUQCNAME>
+        </REPORTINGUQCDETAILS.LIST>
+      </UNIT>
+    </TALLYMESSAGE>`;
+}
+
 export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
   const fyStart = fyStartFromString(input.financialYear);
   const messages: string[] = [];
@@ -402,6 +1138,34 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
     }
   }
 
+  // Stock items (inventory mode only)
+  if (input.voucherMode === 'inventory' && input.stockItems.length > 0) {
+    const invoiceRateMap = new Map<string, number>();
+    for (const inv of input.invoices) {
+      const stockMap = (inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined ?? {};
+      for (const item of inv.line_items ?? []) {
+        const desc = item.description ?? '';
+        const mappedName = stockMap[desc];
+        let si: StockItemMaster | null = null;
+        if (mappedName) si = input.stockItems.find((s) => s.tally_item_name === mappedName) ?? null;
+        if (!si) si = findSalesStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
+        if (si && !invoiceRateMap.has(si.tally_item_name)) {
+          invoiceRateMap.set(si.tally_item_name, item.gst_percent ?? 0);
+        }
+      }
+    }
+    const itemsToExport = input.stockItems.filter((s) => invoiceRateMap.has(s.tally_item_name));
+    const seenUnits = new Set<string>();
+    for (const s of itemsToExport) {
+      const unit = resolveUom(s.unit, null);
+      if (!seenUnits.has(unit)) { seenUnits.add(unit); messages.push(buildUnitMasterBlock(unit, fyStart)); }
+    }
+    for (const stockItem of itemsToExport) {
+      const rate = stockItem.gst_percent ?? invoiceRateMap.get(stockItem.tally_item_name) ?? 0;
+      messages.push(buildStockItemMasterBlock(stockItem, rate, fyStart));
+    }
+  }
+
   return `<ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
@@ -419,4 +1183,175 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput): string {
     </IMPORTDATA>
   </BODY>
 </ENVELOPE>`;
+}
+
+// ─── Export Preview ───────────────────────────────────────────────────────────
+
+export interface SalesPreviewRow {
+  invoice_number: string;
+  invoice_date: string;
+  buyer_name: string;
+  party_ledger: string;
+  ledger_type: 'Customer' | 'Sales' | 'CGST' | 'SGST' | 'IGST' | 'Expense' | 'Round Off' | 'Inventory';
+  tally_ledger_name: string;
+  amount: number;  // positive = debit, negative = credit (Tally sign convention)
+  status: 'OK' | 'Skipped' | 'Warning';
+  skip_reason?: string;
+  warning?: string;
+  // Inventory-mode extras
+  qty?: number;
+  rate?: number;
+  uom?: string;
+  item_description?: string;
+}
+
+export function buildSalesPreview(input: SalesXmlGeneratorInput): SalesPreviewRow[] {
+  return input.voucherMode === 'inventory'
+    ? buildSalesInventoryPreview(input)
+    : buildSalesAccountingPreview(input);
+}
+
+function buildSalesInventoryPreview(input: SalesXmlGeneratorInput): SalesPreviewRow[] {
+  const rows: SalesPreviewRow[] = [];
+
+  for (const inv of input.invoices) {
+    const d = deriveInvoiceFinancials(inv);
+    const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
+    const accCustomer = acc?.customerLedger?.trim() ?? '';
+    const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+    const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+    const salesLedger = acc?.salesLedger?.trim() ?? '';
+    const stockMap = ((inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined) ?? {};
+    const base = { invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, buyer_name: inv.buyer_name ?? '', party_ledger: partyLedger };
+
+    if (!salesLedger) {
+      rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: 'Skipped', skip_reason: 'Accept invoice to set sales ledger' });
+      continue;
+    }
+
+    // Per-item inventory rows
+    for (const item of inv.line_items) {
+      const desc = item.description ?? '';
+      const mappedName = stockMap[desc];
+      let stockItem: StockItemMaster | null = null;
+      if (mappedName) stockItem = input.stockItems.find((s) => s.tally_item_name === mappedName) ?? null;
+      if (!stockItem) stockItem = findSalesStockItem(input.stockItems, desc, item.hsn, item.gst_percent, input.stockItemMode);
+      const itemNet = calcLineAmount(item);
+      const uom = resolveUom(stockItem?.unit, item.uom);
+      rows.push({
+        ...base,
+        ledger_type: 'Inventory',
+        tally_ledger_name: stockItem ? stockItem.tally_item_name : desc,
+        amount: itemNet,
+        status: stockItem ? 'OK' : 'Warning',
+        warning: stockItem ? undefined : `Stock item "${desc}" not mapped - will book to sales ledger`,
+        qty: item.qty, rate: item.rate, uom,
+        item_description: desc,
+      });
+    }
+
+    // Customer row
+    const partyStatus: SalesPreviewRow['status'] = (!accCustomer && !resolvedCustomer) ? 'Warning' : 'OK';
+    rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: partyStatus, warning: partyStatus === 'Warning' ? 'Customer not in master' : undefined });
+
+    // Sales row (for unmapped items catch-up)
+    rows.push({ ...base, ledger_type: 'Sales', tally_ledger_name: salesLedger, amount: 0, status: 'OK' });
+
+    // Tax rows
+    if (inv.tax_type === 'cgst_sgst') {
+      if (Math.abs(d.cgst) > 0.001) {
+        const l = acc?.cgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0) || 'CGST';
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l, amount: -d.cgst, status: 'OK' });
+      }
+      if (Math.abs(d.sgst) > 0.001) {
+        const l = acc?.sgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0) || 'SGST';
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l, amount: -d.sgst, status: 'OK' });
+      }
+    } else if (Math.abs(d.igst) > 0.001) {
+      const l = acc?.igstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0) || 'IGST';
+      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l, amount: -d.igst, status: 'OK' });
+    }
+
+    // Charge rows
+    if (inv.charges?.length) {
+      for (const charge of inv.charges) {
+        if (!charge.amount || charge.amount === 0) continue;
+        const el = input.expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === norm(charge.description))
+          ?? input.expenseLedgers.find((l) => norm(l.tally_ledger_name) === norm(charge.description));
+        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: el?.tally_ledger_name ?? charge.description, amount: -Math.abs(charge.amount), status: el ? 'OK' : 'Warning', warning: el ? undefined : `No ledger for "${charge.description}"` });
+      }
+    }
+
+    if (Math.abs(d.round_off) > 0.001) {
+      const roLedger = acc?.roLedger?.trim()
+        || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+        || 'Round Off';
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: roLedger, amount: -d.round_off, status: 'OK' });
+    }
+  }
+
+  return rows;
+}
+
+function buildSalesAccountingPreview(input: SalesXmlGeneratorInput): SalesPreviewRow[] {
+  const rows: SalesPreviewRow[] = [];
+
+  for (const inv of input.invoices) {
+    const d = deriveInvoiceFinancials(inv);
+    const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
+
+    const accCustomer = acc?.customerLedger?.trim() ?? '';
+    const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
+    const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
+    const salesLedger = acc?.salesLedger?.trim() ?? '';
+    const base = { invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, buyer_name: inv.buyer_name ?? '', party_ledger: partyLedger };
+
+    if (!salesLedger) {
+      rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: 'Skipped', skip_reason: 'Accept invoice to set sales ledger' });
+      continue;
+    }
+
+    const partyStatus: SalesPreviewRow['status'] = (!accCustomer && !resolvedCustomer) ? 'Warning' : 'OK';
+    rows.push({ ...base, ledger_type: 'Customer', tally_ledger_name: partyLedger, amount: d.total, status: partyStatus, warning: partyStatus === 'Warning' ? 'Customer not in master' : undefined });
+
+    const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, inv.tax_type, inv.bill_discount_amount ?? 0);
+    for (const row of hsnRows) {
+      if (Math.abs(row.taxable) > 0.001) {
+        rows.push({ ...base, ledger_type: 'Sales', tally_ledger_name: salesLedger, amount: -row.taxable, status: 'OK' });
+      }
+    }
+
+    if (inv.tax_type === 'cgst_sgst') {
+      if (Math.abs(d.cgst) > 0.001) {
+        const l = acc?.cgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0) || 'CGST';
+        rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l, amount: -d.cgst, status: 'OK' });
+      }
+      if (Math.abs(d.sgst) > 0.001) {
+        const l = acc?.sgstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0) || 'SGST';
+        rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l, amount: -d.sgst, status: 'OK' });
+      }
+    } else if (Math.abs(d.igst) > 0.001) {
+      const l = acc?.igstLedger?.trim() || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0) || 'IGST';
+      rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l, amount: -d.igst, status: 'OK' });
+    }
+
+    if (inv.charges?.length) {
+      for (const charge of inv.charges) {
+        if (!charge.amount || charge.amount === 0) continue;
+        const q = norm(charge.description);
+        const el = input.expenseLedgers.find((l) => l.expense_keyword && norm(l.expense_keyword) === q)
+          ?? input.expenseLedgers.find((l) => norm(l.tally_ledger_name) === q);
+        rows.push({ ...base, ledger_type: 'Expense', tally_ledger_name: el?.tally_ledger_name ?? charge.description, amount: -Math.abs(charge.amount), status: el ? 'OK' : 'Warning', warning: el ? undefined : `No ledger for "${charge.description}"` });
+      }
+    }
+
+    if (Math.abs(d.round_off) > 0.001) {
+      const roLedger = acc?.roLedger?.trim()
+        || input.expenseLedgers.find((l) => norm(l.tally_ledger_name).includes('round'))?.tally_ledger_name
+        || 'Round Off';
+      rows.push({ ...base, ledger_type: 'Round Off', tally_ledger_name: roLedger, amount: -d.round_off, status: 'OK' });
+    }
+  }
+
+  return rows;
 }
