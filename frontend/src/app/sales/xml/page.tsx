@@ -278,10 +278,13 @@ function SalesFlatTable({
   const { invoiceOrder, byInvoice, displayRows } = React.useMemo(() => {
   const invoiceOrder: string[] = [];
   const byInvoice = new Map<string, StoredInvoice>();
+  const duplicateInvoiceNos: string[] = [];
   for (const inv of invoices) {
     if (!byInvoice.has(inv.invoice_number)) {
       invoiceOrder.push(inv.invoice_number);
       byInvoice.set(inv.invoice_number, inv);
+    } else {
+      duplicateInvoiceNos.push(inv.invoice_number);
     }
   }
 
@@ -464,7 +467,7 @@ function SalesFlatTable({
     });
   }
 
-  return { invoiceOrder, byInvoice, displayRows };
+  return { invoiceOrder, byInvoice, displayRows, duplicateInvoiceNos };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoices, lockedInvoices, customers, suppliers, dutiesTaxes, stockItems, stockItemMode,
       salesLedgerMasters, historicalSalesLedgers, companyWideSalesLedger, voucherMode, expenseLedgers]);
@@ -719,6 +722,12 @@ function SalesFlatTable({
           Download as Excel
         </button>
       </div>
+
+      {duplicateInvoiceNos.length > 0 && (
+        <div className="px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg text-sm text-amber-800 dark:text-amber-300">
+          <span className="font-semibold">⚠ {duplicateInvoiceNos.length} duplicate invoice number{duplicateInvoiceNos.length > 1 ? 's' : ''} detected</span> — only the first occurrence of each is shown in the preview. Duplicate invoice numbers: <span className="font-mono">{duplicateInvoiceNos.join(', ')}</span>. Please fix these in the Sales Register to export all invoices correctly.
+        </div>
+      )}
 
       {cardFilter && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700 rounded-lg text-sm w-fit">
