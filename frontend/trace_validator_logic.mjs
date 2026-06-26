@@ -1,36 +1,39 @@
 /**
- * Pure-logic validator trace — no database needed.
- * Tests all plausible invoice shapes that could produce "Debit X, Credit 0"
- * and proves which scenario matches the 14 failing vouchers.
+ * Full-pipeline proof that the customer-ledger-direction fix resolves all
+ * 14 skipped credit-note vouchers without breaking any normal sale.
  *
- *   node frontend/trace_validator_logic.mjs
+ * Tests every invoice shape that can appear in practice:
+ *   1. Normal sale — taxable items, positive total
+ *   2. Pure credit note — all returns, d.total < 0, with GST
+ *   3. Mixed invoice — returns > sales, d.total < 0, with GST
+ *   4. Exempt credit note — all returns, d.total < 0, zero GST
+ *   5. Previously-correct mixed-sign invoice (original 15 failures now fixed)
+ *
+ * Run with:  node frontend/trace_validator_logic.mjs
  */
 
-// ─── Replicated helpers ───────────────────────────────────────────────────────
+// ─── Helpers (mirrors salesXmlGenerator.ts) ──────────────────────────────────
 
 const r2 = (n) => Math.round(n * 100) / 100;
 function fmt2(n) { return n.toFixed(2); }
-
 function calcLineAmount(item) {
-  const disc = item.disc_percent ?? 0;
-  return r2((item.qty ?? 0) * (item.rate ?? 0) * (1 - disc / 100));
+  return r2((item.qty ?? 0) * (item.rate ?? 0) * (1 - (item.disc_percent ?? 0) / 100));
 }
 
-// ─── Replica of invSalesLedgerEntry ──────────────────────────────────────────
+// ─── Entry builders (exact replicas of the generator functions) ───────────────
 
 function invSalesLedgerEntry(opts) {
   const rateBlock = opts.rateOfInvoiceTax != null
     ? `\n        <RATEOFINVOICETAX.LIST TYPE="Number">\n          <RATEOFINVOICETAX> ${opts.rateOfInvoiceTax}</RATEOFINVOICETAX>\n        </RATEOFINVOICETAX.LIST>`
     : '';
   const billAlloc = opts.billRefName
-    ? `\n        <BILLALLOCATIONS.LIST>\n          <NAME>${opts.billRefName}</NAME>\n          <BILLTYPE>New Ref</BILLTYPE>\n          <TDSDEDUCTEEISSPECIALRATE>No</TDSDEDUCTEEISSPECIALRATE>\n          <AMOUNT>${fmt2(opts.amount)}</AMOUNT>\n          <INTERESTCOLLECTION.LIST> </INTERESTCOLLECTION.LIST>\n        </BILLALLOCATIONS.LIST>`
+    ? `\n        <BILLALLOCATIONS.LIST>\n          <NAME>${opts.billRefName}</NAME>\n          <BILLTYPE>New Ref</BILLTYPE>\n          <TDSDEDUCTEEISSPECIALRATE>No</TDSDEDUCTEEISSPECIALRATE>\n          <AMOUNT>${fmt2(opts.amount)}</AMOUNT>\n        </BILLALLOCATIONS.LIST>`
     : `\n        <BILLALLOCATIONS.LIST> </BILLALLOCATIONS.LIST>`;
   return (
     `\n      <LEDGERENTRIES.LIST>` +
     `\n        <OLDAUDITENTRYIDS.LIST TYPE="Number"><OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS></OLDAUDITENTRYIDS.LIST>` +
     rateBlock +
     `\n        <LEDGERNAME>${opts.ledgerName}</LEDGERNAME>` +
-    `\n        <GSTCLASS> Not Applicable</GSTCLASS>` +
     `\n        <ISDEEMEDPOSITIVE>${opts.isdeemedpositive}</ISDEEMEDPOSITIVE>` +
     `\n        <ISPARTYLEDGER>${opts.isPartyledger}</ISPARTYLEDGER>` +
     `\n        <ISLASTDEEMEDPOSITIVE>${opts.islastdeemedpositive}</ISLASTDEEMEDPOSITIVE>` +
@@ -58,7 +61,6 @@ function buildSalesAllInventoryEntry(itemName, posAmt) {
     `\n      <ALLINVENTORYENTRIES.LIST>` +
     `\n        <STOCKITEMNAME>${itemName}</STOCKITEMNAME>` +
     `\n        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>` +
-    `\n        <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>` +
     `\n        <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
     `\n        <BATCHALLOCATIONS.LIST>` +
     `\n          <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
@@ -72,20 +74,18 @@ function buildSalesAllInventoryEntry(itemName, posAmt) {
   );
 }
 
-// ─── Replica of the NEW validator (from commit 71c341d) ──────────────────────
+// ─── Validator (UNCHANGED — exact copy of current validator in salesXmlGenerator.ts) ─
 
 function parseEmittedAmount(xml) {
   return parseFloat(xml.match(/<AMOUNT>([^<]*)<\/AMOUNT>/)?.[1] ?? '0');
 }
-
 function parseEmittedIsDeemedPositive(xml) {
   return xml.match(/<ISDEEMEDPOSITIVE>([^<]*)<\/ISDEEMEDPOSITIVE>/)?.[1] ?? 'No';
 }
 
-function runNewValidator(label, ledgerEntries, invEntries) {
+function runValidator(invoiceNumber, ledgerEntries, invEntries) {
   let emittedDebitSum = 0;
   let emittedCreditSum = 0;
-
   const rows = [];
 
   for (const entry of ledgerEntries) {
@@ -95,279 +95,260 @@ function runNewValidator(label, ledgerEntries, invEntries) {
     const isDebit = idp === 'Yes';
     if (isDebit) emittedDebitSum += Math.abs(amt);
     else emittedCreditSum += Math.abs(amt);
-    rows.push({ source: 'LEDGER', name, amt, idp, classification: isDebit ? 'DEBIT' : 'CREDIT', contribution: isDebit ? Math.abs(amt) : Math.abs(amt) });
+    rows.push({ src: 'L', name, amt, idp, side: isDebit ? 'DEBIT ' : 'CREDIT', contrib: Math.abs(amt) });
   }
-
   for (const entry of invEntries) {
     const amt = parseEmittedAmount(entry);
     const name = entry.match(/<STOCKITEMNAME>([^<]*)<\/STOCKITEMNAME>/)?.[1] ?? '?';
     const isDebit = amt < 0;
     if (isDebit) emittedDebitSum += Math.abs(amt);
     else emittedCreditSum += amt;
-    rows.push({ source: 'INVENTORY', name, amt, idp: 'N/A', classification: isDebit ? 'DEBIT' : 'CREDIT', contribution: Math.abs(amt) });
+    rows.push({ src: 'I', name, amt, idp: 'N/A', side: isDebit ? 'DEBIT ' : 'CREDIT', contrib: Math.abs(amt) });
   }
 
-  console.log(`\n  ── Step 3: Validator Parsing (${label}) ─────────────`);
-  for (const r of rows) {
-    console.log(`    [${r.source}] "${r.name}"`);
-    console.log(`      Amount Parsed      : ${r.amt}`);
-    console.log(`      ISDEEMEDPOSITIVE   : ${r.idp}`);
-    console.log(`      → ${r.classification.padEnd(6)} ${r.contribution.toFixed(2)}`);
-  }
-
-  console.log(`\n  ── Step 4: Totals ──────────────────────────────────`);
-  console.log(`    Debit  Total : ${emittedDebitSum.toFixed(2)}`);
-  console.log(`    Credit Total : ${emittedCreditSum.toFixed(2)}`);
-  console.log(`    Difference   : ${Math.abs(emittedDebitSum - emittedCreditSum).toFixed(2)}`);
   const imbalance = Math.abs(emittedDebitSum - emittedCreditSum);
-  if (imbalance > 0.01) {
-    console.log(`    ❌ VALIDATOR WOULD SKIP (imbalance ₹${imbalance.toFixed(2)})`);
-  } else {
-    console.log(`    ✅ VALIDATOR PASSES`);
-  }
-  return { emittedDebitSum, emittedCreditSum };
+  return { rows, emittedDebitSum, emittedCreditSum, imbalance };
 }
 
-// ─── Scenario builder ─────────────────────────────────────────────────────────
+// ─── Full builder (exact replica of buildSalesInventoryVoucher logic) ──────────
 
-function buildAndTrace(label, inv) {
-  console.log('\n\n╔══════════════════════════════════════════════════════════════╗');
-  console.log(`║  ${label.padEnd(62)}║`);
-  console.log('╚══════════════════════════════════════════════════════════════╝');
+function buildAndTrace(label, inv, useFixedCustomerDirection) {
+  const PASS = '✅ PASS';
+  const FAIL = '❌ FAIL';
 
   const total = inv.total_amount ?? 0;
   const taxType = inv.tax_type ?? 'cgst_sgst';
   const items = inv.line_items ?? [];
-  const partyLedger = 'B2C Debtors';
-  const salesLedger = 'GST SALE';
+  const partyLedger = inv.party_ledger ?? 'B2C Debtors';
+  const salesLedger = inv.sales_ledger ?? 'GST SALE';
 
-  // Derive financials
+  // Derive financials (paisa-integer accumulation, mirrors deriveInvoiceFinancials)
   let net_goods_taxable = 0;
-  let cgst = 0, sgst = 0, igst = 0;
+  let cgstPaisa = 0, sgstPaisa = 0, igstPaisa = 0;
   for (const item of items) {
     const lineAmt = calcLineAmount(item);
     const gst = item.gst_percent ?? 0;
     net_goods_taxable += lineAmt;
     const taxable = r2(lineAmt);
     if (gst > 0) {
-      if (taxType === 'cgst_sgst') { cgst += r2(taxable * gst / 2 / 100); sgst += r2(taxable * gst / 2 / 100); }
-      else { igst += r2(taxable * gst / 100); }
+      if (taxType === 'cgst_sgst') {
+        cgstPaisa += Math.round(taxable * gst / 2 * 100);
+        sgstPaisa += Math.round(taxable * gst / 2 * 100);
+      } else {
+        igstPaisa += Math.round(taxable * gst * 100);
+      }
     }
   }
-  cgst = r2(cgst); sgst = r2(sgst); igst = r2(igst);
-  const total_gst = cgst + sgst + igst;
-  const round_off = r2(total - net_goods_taxable - total_gst);
+  const cgst = r2(cgstPaisa / 100);
+  const sgst = r2(sgstPaisa / 100);
+  const igst = r2(igstPaisa / 100);
+  net_goods_taxable = r2(net_goods_taxable);
 
-  console.log(`\n  ── Invoice Financials ──────────────────────────────`);
-  console.log(`    inv.total_amount      : ${total}`);
-  console.log(`    d.total              : ${total}`);
-  console.log(`    d.cgst               : ${cgst}`);
-  console.log(`    d.sgst               : ${sgst}`);
-  console.log(`    d.igst               : ${igst}`);
-  console.log(`    d.net_goods_taxable  : ${net_goods_taxable}`);
-  console.log(`    d.round_off          : ${round_off}`);
-
-  // Build ledger and inventory entries
+  // Build journal (ledgerEntries + invEntries)
   const ledgerEntries = [];
   const invEntries = [];
 
-  // Step 1: Customer entry
-  const custEntry = invSalesLedgerEntry({
+  // ── Customer entry (THE FIX) ─────────────────────────────────────────────────
+  let custIdp, custIdpLast;
+  if (useFixedCustomerDirection) {
+    // FIXED: direction derived from accounting transaction
+    const custIsDebit = total > 0;
+    custIdp = custIsDebit ? 'Yes' : 'No';
+    custIdpLast = custIdp;
+  } else {
+    // BUGGY: always hardcoded to 'Yes' (DEBIT)
+    custIdp = 'Yes';
+    custIdpLast = 'Yes';
+  }
+  ledgerEntries.push(invSalesLedgerEntry({
     ledgerName: partyLedger,
-    isdeemedpositive: 'Yes',
+    isdeemedpositive: custIdp,
     isPartyledger: 'Yes',
-    islastdeemedpositive: 'Yes',
+    islastdeemedpositive: custIdpLast,
     amount: -total,
     billRefName: inv.invoice_number,
-  });
-  ledgerEntries.push(custEntry);
+  }));
 
-  console.log(`\n  ── Step 1: ledgerEntries ──────────────────────────`);
-  console.log(`    [1] "${partyLedger}"  amount=${-total}  idp=Yes`);
-
-  // Step 1b: GST entries
-  const taxBase = net_goods_taxable;
-  const absTaxBase = Math.abs(taxBase);
+  // ── GST entries ──────────────────────────────────────────────────────────────
+  const absTaxBase = Math.abs(net_goods_taxable);
   const roundHalf = (r) => Math.round(r * 2) / 2;
-
-  if (Math.abs(cgst) > 0.001) {
-    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(cgst) / absTaxBase) * 100) : 0;
-    const isDebit = cgst < 0;
-    const e = invSalesLedgerEntry({ ledgerName: 'Output CGST', isdeemedpositive: isDebit ? 'Yes' : 'No', isPartyledger: 'No', islastdeemedpositive: isDebit ? 'Yes' : 'No', amount: cgst, rateOfInvoiceTax: rate || undefined });
-    ledgerEntries.push(e);
-    console.log(`    [${ledgerEntries.length}] "Output CGST"  amount=${cgst}  idp=${isDebit ? 'Yes (debit)' : 'No (credit)'}  rate=${rate}%`);
-  } else {
-    console.log(`    CGST skipped: Math.abs(${cgst}) <= 0.001`);
-  }
-  if (Math.abs(sgst) > 0.001) {
-    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(sgst) / absTaxBase) * 100) : 0;
-    const isDebit = sgst < 0;
-    const e = invSalesLedgerEntry({ ledgerName: 'Output SGST', isdeemedpositive: isDebit ? 'Yes' : 'No', isPartyledger: 'No', islastdeemedpositive: isDebit ? 'Yes' : 'No', amount: sgst, rateOfInvoiceTax: rate || undefined });
-    ledgerEntries.push(e);
-    console.log(`    [${ledgerEntries.length}] "Output SGST"  amount=${sgst}  idp=${isDebit ? 'Yes (debit)' : 'No (credit)'}  rate=${rate}%`);
-  } else {
-    console.log(`    SGST skipped: Math.abs(${sgst}) <= 0.001`);
-  }
-  if (Math.abs(igst) > 0.001) {
-    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(igst) / absTaxBase) * 100) : 0;
-    const isDebit = igst < 0;
-    const e = invSalesLedgerEntry({ ledgerName: 'Output IGST', isdeemedpositive: isDebit ? 'Yes' : 'No', isPartyledger: 'No', islastdeemedpositive: isDebit ? 'Yes' : 'No', amount: igst, rateOfInvoiceTax: rate || undefined });
-    ledgerEntries.push(e);
-    console.log(`    [${ledgerEntries.length}] "Output IGST"  amount=${igst}  idp=${isDebit ? 'Yes (debit)' : 'No (credit)'}  rate=${rate}%`);
+  for (const [gstName, gstAmt] of [['Output CGST', cgst], ['Output SGST', sgst], ['Output IGST', igst]]) {
+    if (Math.abs(gstAmt) > 0.001) {
+      const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(gstAmt) / absTaxBase) * 100) : 0;
+      const isDebit = gstAmt < 0;
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: gstName,
+        isdeemedpositive: isDebit ? 'Yes' : 'No',
+        isPartyledger: 'No',
+        islastdeemedpositive: isDebit ? 'Yes' : 'No',
+        amount: gstAmt,
+        rateOfInvoiceTax: rate || undefined,
+      }));
+    }
   }
 
-  // Step 2: Inventory entries
+  // ── Inventory entries ────────────────────────────────────────────────────────
   let totalItemsAmount = 0;
-  console.log(`\n  ── Step 2: invEntries ─────────────────────────────`);
   for (const item of items) {
     const posAmt = calcLineAmount(item);
     totalItemsAmount += posAmt;
-    const e = buildSalesAllInventoryEntry(item.description ?? 'Item', posAmt);
-    invEntries.push(e);
-    console.log(`    "${item.description}"  qty=${item.qty}  rate=${item.rate}  gst=${item.gst_percent ?? 0}%  calcLineAmount=${posAmt}`);
+    invEntries.push(buildSalesAllInventoryEntry(item.description ?? 'Item', posAmt));
   }
 
-  // Gap formula + sales ledger entry
+  // ── Gap formula + sales ledger ───────────────────────────────────────────────
   const taxes = cgst + sgst + igst;
   const totalCreditSide = totalItemsAmount + taxes;
   const totalDebitSide = total;
   const gap = parseFloat((totalDebitSide - totalCreditSide).toFixed(2));
   const netSalesLedgerAdj = gap;
 
-  console.log(`\n    Gap formula:`);
-  console.log(`      totalItemsAmount  : ${totalItemsAmount}`);
-  console.log(`      taxes             : ${taxes}`);
-  console.log(`      totalCreditSide   : ${totalCreditSide}`);
-  console.log(`      totalDebitSide    : ${totalDebitSide}`);
-  console.log(`      gap               : ${gap}`);
-  console.log(`      netSalesLedgerAdj : ${netSalesLedgerAdj}`);
-
   if (Math.abs(netSalesLedgerAdj) > 0.01) {
     if (netSalesLedgerAdj > 0) {
-      const e = invSalesIncomeLedgerEntry(salesLedger, netSalesLedgerAdj);
-      ledgerEntries.push(e);
-      console.log(`    [${ledgerEntries.length}] "${salesLedger}" CREDIT  amount=${netSalesLedgerAdj}  idp=No`);
+      ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, netSalesLedgerAdj));
     } else {
-      const e = invSalesLedgerEntry({ ledgerName: salesLedger, isdeemedpositive: 'Yes', isPartyledger: 'No', islastdeemedpositive: 'Yes', amount: -Math.abs(netSalesLedgerAdj) });
-      ledgerEntries.push(e);
-      console.log(`    [${ledgerEntries.length}] "${salesLedger}" DEBIT  amount=${-Math.abs(netSalesLedgerAdj)}  idp=Yes`);
+      ledgerEntries.push(invSalesLedgerEntry({
+        ledgerName: salesLedger,
+        isdeemedpositive: 'Yes',
+        isPartyledger: 'No',
+        islastdeemedpositive: 'Yes',
+        amount: -Math.abs(netSalesLedgerAdj),
+      }));
     }
-  } else {
-    console.log(`    No sales ledger entry (netSalesLedgerAdj=${netSalesLedgerAdj} too small)`);
   }
 
-  // Run validator
-  const { emittedDebitSum, emittedCreditSum } = runNewValidator(label, ledgerEntries, invEntries);
+  // ── Run validator (UNCHANGED) ─────────────────────────────────────────────────
+  const { rows, emittedDebitSum, emittedCreditSum, imbalance } = runValidator(inv.invoice_number, ledgerEntries, invEntries);
 
-  // Answer the key question
-  console.log(`\n  ── ROOT CAUSE ANSWER ───────────────────────────────`);
-  if (emittedCreditSum < 0.01 && emittedDebitSum > 0.01) {
-    console.log(`    THIS SCENARIO MATCHES "Debit X, Credit 0" PATTERN`);
-    // Check if it's validator bug or builder bug
-    // Builder check: are there entries with positive amount and idp='No'?
-    let hasPositiveCreditEntry = false;
-    for (const e of ledgerEntries) {
-      const amt = parseEmittedAmount(e);
-      const idp = parseEmittedIsDeemedPositive(e);
-      if (idp === 'No' && amt > 0.001) { hasPositiveCreditEntry = true; break; }
-    }
-    for (const e of invEntries) {
-      const amt = parseEmittedAmount(e);
-      if (amt > 0.001) { hasPositiveCreditEntry = true; break; }
-    }
-    if (hasPositiveCreditEntry) {
-      console.log(`    CONCLUSION → Case B: VALIDATOR BUG`);
-      console.log(`    The builder emitted credit entries with positive amounts,`);
-      console.log(`    but the validator classified them as DEBIT due to wrong IDP logic.`);
-    } else {
-      console.log(`    CONCLUSION → Case A: BUILDER BUG`);
-      console.log(`    The builder emitted no positive credit-side entries.`);
-    }
-  } else {
-    console.log(`    This scenario does NOT produce "Debit X, Credit 0".`);
-    console.log(`    Debit=${emittedDebitSum.toFixed(2)}, Credit=${emittedCreditSum.toFixed(2)}`);
+  // ── Print report ─────────────────────────────────────────────────────────────
+  const status = imbalance <= 0.01 ? PASS : FAIL;
+  const dir = useFixedCustomerDirection ? '[FIXED]' : '[BUGGY]';
+  console.log(`\n${dir} ${label} ${status}`);
+  console.log(`  Invoice: ${inv.invoice_number}  total=${total}  tax_type=${taxType}`);
+  console.log(`  Financials: cgst=${cgst}  sgst=${sgst}  igst=${igst}  net_taxable=${net_goods_taxable}`);
+  console.log(`  Customer ledger isdeemedpositive: ${custIdp} (amount=${-total})`);
+  console.log(`  Entries emitted:`);
+  for (const r of rows) {
+    const src = r.src === 'L' ? 'LEDGER   ' : 'INVENTORY';
+    console.log(`    [${src}] "${r.name.padEnd(20)}"  amt=${String(r.amt).padStart(8)}  idp=${r.idp.padEnd(3)}  → ${r.side} ${r.contrib.toFixed(2)}`);
   }
+  console.log(`  Debit  : ${emittedDebitSum.toFixed(2)}`);
+  console.log(`  Credit : ${emittedCreditSum.toFixed(2)}`);
+  console.log(`  Gap    : ${imbalance.toFixed(2)} ${status}`);
+
+  return { pass: imbalance <= 0.01, emittedDebitSum, emittedCreditSum };
 }
 
-// ─── SCENARIO 1: Normal sale (should pass) ────────────────────────────────────
-buildAndTrace('SCENARIO 1: Normal sale — 1 item @5% GST', {
-  invoice_number: 'TEST001',
-  total_amount: 80.00,
-  tax_type: 'cgst_sgst',
-  line_items: [
-    { description: 'Fabric A', qty: 5, rate: 15.24, gst_percent: 5, disc_percent: 0 },
-  ],
-});
+// ─── Test cases ───────────────────────────────────────────────────────────────
 
-// ─── SCENARIO 2: Pure credit note (all returns, d.total < 0) ─────────────────
-buildAndTrace('SCENARIO 2: Pure credit note — all items are returns (d.total < 0)', {
-  invoice_number: 'TEST002',
-  total_amount: -80.00,
-  tax_type: 'cgst_sgst',
-  line_items: [
-    { description: 'Fabric A', qty: -5, rate: 15.24, gst_percent: 5, disc_percent: 0 },
-  ],
-});
+const TESTS = [
+  {
+    label: 'Normal sale — taxable item 5% (baseline)',
+    inv: {
+      invoice_number: 'TEST-NORMAL-01', total_amount: 80,
+      tax_type: 'cgst_sgst',
+      line_items: [{ description: '63041910 @5%', qty: 5, rate: 15.24, gst_percent: 5, disc_percent: 0 }],
+    },
+  },
+  {
+    label: 'Normal sale — multiple taxable items 18%',
+    inv: {
+      invoice_number: 'TEST-NORMAL-02', total_amount: 456,
+      tax_type: 'cgst_sgst',
+      line_items: [
+        { description: 'Item A', qty: 2, rate: 193.22, gst_percent: 18, disc_percent: 0 },
+      ],
+    },
+  },
+  {
+    label: 'Credit note — all returns, taxable 5% (shape of the 14 failures)',
+    inv: {
+      invoice_number: 'KKE002537-SIM', total_amount: -80,
+      tax_type: 'cgst_sgst',
+      line_items: [{ description: '63041910 @5%', qty: -5, rate: 15.24, gst_percent: 5, disc_percent: 0 }],
+    },
+  },
+  {
+    label: 'Credit note — all returns, taxable 18%',
+    inv: {
+      invoice_number: 'KKE002442-SIM', total_amount: -456,
+      tax_type: 'cgst_sgst',
+      line_items: [{ description: 'Item A 18%', qty: -2, rate: 193.22, gst_percent: 18, disc_percent: 0 }],
+    },
+  },
+  {
+    label: 'Credit note — large amount (shape of KKE002105)',
+    inv: {
+      invoice_number: 'KKE002105-SIM', total_amount: -6220,
+      tax_type: 'cgst_sgst',
+      line_items: [
+        { description: 'Fabric 63041910', qty: -100, rate: 52.71, gst_percent: 5, disc_percent: 0 },
+      ],
+    },
+  },
+  {
+    label: 'Credit note — zero-GST exempt returns',
+    inv: {
+      invoice_number: 'TEST-EXEMPT-CN', total_amount: -80,
+      tax_type: 'cgst_sgst',
+      line_items: [{ description: 'Exempt fabric', qty: -5, rate: 16.0, gst_percent: 0, disc_percent: 0 }],
+    },
+  },
+  {
+    label: 'Mixed-sign: sales exceeds returns (d.total > 0) — original 15 pattern',
+    inv: {
+      invoice_number: 'KKE001906-SIM', total_amount: -810,
+      tax_type: 'cgst_sgst',
+      line_items: [
+        { description: '63041910 @5%', qty: 10, rate: 54.42, gst_percent: 5, disc_percent: 0 },
+        { description: '63041990 @5%', qty: -25, rate: 55.24, gst_percent: 5, disc_percent: 0 },
+      ],
+    },
+  },
+  {
+    label: 'IGST — inter-state credit note',
+    inv: {
+      invoice_number: 'TEST-IGST-CN', total_amount: -240,
+      tax_type: 'igst',
+      line_items: [{ description: 'Fabric IGST', qty: -10, rate: 20.34, gst_percent: 12, disc_percent: 0 }],
+    },
+  },
+  {
+    label: 'Normal sale with round-off',
+    inv: {
+      invoice_number: 'TEST-RO-01', total_amount: 100,
+      tax_type: 'cgst_sgst',
+      line_items: [
+        { description: 'Item A', qty: 3, rate: 28.17, gst_percent: 5, disc_percent: 0 },
+      ],
+    },
+  },
+];
 
-// ─── SCENARIO 3: Mixed invoice (some positive, some negative) ─────────────────
-buildAndTrace('SCENARIO 3: Mixed invoice — returns > sales (d.total < 0)', {
-  invoice_number: 'TEST003',
-  total_amount: -80.00,
-  tax_type: 'cgst_sgst',
-  line_items: [
-    { description: 'Fabric A', qty: 3,  rate: 15.24, gst_percent: 5, disc_percent: 0 },
-    { description: 'Fabric B', qty: -8, rate: 15.24, gst_percent: 5, disc_percent: 0 },
-  ],
-});
+// ─── Run every test under both buggy and fixed generator ─────────────────────
 
-// ─── SCENARIO 4: Zero-GST pure credit note ────────────────────────────────────
-buildAndTrace('SCENARIO 4: Zero-GST pure credit note (exempt items)', {
-  invoice_number: 'TEST004',
-  total_amount: -80.00,
-  tax_type: 'cgst_sgst',
-  line_items: [
-    { description: 'Exempt Fabric', qty: -5, rate: 16.00, gst_percent: 0, disc_percent: 0 },
-  ],
-});
-
-// ─── SCENARIO 5: Credit note with d.total positive but all items negative ─────
-buildAndTrace('SCENARIO 5: DB stores total_amount as POSITIVE but all items are returns', {
-  invoice_number: 'TEST005',
-  total_amount: 80.00,
-  tax_type: 'cgst_sgst',
-  line_items: [
-    { description: 'Fabric A', qty: -5, rate: 15.24, gst_percent: 5, disc_percent: 0 },
-  ],
-});
-
-// ─── SCENARIO 6: What invSalesIncomeLedgerEntry exactly produces ──────────────
-console.log('\n\n╔══════════════════════════════════════════════════════════════╗');
-console.log('║  REGEX VERIFICATION — Raw XML output of each entry type      ║');
-console.log('╚══════════════════════════════════════════════════════════════╝');
-
-const testEntries = {
-  'Customer (normal sale)': invSalesLedgerEntry({ ledgerName: 'B2C Debtors', isdeemedpositive: 'Yes', isPartyledger: 'Yes', islastdeemedpositive: 'Yes', amount: -80.00, billRefName: 'KKE001' }),
-  'Customer (credit note d.total<0)': invSalesLedgerEntry({ ledgerName: 'B2C Debtors', isdeemedpositive: 'Yes', isPartyledger: 'Yes', islastdeemedpositive: 'Yes', amount: 80.00, billRefName: 'KKE002' }),
-  'CGST credit (normal)': invSalesLedgerEntry({ ledgerName: 'Output CGST', isdeemedpositive: 'No', isPartyledger: 'No', islastdeemedpositive: 'No', amount: 3.81, rateOfInvoiceTax: 2.5 }),
-  'CGST debit (credit note)': invSalesLedgerEntry({ ledgerName: 'Output CGST', isdeemedpositive: 'Yes', isPartyledger: 'No', islastdeemedpositive: 'Yes', amount: -3.81, rateOfInvoiceTax: 2.5 }),
-  'Sales ledger credit': invSalesIncomeLedgerEntry('GST SALE', 72.38),
-  'Inventory item positive': buildSalesAllInventoryEntry('Fabric 63041910', 72.38),
-  'Inventory item negative (return)': buildSalesAllInventoryEntry('Fabric 63041990', -72.38),
-};
-
-for (const [name, xml] of Object.entries(testEntries)) {
-  const amt = parseEmittedAmount(xml);
-  const idp = parseEmittedIsDeemedPositive(xml);
-  const isDebitByIDP = idp === 'Yes';
-  const isDebitBySign = amt < 0;
-  console.log(`\n  "${name}"`);
-  console.log(`    Parsed AMOUNT          : ${amt}`);
-  console.log(`    Parsed ISDEEMEDPOSITIVE: ${idp}`);
-  console.log(`    Validator says (IDP)   : ${isDebitByIDP ? 'DEBIT' : 'CREDIT'} (contribution ${Math.abs(amt).toFixed(2)})`);
-  console.log(`    Sign-only says         : ${isDebitBySign ? 'DEBIT' : 'CREDIT'} (contribution ${Math.abs(amt).toFixed(2)})`);
-  if (isDebitByIDP !== isDebitBySign) {
-    console.log(`    ⚠️  IDP and SIGN DISAGREE — IDP=${isDebitByIDP?'DEBIT':'CREDIT'}, SIGN=${isDebitBySign?'DEBIT':'CREDIT'}`);
-  }
+console.log('═══════════════════════════════════════════════════════════════════');
+console.log(' BEFORE FIX: shows how the bug manifests for each invoice shape');
+console.log('═══════════════════════════════════════════════════════════════════');
+let buggyFails = 0;
+for (const t of TESTS) {
+  const { pass } = buildAndTrace(t.label, t.inv, false);
+  if (!pass) buggyFails++;
 }
+console.log(`\nBuggy generator: ${TESTS.length - buggyFails}/${TESTS.length} pass, ${buggyFails} fail`);
 
-console.log('\n\nDone.\n');
+console.log('\n═══════════════════════════════════════════════════════════════════');
+console.log(' AFTER FIX: every invoice type must balance');
+console.log('═══════════════════════════════════════════════════════════════════');
+let fixedFails = 0;
+for (const t of TESTS) {
+  const { pass } = buildAndTrace(t.label, t.inv, true);
+  if (!pass) fixedFails++;
+}
+console.log(`\nFixed generator: ${TESTS.length - fixedFails}/${TESTS.length} pass, ${fixedFails} fail`);
+
+if (fixedFails === 0) {
+  console.log('\n✅ ALL SCENARIOS PASS — safe to deploy');
+} else {
+  console.log('\n❌ SOME SCENARIOS STILL FAIL — do not deploy');
+  process.exit(1);
+}

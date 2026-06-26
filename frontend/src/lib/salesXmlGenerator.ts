@@ -896,17 +896,25 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
 
   const ledgerEntries: string[] = [];
 
-  // 1. Customer (debtor) — DEBIT.
-  // In Tally inventory-mode LEDGERENTRIES.LIST the sign convention is:
-  //   NEGATIVE amount = DEBIT (money flows out / receivable from customer)
-  //   POSITIVE amount = CREDIT (money flows in / payable to supplier)
-  // This is the OPPOSITE of ALLLEDGERENTRIES.LIST used in accounting-only mode.
-  // Mirror of purchase: party (creditor) uses +d.total (CREDIT); sales: customer uses -d.total (DEBIT).
+  // 1. Customer ledger — direction derived from the accounting transaction, not hardcoded.
+  //
+  // In Tally inventory-mode LEDGERENTRIES.LIST:
+  //   NEGATIVE amount = DEBIT   (isdeemedpositive='Yes')
+  //   POSITIVE amount = CREDIT  (isdeemedpositive='No')
+  //
+  // Normal sale    (d.total > 0): amount = -d.total < 0 → DEBIT  (customer owes us)
+  // Credit note    (d.total < 0): amount = -d.total > 0 → CREDIT (we owe customer / reduce receivable)
+  // Zero-value     (d.total = 0): amount = 0, no effect on either side
+  //
+  // Hardcoding isdeemedpositive='Yes' was the root cause of the 14 skipped credit note vouchers:
+  // the customer entry was classified as DEBIT even when d.total < 0 made amount positive,
+  // so the validator counted it as debit and found no credit entries → imbalance = |d.total|.
+  const custIsDebit = d.total > 0;
   ledgerEntries.push(invSalesLedgerEntry({
     ledgerName: partyLedger,
-    isdeemedpositive: 'Yes',
+    isdeemedpositive: custIsDebit ? 'Yes' : 'No',
     isPartyledger: 'Yes',
-    islastdeemedpositive: 'Yes',
+    islastdeemedpositive: custIsDebit ? 'Yes' : 'No',
     amount: -d.total,
     billRefName: inv.invoice_number,
   }));
