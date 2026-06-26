@@ -56,11 +56,42 @@ export interface SalesXmlGeneratorInput {
   stockItemMode?: 'hsn_driven' | null;
 }
 
+export interface VoucherDiagnostic {
+  invoice_number: string;
+  mode: 'inventory' | 'accounting_only';
+  /** Raw value from the database */
+  tax_type_raw: string | null;
+  /** Value actually used after inferEffectiveTaxType() */
+  eff_tax_type: 'cgst_sgst' | 'igst';
+  buyer_gstin: string;
+  buyer_state: string;
+  cmp_state: string;
+  /** Whether buyer_state == cmp_state based on GSTIN prefixes */
+  is_intra_state: boolean | null;
+  /** Mismatch: eff_tax_type says igst but intra-state, or cgst_sgst but inter-state */
+  gst_state_conflict: boolean;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+  round_off: number;
+  bill_discount: number;
+  /** Gap from the balance formula before sales-ledger adjustment (inventory mode only) */
+  pre_adj_gap: number | null;
+  /** Net sales ledger adjustment (inventory mode only) */
+  net_sales_ledger_adj: number | null;
+  validator_result: string | null;
+  ledger_entries: Array<{ name: string; amount: number }>;
+  inventory_entries: Array<{ item: string; amount: number }>;
+}
+
 export interface SalesXmlGeneratorResult {
   xml: string;
   includedCount: number;
   skippedInvoices: Array<{ invoice_number: string; reason: string }>;
   warnings: Array<{ invoice_number: string; warning: string }>;
+  /** Full pipeline trace for every invoice — use for forensic analysis of failures */
+  diagnostics: VoucherDiagnostic[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -113,7 +144,7 @@ function findOutputTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string
 
 // ─── Accounting-only voucher ──────────────────────────────────────────────────
 
-interface VoucherResult { xml: string | null; skip?: string; warnings: string[]; }
+interface VoucherResult { xml: string | null; skip?: string; warnings: string[]; diagnostic?: VoucherDiagnostic; }
 
 /**
  * When inv.tax_type is null, buildFullTaxSummary falls into the else-branch (IGST).
@@ -138,11 +169,14 @@ function inferEffectiveTaxType(
 
 /**
  * Pre-emission voucher validator. Runs before XML is serialised and returns an error
- * string if the voucher would fail Tally's debit/credit balance check, or null if ok.
- * Two failure modes:
- *   1. Arithmetic imbalance — debit side ≠ credit side (indicates a formula bug).
- *   2. Mixed GST types — both CGST and IGST are non-zero, which Tally rejects because
- *      a single supply can only be intra-state (CGST+SGST) or inter-state (IGST).
+ * string if the voucher would fail Tally's validation, or null if ok.
+ * Checks:
+ *   1. Arithmetic — debit side ≠ credit side (formula regression guard).
+ *   2. Mixed GST — both CGST and IGST non-zero on the same invoice (impossible in GST law).
+ *   3. CGST ≠ SGST — must always be split equally.
+ *   4. GST type vs PLACEOFSUPPLY — Tally validates that intra-state uses CGST+SGST and
+ *      inter-state uses IGST. This mismatch is the most common cause of "Debit Credit
+ *      Mismatch" on otherwise arithmetically-balanced vouchers.
  */
 function validateVoucherBalance(opts: {
   invoiceNumber: string;
@@ -151,17 +185,29 @@ function validateVoucherBalance(opts: {
   cgst: number;
   sgst: number;
   igst: number;
+  buyerState?: string;
+  cmpState?: string;
 }): string | null {
-  const { invoiceNumber, debitTotal, creditTotal, cgst, sgst, igst } = opts;
+  const { invoiceNumber, debitTotal, creditTotal, cgst, sgst, igst, buyerState, cmpState } = opts;
   const imbalance = Math.abs(debitTotal - creditTotal);
   if (imbalance > 0.01) {
     return `Voucher "${invoiceNumber}" debit/credit imbalance ₹${imbalance.toFixed(2)} (debit ${debitTotal.toFixed(2)}, credit ${creditTotal.toFixed(2)})`;
   }
   if (cgst > 0.001 && igst > 0.001) {
-    return `Voucher "${invoiceNumber}" has both CGST (${cgst.toFixed(2)}) and IGST (${igst.toFixed(2)}) — mixed GST types are invalid; check tax_type`;
+    return `Voucher "${invoiceNumber}" has both CGST (${cgst.toFixed(2)}) and IGST (${igst.toFixed(2)}) — mixed GST types are invalid`;
   }
   if (cgst > 0.001 && Math.abs(cgst - sgst) > 0.01) {
     return `Voucher "${invoiceNumber}" CGST (${cgst.toFixed(2)}) ≠ SGST (${sgst.toFixed(2)})`;
+  }
+  // Check GST type vs PLACEOFSUPPLY — the check Tally actually enforces
+  if (buyerState && cmpState) {
+    const isIntraState = buyerState === cmpState;
+    if (isIntraState && igst > 0.001) {
+      return `Voucher "${invoiceNumber}" emits IGST (${igst.toFixed(2)}) but buyer state "${buyerState}" == company state "${cmpState}" (intra-state requires CGST+SGST)`;
+    }
+    if (!isIntraState && (cgst > 0.001 || sgst > 0.001)) {
+      return `Voucher "${invoiceNumber}" emits CGST/SGST but buyer state "${buyerState}" ≠ company state "${cmpState}" (inter-state requires IGST)`;
+    }
   }
   return null;
 }
@@ -268,16 +314,46 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
     entries.push(ledgerEntry(roLedger, d.round_off > 0 ? 'No' : 'Yes', -d.round_off));
   }
 
-  // 6. Pre-emission balance check — blocks generation of any voucher that would fail Tally.
+  // 6. Pre-emission balance check — arithmetic + PLACEOFSUPPLY vs GST type.
+  const buyerGstinAcc = inv.buyer_gstin ?? '';
+  const buyerStateAcc = stateFromGstin(buyerGstinAcc);
+  const cmpGstinAcc = input.companyGstin ?? '';
+  const cmpStateAcc = input.companyState ?? stateFromGstin(cmpGstinAcc);
+  const isIntraStateAcc = buyerStateAcc && cmpStateAcc ? buyerStateAcc === cmpStateAcc : null;
   const valErr = validateVoucherBalance({
     invoiceNumber: inv.invoice_number,
     debitTotal: d.total,
     creditTotal: d.net_goods_taxable + d.taxable_charges_total + d.non_taxable_charges_total + d.total_gst + d.round_off,
     cgst: d.cgst, sgst: d.sgst, igst: d.igst,
+    buyerState: buyerStateAcc, cmpState: cmpStateAcc,
   });
-  if (valErr) return { xml: null, skip: valErr, warnings };
 
-  return { xml: wrapSalesVoucher(inv, partyLedger, entries.join('')), warnings };
+  const diagnostic: VoucherDiagnostic = {
+    invoice_number: inv.invoice_number,
+    mode: 'accounting_only',
+    tax_type_raw: inv.tax_type ?? null,
+    eff_tax_type: effTaxType,
+    buyer_gstin: buyerGstinAcc,
+    buyer_state: buyerStateAcc,
+    cmp_state: cmpStateAcc,
+    is_intra_state: isIntraStateAcc,
+    gst_state_conflict: isIntraStateAcc === true ? d.igst > 0.001 : isIntraStateAcc === false ? (d.cgst > 0.001 || d.sgst > 0.001) : false,
+    cgst: d.cgst, sgst: d.sgst, igst: d.igst, total: d.total,
+    round_off: d.round_off, bill_discount: d.bill_discount,
+    pre_adj_gap: null,
+    net_sales_ledger_adj: null,
+    validator_result: valErr,
+    ledger_entries: entries.map((xml) => {
+      const name = xml.match(/<LEDGERNAME>([^<]*)<\/LEDGERNAME>/)?.[1] ?? '?';
+      const amt = parseFloat(xml.match(/<AMOUNT>([^<]*)<\/AMOUNT>/)?.[1] ?? '0');
+      return { name, amount: amt };
+    }),
+    inventory_entries: [],
+  };
+
+  if (valErr) return { xml: null, skip: valErr, warnings, diagnostic };
+
+  return { xml: wrapSalesVoucher(inv, partyLedger, entries.join('')), warnings, diagnostic };
 }
 
 // ─── Inventory-mode helpers ───────────────────────────────────────────────────
@@ -768,6 +844,13 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
   const effTaxType = inferEffectiveTaxType(inv.tax_type, acc);
   const d = deriveInvoiceFinancials({ ...inv, tax_type: effTaxType });
 
+  // Compute state codes here so we can pass them to both the validator and the diagnostic.
+  const buyerGstin = inv.buyer_gstin ?? '';
+  const buyerState = stateFromGstin(buyerGstin);
+  const cmpGstin = input.companyGstin ?? '';
+  const cmpState = input.companyState ?? stateFromGstin(cmpGstin);
+  const isIntraState = buyerState && cmpState ? buyerState === cmpState : null;
+
   const accCustomer = (acc?.customerLedger as string | undefined)?.trim() ?? '';
   const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
   const partyLedger = accCustomer || resolvedCustomer?.tally_ledger_name || (inv.buyer_name ?? '');
@@ -946,21 +1029,54 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     }
   }
 
-  // 6. Pre-emission balance check — blocks XML generation for any imbalanced voucher.
-  // debitTotal after gap adjustment = totalCreditSide + |netSalesLedgerAdj|, which by
-  // construction equals totalDebitSide. We verify GST type consistency (CGST XOR IGST)
-  // which is the structural cause of Tally "Debit Credit Mismatch" on intra-state invoices.
+  // 6. Pre-emission balance check: arithmetic + GST-type vs PLACEOFSUPPLY consistency.
+  // The PLACEOFSUPPLY/CMPGSTSTATE check is what Tally actually enforces — arithmetic alone
+  // is insufficient because the formula is algebraically balanced even when the wrong GST
+  // type is used, but Tally rejects intra-state+IGST or inter-state+CGST/SGST.
+  const adjDebit = netSalesLedgerAdj < 0 ? Math.abs(netSalesLedgerAdj) : 0;
+  const adjCredit = netSalesLedgerAdj > 0 ? netSalesLedgerAdj : 0;
   const valErr = validateVoucherBalance({
     invoiceNumber: inv.invoice_number,
-    debitTotal: totalDebitSide,
-    creditTotal: totalCreditSide + (netSalesLedgerAdj > 0 ? netSalesLedgerAdj : 0),
+    debitTotal: totalDebitSide + adjDebit,
+    creditTotal: totalCreditSide + adjCredit,
     cgst: d.cgst, sgst: d.sgst, igst: d.igst,
+    buyerState, cmpState,
   });
-  if (valErr) return { xml: null, skip: valErr, warnings };
+
+  // Build diagnostic regardless of pass/fail — captures the full pipeline for every invoice.
+  const diagnostic: VoucherDiagnostic = {
+    invoice_number: inv.invoice_number,
+    mode: 'inventory',
+    tax_type_raw: inv.tax_type ?? null,
+    eff_tax_type: effTaxType,
+    buyer_gstin: buyerGstin,
+    buyer_state: buyerState,
+    cmp_state: cmpState,
+    is_intra_state: isIntraState,
+    gst_state_conflict: isIntraState === true ? d.igst > 0.001 : isIntraState === false ? (d.cgst > 0.001 || d.sgst > 0.001) : false,
+    cgst: d.cgst, sgst: d.sgst, igst: d.igst, total: d.total,
+    round_off: d.round_off, bill_discount: d.bill_discount,
+    pre_adj_gap: gap,
+    net_sales_ledger_adj: netSalesLedgerAdj,
+    validator_result: valErr,
+    ledger_entries: ledgerEntries.map((xml) => {
+      const name = xml.match(/<LEDGERNAME>([^<]*)<\/LEDGERNAME>/)?.[1] ?? '?';
+      const amt = parseFloat(xml.match(/<AMOUNT>([^<]*)<\/AMOUNT>/)?.[1] ?? '0');
+      return { name, amount: amt };
+    }),
+    inventory_entries: invEntries.map((xml) => {
+      const item = xml.match(/<STOCKITEMNAME>([^<]*)<\/STOCKITEMNAME>/)?.[1] ?? '?';
+      const amt = parseFloat(xml.match(/<AMOUNT>([^<]*)<\/AMOUNT>/)?.[1] ?? '0');
+      return { item, amount: amt };
+    }),
+  };
+
+  if (valErr) return { xml: null, skip: valErr, warnings, diagnostic };
 
   return {
     xml: wrapSalesInventoryVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join(''), input),
     warnings,
+    diagnostic,
   };
 }
 
@@ -978,6 +1094,7 @@ export function generateSalesVouchers(input: SalesXmlGeneratorInput): SalesXmlGe
 function buildVouchers(input: SalesXmlGeneratorInput): SalesXmlGeneratorResult {
   const skipped: SalesXmlGeneratorResult['skippedInvoices'] = [];
   const allWarnings: SalesXmlGeneratorResult['warnings'] = [];
+  const diagnostics: VoucherDiagnostic[] = [];
   const voucherBlocks: string[] = [];
 
   const seen = new Set<string>();
@@ -995,6 +1112,7 @@ function buildVouchers(input: SalesXmlGeneratorInput): SalesXmlGeneratorResult {
     const invMode = inv.invoice_voucher_mode ?? input.voucherMode ?? 'accounting_only';
     const result = invMode === 'inventory' ? buildSalesInventoryVoucher(inv, input) : buildSalesVoucher(inv, input);
     result.warnings.forEach((w) => allWarnings.push({ invoice_number: inv.invoice_number, warning: w }));
+    if (result.diagnostic) diagnostics.push(result.diagnostic);
     if (!result.xml || result.skip) {
       skipped.push({ invoice_number: inv.invoice_number, reason: result.skip ?? 'Unknown error' });
     } else {
@@ -1020,7 +1138,7 @@ function buildVouchers(input: SalesXmlGeneratorInput): SalesXmlGeneratorResult {
   </BODY>
 </ENVELOPE>`;
 
-  return { xml, includedCount: voucherBlocks.length, skippedInvoices: skipped, warnings: allWarnings };
+  return { xml, includedCount: voucherBlocks.length, skippedInvoices: skipped, warnings: allWarnings, diagnostics };
 }
 
 // ─── Masters XML ──────────────────────────────────────────────────────────────

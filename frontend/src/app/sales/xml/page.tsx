@@ -1709,9 +1709,39 @@ export default function SalesXmlPage() {
       const filename = `${fileBase}_vouchers.xml`;
       downloadXmlFile(output.xml, filename);
       setLastXmlFilename(filename);
+
+      // Always download the diagnostics JSON so the pipeline is fully inspectable.
+      // Open it in any JSON viewer to see tax_type, effTaxType, buyerState, cmpState,
+      // gst_state_conflict, validator_result, and all ledger/inventory entries per invoice.
+      const conflicts = output.diagnostics.filter((d) => d.gst_state_conflict || d.validator_result);
+      const diagPayload = {
+        generated_at: new Date().toISOString(),
+        included: output.includedCount,
+        skipped: output.skippedInvoices.length,
+        gst_state_conflicts: conflicts.length,
+        all_diagnostics: output.diagnostics,
+      };
+      const diagBlob = new Blob([JSON.stringify(diagPayload, null, 2)], { type: 'application/json' });
+      const diagUrl = URL.createObjectURL(diagBlob);
+      const diagLink = document.createElement('a');
+      diagLink.href = diagUrl;
+      diagLink.download = `${fileBase}_voucher_diagnostics.json`;
+      document.body.appendChild(diagLink);
+      diagLink.click();
+      document.body.removeChild(diagLink);
+      URL.revokeObjectURL(diagUrl);
+
+      const msgs: string[] = [];
       if (output.skippedInvoices.length > 0) {
-        const msgs = output.skippedInvoices.map((s: { invoice_number: string; reason: string }) => `• ${s.invoice_number}: ${s.reason}`).join('\n');
-        alert(`XML generated. ${output.includedCount} voucher(s) included.\n\n${output.skippedInvoices.length} skipped:\n${msgs}`);
+        msgs.push(`${output.skippedInvoices.length} skipped:\n` +
+          output.skippedInvoices.map((s: { invoice_number: string; reason: string }) => `  • ${s.invoice_number}: ${s.reason}`).join('\n'));
+      }
+      if (conflicts.length > 0) {
+        msgs.push(`${conflicts.length} GST state conflicts (see _voucher_diagnostics.json):\n` +
+          conflicts.map((c) => `  • ${c.invoice_number}: state=${c.buyer_state||'?'}/${c.cmp_state||'?'} eff_tax=${c.eff_tax_type} validator=${c.validator_result ?? 'passed'}`).join('\n'));
+      }
+      if (msgs.length > 0) {
+        alert(`XML generated. ${output.includedCount} voucher(s) included.\n\n${msgs.join('\n\n')}`);
       }
     } catch (e: unknown) {
       alert(`Error generating vouchers XML: ${getErrMsg(e)}`);
