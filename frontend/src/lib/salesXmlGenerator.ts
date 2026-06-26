@@ -1140,7 +1140,11 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
   const includeDuties      = type === 'all' || type === 'duties_taxes'  || type === 'ledgers_only';
   const includeStockItems  = type === 'all' || type === 'stock_items';
 
-  // Customers referenced by the batch — skip pooled/generic ledgers that already exist in Tally
+  // Customers referenced by the batch.
+  // Pass 1: emit individual B2B/named-B2C customer ledgers (skip pooled names like "B2C Debtors").
+  // Pass 2: emit Sundry Debtors masters for every ledger name actually used in acceptance records
+  //         (e.g. "B2C Debtors") that wasn't already emitted in Pass 1. Fresh Tally companies
+  //         don't have these pooled aggregator ledgers, so they must be created explicitly.
   if (includeCustomers) {
     const seenCustomers = new Set<string>();
     for (const inv of input.invoices) {
@@ -1148,6 +1152,22 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
       if (customer && !seenCustomers.has(customer.tally_ledger_name) && !isPooledLedger(customer.tally_ledger_name)) {
         seenCustomers.add(customer.tally_ledger_name);
         messages.push(buildCustomerLedgerBlock(customer, fyStart));
+      }
+    }
+    // Pass 2: acceptance-referenced ledgers (including pooled ones like "B2C Debtors")
+    for (const inv of input.invoices) {
+      const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
+      const cl = (acc?.customerLedger as string | undefined)?.trim();
+      if (cl && !seenCustomers.has(cl)) {
+        seenCustomers.add(cl);
+        // Synthesise a minimal CustomerMaster — no GSTIN → Unregistered (B2C aggregator)
+        const synthetic: CustomerMaster = {
+          id: '', company_id: '', tally_ledger_name: cl,
+          customer_gstin: '', customer_name: cl, trade_name: null,
+          state_name: '', is_b2c: true, gstin_valid: true,
+          created_at: '', updated_at: '',
+        };
+        messages.push(buildCustomerLedgerBlock(synthetic, fyStart));
       }
     }
   }
@@ -1243,6 +1263,32 @@ export function generateSalesMastersXml(input: SalesXmlGeneratorInput, type: Sal
         created_at: '', updated_at: '',
       };
       messages.push(buildStockItemMasterBlock(phantom, info.rate, fyStart));
+      exportedNames.add(name);
+    }
+
+    // Safety net: scan ALL acceptance stockMap values across every invoice.
+    // Catches names that slipped through the per-line-item loop due to name-format
+    // mismatches between the stockMap key and the DB tally_item_name (e.g. "39189090 @18%"
+    // vs "39189090 @ 18%"). Any name that appears in a voucher XML must have a master.
+    for (const inv of input.invoices) {
+      const stockMap = (inv.tally_ledger_acceptance as unknown as Record<string, unknown>)?.stock as Record<string, string> | undefined ?? {};
+      for (const name of Object.values(stockMap)) {
+        const trimmed = (name ?? '').trim();
+        if (!trimmed || exportedNames.has(trimmed)) continue;
+        exportedNames.add(trimmed);
+        const nameRateM = trimmed.match(/@\s*(\d+(?:\.\d+)?)\s*%/i);
+        const derivedRate = nameRateM ? Number(nameRateM[1]) : 0;
+        const derivedHsn = nameRateM
+          ? trimmed.slice(0, trimmed.indexOf('@')).replace(/[\s.]/g, '')
+          : '';
+        if (!seenUnits.has(defaultUnit)) { seenUnits.add(defaultUnit); messages.push(buildUnitMasterBlock(defaultUnit, fyStart)); }
+        const phantom: StockItemMaster = {
+          id: '', company_id: '', tally_item_name: trimmed, alias_name: null,
+          unit: defaultUnit, hsn_code: derivedHsn || null, gst_percent: derivedRate || null,
+          created_at: '', updated_at: '',
+        };
+        messages.push(buildStockItemMasterBlock(phantom, derivedRate, fyStart));
+      }
     }
   }
 
