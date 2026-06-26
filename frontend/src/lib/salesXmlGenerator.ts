@@ -193,6 +193,7 @@ function validateVoucherBalance(opts: {
   if (imbalance > 0.01) {
     return `Voucher "${invoiceNumber}" debit/credit imbalance ₹${imbalance.toFixed(2)} (debit ${debitTotal.toFixed(2)}, credit ${creditTotal.toFixed(2)})`;
   }
+  // All GST amounts here are absolute values (from emitted arrays via Math.abs).
   if (cgst > 0.001 && igst > 0.001) {
     return `Voucher "${invoiceNumber}" has both CGST (${cgst.toFixed(2)}) and IGST (${igst.toFixed(2)}) — mixed GST types are invalid`;
   }
@@ -910,55 +911,64 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     billRefName: inv.invoice_number,
   }));
 
-  // 2. Output tax ledgers — CREDIT, ISDEEMEDPOSITIVE=No.
-  // Emit based on computed amounts, not inv.tax_type. When inv.tax_type is null
-  // buildFullTaxSummary still computes CGST/SGST from line-item gst_percent, so
-  // d.cgst/d.sgst can be > 0 even with null tax_type, causing a debit/credit mismatch
-  // if we gated on inv.tax_type === 'cgst_sgst'. Using amounts directly is safe because
-  // CGST/SGST and IGST are mutually exclusive on a single sale.
+  // 2. Output tax ledgers.
+  // Guards use Math.abs() so that credit notes (where return lines dominate, making net GST
+  // negative) still emit GST entries. Without Math.abs(), `d.cgst > 0` evaluates to false
+  // for negative d.cgst and the entries are silently skipped, causing a debit/credit mismatch.
+  //
+  // Sign convention for LEDGERENTRIES.LIST in inventory mode:
+  //   Normal sale (d.cgst > 0):  GST is output tax → CREDIT → isdeemedpositive='No', amount=+d.cgst
+  //   Credit note  (d.cgst < 0): GST reversal → DEBIT  → isdeemedpositive='Yes', amount=d.cgst (negative)
+  //
+  // taxBase uses Math.abs() so the rate percentage is always positive regardless of direction.
   const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+  const absTaxBase = Math.abs(taxBase);
   const roundHalf = (r: number) => Math.round(r * 2) / 2;
-  if (d.cgst > 0) {
-    const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
+  if (Math.abs(d.cgst) > 0.001) {
+    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.cgst) / absTaxBase) * 100) : 0;
     const l = ((acc?.cgstLedger as string | undefined)?.trim()) ||
       findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ||
       findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
     if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
+    // Negative d.cgst → credit note direction → DEBIT entry (isdeemedpositive='Yes')
+    const isDebit = d.cgst < 0;
     ledgerEntries.push(invSalesLedgerEntry({
       ledgerName: l,
-      isdeemedpositive: 'No',
+      isdeemedpositive: isDebit ? 'Yes' : 'No',
       isPartyledger: 'No',
-      islastdeemedpositive: 'No',
+      islastdeemedpositive: isDebit ? 'Yes' : 'No',
       amount: d.cgst,
       rateOfInvoiceTax: rate || undefined,
     }));
   }
-  if (d.sgst > 0) {
-    const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
+  if (Math.abs(d.sgst) > 0.001) {
+    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.sgst) / absTaxBase) * 100) : 0;
     const l = ((acc?.sgstLedger as string | undefined)?.trim()) ||
       findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ||
       findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
     if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
+    const isDebit = d.sgst < 0;
     ledgerEntries.push(invSalesLedgerEntry({
       ledgerName: l,
-      isdeemedpositive: 'No',
+      isdeemedpositive: isDebit ? 'Yes' : 'No',
       isPartyledger: 'No',
-      islastdeemedpositive: 'No',
+      islastdeemedpositive: isDebit ? 'Yes' : 'No',
       amount: d.sgst,
       rateOfInvoiceTax: rate || undefined,
     }));
   }
-  if (d.igst > 0) {
-    const rate = taxBase > 0 ? roundHalf((d.igst / taxBase) * 100) : 0;
+  if (Math.abs(d.igst) > 0.001) {
+    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.igst) / absTaxBase) * 100) : 0;
     const l = ((acc?.igstLedger as string | undefined)?.trim()) ||
       findOutputTaxLedger(input.dutiesTaxes, 'IGST', rate) ||
       findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
     if (!l) return { xml: null, skip: 'No IGST ledger configured', warnings };
+    const isDebit = d.igst < 0;
     ledgerEntries.push(invSalesLedgerEntry({
       ledgerName: l,
-      isdeemedpositive: 'No',
+      isdeemedpositive: isDebit ? 'Yes' : 'No',
       isPartyledger: 'No',
-      islastdeemedpositive: 'No',
+      islastdeemedpositive: isDebit ? 'Yes' : 'No',
       amount: d.igst,
       rateOfInvoiceTax: rate || undefined,
     }));
@@ -1029,17 +1039,66 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     }
   }
 
-  // 6. Pre-emission balance check: arithmetic + GST-type vs PLACEOFSUPPLY consistency.
-  // The PLACEOFSUPPLY/CMPGSTSTATE check is what Tally actually enforces — arithmetic alone
-  // is insufficient because the formula is algebraically balanced even when the wrong GST
-  // type is used, but Tally rejects intra-state+IGST or inter-state+CGST/SGST.
-  const adjDebit = netSalesLedgerAdj < 0 ? Math.abs(netSalesLedgerAdj) : 0;
-  const adjCredit = netSalesLedgerAdj > 0 ? netSalesLedgerAdj : 0;
+  // 6. Pre-emission balance check — validates the ACTUAL emitted arrays, not the financial model.
+  // This is the key architectural invariant: the validator must be independent of d.cgst / d.sgst /
+  // d.igst so that any future emission bug (guard skip, double-push, wrong sign) is caught here
+  // before the XML reaches Tally.
+  //
+  // In LEDGERENTRIES.LIST (inventory mode):
+  //   NEGATIVE amount = DEBIT  (isdeemedpositive='Yes', amount < 0)
+  //   POSITIVE amount = CREDIT (isdeemedpositive='No',  amount > 0)
+  // In ALLINVENTORYENTRIES.LIST the convention is the same.
+  // Customer entry has amount = -d.total (negative = DEBIT receivable from customer).
+  //
+  // Sum debit and credit from what was actually pushed:
+  const parseEmittedAmount = (xml: string): number =>
+    parseFloat(xml.match(/<AMOUNT>([^<]*)<\/AMOUNT>/)?.[1] ?? '0');
+  const parseEmittedIsDeemedPositive = (xml: string): string =>
+    xml.match(/<ISDEEMEDPOSITIVE>([^<]*)<\/ISDEEMEDPOSITIVE>/)?.[1] ?? 'No';
+
+  let emittedDebitSum = 0;
+  let emittedCreditSum = 0;
+  for (const entry of ledgerEntries) {
+    const amt = parseEmittedAmount(entry);
+    const idp = parseEmittedIsDeemedPositive(entry);
+    // isdeemedpositive='Yes' + negative amount → DEBIT (contributes to debit side as |amount|)
+    // isdeemedpositive='No'  + positive amount → CREDIT
+    if (idp === 'Yes') {
+      emittedDebitSum += Math.abs(amt);
+    } else {
+      emittedCreditSum += Math.abs(amt);
+    }
+  }
+  for (const entry of invEntries) {
+    // Inventory entries in ALLINVENTORYENTRIES.LIST use the same sign convention.
+    // Positive = credit, negative = debit. Parse AMOUNT directly.
+    const amt = parseEmittedAmount(entry);
+    if (amt < 0) {
+      emittedDebitSum += Math.abs(amt);
+    } else {
+      emittedCreditSum += amt;
+    }
+  }
+
+  const emittedImbalance = Math.abs(emittedDebitSum - emittedCreditSum);
+
+  // Also check GST-type vs PLACEOFSUPPLY (CGST/SGST for intra-state, IGST for inter-state).
+  // Derive emitted GST amounts from ledger entries rather than d.cgst/d.sgst/d.igst.
+  const emittedCgst = ledgerEntries
+    .filter((e) => /CGST/i.test(e.match(/<LEDGERNAME>([^<]*)<\/LEDGERNAME>/)?.[1] ?? ''))
+    .reduce((s, e) => s + Math.abs(parseEmittedAmount(e)), 0);
+  const emittedSgst = ledgerEntries
+    .filter((e) => /SGST/i.test(e.match(/<LEDGERNAME>([^<]*)<\/LEDGERNAME>/)?.[1] ?? ''))
+    .reduce((s, e) => s + Math.abs(parseEmittedAmount(e)), 0);
+  const emittedIgst = ledgerEntries
+    .filter((e) => /IGST/i.test(e.match(/<LEDGERNAME>([^<]*)<\/LEDGERNAME>/)?.[1] ?? ''))
+    .reduce((s, e) => s + Math.abs(parseEmittedAmount(e)), 0);
+
   const valErr = validateVoucherBalance({
     invoiceNumber: inv.invoice_number,
-    debitTotal: totalDebitSide + adjDebit,
-    creditTotal: totalCreditSide + adjCredit,
-    cgst: d.cgst, sgst: d.sgst, igst: d.igst,
+    debitTotal: emittedDebitSum,
+    creditTotal: emittedCreditSum,
+    cgst: emittedCgst, sgst: emittedSgst, igst: emittedIgst,
     buyerState, cmpState,
   });
 

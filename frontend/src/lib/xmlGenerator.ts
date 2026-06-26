@@ -318,14 +318,14 @@ function buildTaxEntriesFromHsn(
   const entries: string[] = [];
   if (inv.tax_type === 'cgst_sgst') {
     const cgstTotal = hsnRows.reduce((s, r) => s + r.cgst, 0);
-    if (cgstTotal > 0) {
+    if (Math.abs(cgstTotal) > 0.001) {
       const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'CGST', rate);
       if (!ledger) return { entries, skip: 'No CGST ledger configured in Duties & Taxes master' };
       entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(cgstTotal)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
     }
     const sgstTotal = hsnRows.reduce((s, r) => s + r.sgst, 0);
-    if (sgstTotal > 0) {
+    if (Math.abs(sgstTotal) > 0.001) {
       const rate = hsnRows[0]?.gst_percent ? hsnRows[0].gst_percent / 2 : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'SGST', rate);
       if (!ledger) return { entries, skip: 'No SGST ledger configured in Duties & Taxes master' };
@@ -333,7 +333,7 @@ function buildTaxEntriesFromHsn(
     }
   } else {
     const igstTotal = hsnRows.reduce((s, r) => s + r.igst, 0);
-    if (igstTotal > 0) {
+    if (Math.abs(igstTotal) > 0.001) {
       const rate = hsnRows[0]?.gst_percent ?? 0;
       const ledger = findTaxLedger(dutiesTaxes, 'IGST', rate);
       if (!ledger) return { entries, skip: 'No IGST ledger configured in Duties & Taxes master' };
@@ -354,21 +354,22 @@ function buildTaxEntries(
   dutiesTaxes: DutiesTaxesMaster[],
 ): { entries: string[]; skip?: string } {
   const entries: string[] = [];
+  const absTaxBase = Math.abs(taxBase);
   if (taxType === 'cgst_sgst') {
-    if (cgst > 0) {
-      const rate = taxBase > 0 ? Math.round((cgst / taxBase) * 100) : 0;
+    if (Math.abs(cgst) > 0.001) {
+      const rate = absTaxBase > 0.001 ? Math.round((Math.abs(cgst) / absTaxBase) * 100) : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'CGST', rate) ?? findTaxLedger(dutiesTaxes, 'CGST', 0);
       if (!ledger) return { entries, skip: 'No CGST ledger configured in Duties & Taxes master' };
       entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(cgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
     }
-    if (sgst > 0) {
-      const rate = taxBase > 0 ? Math.round((sgst / taxBase) * 100) : 0;
+    if (Math.abs(sgst) > 0.001) {
+      const rate = absTaxBase > 0.001 ? Math.round((Math.abs(sgst) / absTaxBase) * 100) : 0;
       const ledger = findTaxLedger(dutiesTaxes, 'SGST', rate) ?? findTaxLedger(dutiesTaxes, 'SGST', 0);
       if (!ledger) return { entries, skip: 'No SGST ledger configured in Duties & Taxes master' };
       entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(sgst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
     }
-  } else if (igst > 0) {
-    const rate = taxBase > 0 ? Math.round((igst / taxBase) * 100) : 0;
+  } else if (Math.abs(igst) > 0.001) {
+    const rate = absTaxBase > 0.001 ? Math.round((Math.abs(igst) / absTaxBase) * 100) : 0;
     const ledger = findTaxLedger(dutiesTaxes, 'IGST', rate) ?? findTaxLedger(dutiesTaxes, 'IGST', 0);
     if (!ledger) return { entries, skip: 'No IGST ledger configured in Duties & Taxes master' };
     entries.push(`\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(ledger)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(igst)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`);
@@ -630,7 +631,7 @@ function buildAccountingOnlyVoucher(inv: StoredInvoice, input: XmlGeneratorInput
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
-  const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
+  const hasGst = Math.abs(d.cgst) > 0.001 || Math.abs(d.sgst) > 0.001 || Math.abs(d.igst) > 0.001;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
   const goodsGstRate = inv.line_items[0]?.gst_percent ?? 0;
   const discountLedger = (inv.bill_discount_amount ?? 0) > 0
@@ -895,7 +896,7 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
   const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
   const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
   if (!supplier) warnings.push(`Supplier "${inv.vendor_name}" not in master - using vendor name as ledger`);
-  const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
+  const hasGst = Math.abs(d.cgst) > 0.001 || Math.abs(d.sgst) > 0.001 || Math.abs(d.igst) > 0.001;
   const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
 
   const purchaseLedger = inv.tally_ledger_acceptance?.purchaseLedger ?? '';
@@ -955,13 +956,16 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
     warnings.push(`Bill discount ₹${fmt2(inv.bill_discount_amount ?? 0)} not booked - no discount ledger configured`);
   }
 
-  // 3. Tax ledgers - NEGATIVE amounts (debit to ITC accounts)
+  // 3. Tax ledgers.
+  // Math.abs() guards ensure purchase returns (negative d.cgst/sgst/igst) still emit entries.
+  // For normal purchase (d.cgst > 0): amount = -d.cgst → negative → DEBIT to ITC.
+  // For purchase return (d.cgst < 0): amount = -d.cgst → positive → CREDIT (ITC reversal).
   const taxBase = d.net_goods_taxable + d.taxable_charges_total;
-  // Round to nearest 0.5 so 2.456% → 2.5% (not 3% via Math.round)
+  const absTaxBase = Math.abs(taxBase);
   const roundHalf = (r: number) => Math.round(r * 2) / 2;
   if (inv.tax_type === 'cgst_sgst') {
-    if (d.cgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
+    if (Math.abs(d.cgst) > 0.001) {
+      const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.cgst) / absTaxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
       if (!ledger) return { xml: null, skip: 'No CGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -973,8 +977,8 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
         rateOfInvoiceTax: rate || undefined,
       }));
     }
-    if (d.sgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
+    if (Math.abs(d.sgst) > 0.001) {
+      const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.sgst) / absTaxBase) * 100) : 0;
       const ledger = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
       if (!ledger) return { xml: null, skip: 'No SGST ledger configured in Duties & Taxes master', warnings };
       ledgerEntries.push(invLedgerEntry({
@@ -986,8 +990,8 @@ function buildInventoryVoucher(inv: StoredInvoice, input: XmlGeneratorInput): Vo
         rateOfInvoiceTax: rate || undefined,
       }));
     }
-  } else if (d.igst > 0) {
-    const rate = taxBase > 0 ? roundHalf((d.igst / taxBase) * 100) : 0;
+  } else if (Math.abs(d.igst) > 0.001) {
+    const rate = absTaxBase > 0.001 ? roundHalf((Math.abs(d.igst) / absTaxBase) * 100) : 0;
     const ledger = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
     if (!ledger) return { xml: null, skip: 'No IGST ledger configured in Duties & Taxes master', warnings };
     ledgerEntries.push(invLedgerEntry({
@@ -2032,7 +2036,7 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
 
   for (const inv of input.invoices) {
     const d = deriveInvoiceFinancials(inv);
-    const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
+    const hasGst = Math.abs(d.cgst) > 0.001 || Math.abs(d.sgst) > 0.001 || Math.abs(d.igst) > 0.001;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
@@ -2059,20 +2063,21 @@ function buildAccountingOnlyPreview(input: XmlGeneratorInput): PreviewRow[] {
     }
 
     const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+    const absTaxBase2067 = Math.abs(taxBase);
     if (inv.tax_type === 'cgst_sgst') {
-      if (d.cgst > 0) {
-        const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
+      if (Math.abs(d.cgst) > 0.001) {
+        const rate = absTaxBase2067 > 0.001 ? Math.round((Math.abs(d.cgst) / absTaxBase2067) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
         rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: d.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-      if (d.sgst > 0) {
-        const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
+      if (Math.abs(d.sgst) > 0.001) {
+        const rate = absTaxBase2067 > 0.001 ? Math.round((Math.abs(d.sgst) / absTaxBase2067) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
         rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: d.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
     } else {
-      if (d.igst > 0) {
-        const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
+      if (Math.abs(d.igst) > 0.001) {
+        const rate = absTaxBase2067 > 0.001 ? Math.round((Math.abs(d.igst) / absTaxBase2067) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
         rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: d.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
@@ -2111,7 +2116,7 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
 
   for (const inv of input.invoices) {
     const d = deriveInvoiceFinancials(inv);
-    const hasGst = d.cgst > 0 || d.sgst > 0 || d.igst > 0;
+    const hasGst = Math.abs(d.cgst) > 0.001 || Math.abs(d.sgst) > 0.001 || Math.abs(d.igst) > 0.001;
     const voucherTypeName = resolveVoucherType(input.voucherTypes ?? [], hasGst);
     const supplier = findSupplier(input.suppliers, inv.vendor_gstin, inv.vendor_name, input.customers);
     const partyLedger = supplier?.tally_ledger_name ?? inv.vendor_name;
@@ -2152,19 +2157,20 @@ function buildInventoryPreview(input: XmlGeneratorInput): PreviewRow[] {
     }
 
     const taxBase = d.net_goods_taxable + d.taxable_charges_total;
+    const absTaxBase2159 = Math.abs(taxBase);
     if (inv.tax_type === 'cgst_sgst') {
-      if (d.cgst > 0) {
-        const rate = taxBase > 0 ? Math.round((d.cgst / taxBase) * 100) : 0;
+      if (Math.abs(d.cgst) > 0.001) {
+        const rate = absTaxBase2159 > 0.001 ? Math.round((Math.abs(d.cgst) / absTaxBase2159) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'CGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'CGST', 0);
         rows.push({ ...base, ledger_type: 'CGST', tally_ledger_name: l ?? 'Input CGST', amount: d.cgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-      if (d.sgst > 0) {
-        const rate = taxBase > 0 ? Math.round((d.sgst / taxBase) * 100) : 0;
+      if (Math.abs(d.sgst) > 0.001) {
+        const rate = absTaxBase2159 > 0.001 ? Math.round((Math.abs(d.sgst) / absTaxBase2159) * 100) : 0;
         const l = findTaxLedger(input.dutiesTaxes, 'SGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'SGST', 0);
         rows.push({ ...base, ledger_type: 'SGST', tally_ledger_name: l ?? 'Input SGST', amount: d.sgst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
       }
-    } else if (d.igst > 0) {
-      const rate = taxBase > 0 ? Math.round((d.igst / taxBase) * 100) : 0;
+    } else if (Math.abs(d.igst) > 0.001) {
+      const rate = absTaxBase2159 > 0.001 ? Math.round((Math.abs(d.igst) / absTaxBase2159) * 100) : 0;
       const l = findTaxLedger(input.dutiesTaxes, 'IGST', rate) ?? findTaxLedger(input.dutiesTaxes, 'IGST', 0);
       rows.push({ ...base, ledger_type: 'IGST', tally_ledger_name: l ?? 'Input IGST', amount: d.igst, status: l ? 'OK' : 'Suggested', is_suggested: !l });
     }
