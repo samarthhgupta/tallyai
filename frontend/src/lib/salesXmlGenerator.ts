@@ -115,6 +115,57 @@ function findOutputTaxLedger(dutiesTaxes: DutiesTaxesMaster[], component: string
 
 interface VoucherResult { xml: string | null; skip?: string; warnings: string[]; }
 
+/**
+ * When inv.tax_type is null, buildFullTaxSummary falls into the else-branch (IGST).
+ * For intra-state supplies Tally requires CGST+SGST, not IGST, and will reject the
+ * voucher with "Debit Credit Mismatch" even though the arithmetic is balanced.
+ * This function resolves the effective tax type from the acceptance ledger config so
+ * deriveInvoiceFinancials always receives a valid value.
+ */
+function inferEffectiveTaxType(
+  taxType: 'cgst_sgst' | 'igst' | null | undefined,
+  acc: Record<string, unknown> | null,
+): 'cgst_sgst' | 'igst' {
+  if (taxType === 'cgst_sgst' || taxType === 'igst') return taxType;
+  // Infer from which output ledgers the user mapped in acceptance
+  if ((acc?.cgstLedger as string | undefined)?.trim()) return 'cgst_sgst';
+  if ((acc?.sgstLedger as string | undefined)?.trim()) return 'cgst_sgst';
+  if ((acc?.igstLedger as string | undefined)?.trim()) return 'igst';
+  // Safe default: intra-state (CGST/SGST) is overwhelmingly more common for domestic
+  // Indian businesses; inter-state must be captured explicitly in tax_type.
+  return 'cgst_sgst';
+}
+
+/**
+ * Pre-emission voucher validator. Runs before XML is serialised and returns an error
+ * string if the voucher would fail Tally's debit/credit balance check, or null if ok.
+ * Two failure modes:
+ *   1. Arithmetic imbalance — debit side ≠ credit side (indicates a formula bug).
+ *   2. Mixed GST types — both CGST and IGST are non-zero, which Tally rejects because
+ *      a single supply can only be intra-state (CGST+SGST) or inter-state (IGST).
+ */
+function validateVoucherBalance(opts: {
+  invoiceNumber: string;
+  debitTotal: number;
+  creditTotal: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+}): string | null {
+  const { invoiceNumber, debitTotal, creditTotal, cgst, sgst, igst } = opts;
+  const imbalance = Math.abs(debitTotal - creditTotal);
+  if (imbalance > 0.01) {
+    return `Voucher "${invoiceNumber}" debit/credit imbalance ₹${imbalance.toFixed(2)} (debit ${debitTotal.toFixed(2)}, credit ${creditTotal.toFixed(2)})`;
+  }
+  if (cgst > 0.001 && igst > 0.001) {
+    return `Voucher "${invoiceNumber}" has both CGST (${cgst.toFixed(2)}) and IGST (${igst.toFixed(2)}) — mixed GST types are invalid; check tax_type`;
+  }
+  if (cgst > 0.001 && Math.abs(cgst - sgst) > 0.01) {
+    return `Voucher "${invoiceNumber}" CGST (${cgst.toFixed(2)}) ≠ SGST (${sgst.toFixed(2)})`;
+  }
+  return null;
+}
+
 function ledgerEntry(name: string, isDeemedPositive: 'Yes' | 'No', amount: number): string {
   return `\n      <ALLLEDGERENTRIES.LIST>\n        <LEDGERNAME>${esc(name)}</LEDGERNAME>\n        <ISDEEMEDPOSITIVE>${isDeemedPositive}</ISDEEMEDPOSITIVE>\n        <AMOUNT>${fmt2(amount)}</AMOUNT>\n      </ALLLEDGERENTRIES.LIST>`;
 }
@@ -137,8 +188,11 @@ function wrapSalesVoucher(inv: StoredInvoice, partyLedger: string, ledgerXml: st
 
 function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
-  const d = deriveInvoiceFinancials(inv);
   const acc = inv.tally_ledger_acceptance as unknown as Record<string, string> | null;
+  // Resolve effective tax type before deriving financials so null tax_type invoices
+  // use CGST/SGST (intra-state default) rather than silently falling into IGST.
+  const effTaxType = inferEffectiveTaxType(inv.tax_type, acc as Record<string, unknown> | null);
+  const d = deriveInvoiceFinancials({ ...inv, tax_type: effTaxType });
 
   // Party ledger: acceptance takes precedence; fall back to master resolution then raw name.
   const accCustomer = acc?.customerLedger?.trim() ?? '';
@@ -152,7 +206,7 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
   if (!salesLedger) return { xml: null, skip: `No sales ledger set for invoice "${inv.invoice_number}" - accept the invoice first`, warnings };
 
   // HSN rows from shared canonical engine (same values as DB and UI).
-  const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, inv.tax_type, inv.bill_discount_amount ?? 0);
+  const hsnRows = buildFullTaxSummary(inv.line_items ?? [], d.charges_resolved, effTaxType, inv.bill_discount_amount ?? 0);
 
   const entries: string[] = [];
 
@@ -213,6 +267,15 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
       || 'Round Off';
     entries.push(ledgerEntry(roLedger, d.round_off > 0 ? 'No' : 'Yes', -d.round_off));
   }
+
+  // 6. Pre-emission balance check — blocks generation of any voucher that would fail Tally.
+  const valErr = validateVoucherBalance({
+    invoiceNumber: inv.invoice_number,
+    debitTotal: d.total,
+    creditTotal: d.net_goods_taxable + d.taxable_charges_total + d.non_taxable_charges_total + d.total_gst + d.round_off,
+    cgst: d.cgst, sgst: d.sgst, igst: d.igst,
+  });
+  if (valErr) return { xml: null, skip: valErr, warnings };
 
   return { xml: wrapSalesVoucher(inv, partyLedger, entries.join('')), warnings };
 }
@@ -700,8 +763,10 @@ function wrapSalesInventoryVoucher(
 
 function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): VoucherResult {
   const warnings: string[] = [];
-  const d = deriveInvoiceFinancials(inv);
   const acc = inv.tally_ledger_acceptance as unknown as Record<string, unknown> | null;
+  // Resolve effective tax type before deriving financials — same logic as buildSalesVoucher.
+  const effTaxType = inferEffectiveTaxType(inv.tax_type, acc);
+  const d = deriveInvoiceFinancials({ ...inv, tax_type: effTaxType });
 
   const accCustomer = (acc?.customerLedger as string | undefined)?.trim() ?? '';
   const resolvedCustomer = findCustomer(input.customers, inv.buyer_gstin, inv.buyer_name ?? '');
@@ -880,6 +945,18 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
       }));
     }
   }
+
+  // 6. Pre-emission balance check — blocks XML generation for any imbalanced voucher.
+  // debitTotal after gap adjustment = totalCreditSide + |netSalesLedgerAdj|, which by
+  // construction equals totalDebitSide. We verify GST type consistency (CGST XOR IGST)
+  // which is the structural cause of Tally "Debit Credit Mismatch" on intra-state invoices.
+  const valErr = validateVoucherBalance({
+    invoiceNumber: inv.invoice_number,
+    debitTotal: totalDebitSide,
+    creditTotal: totalCreditSide + (netSalesLedgerAdj > 0 ? netSalesLedgerAdj : 0),
+    cgst: d.cgst, sgst: d.sgst, igst: d.igst,
+  });
+  if (valErr) return { xml: null, skip: valErr, warnings };
 
   return {
     xml: wrapSalesInventoryVoucher(inv, partyLedger, ledgerEntries.join(''), invEntries.join(''), input),
