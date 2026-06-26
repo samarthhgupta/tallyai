@@ -167,23 +167,23 @@ function buildSalesVoucher(inv: StoredInvoice, input: SalesXmlGeneratorInput): V
   }
 
   // 3. Output tax ledgers: CREDIT (negative).
-  //    Use per-invoice accepted ledger names when set; fall back to master resolution.
-  if (inv.tax_type === 'cgst_sgst') {
-    if (Math.abs(d.cgst) > 0.001) {
-      const l = acc?.cgstLedger?.trim()
-        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', Math.round(d.cgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
-        || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
-      if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
-      entries.push(ledgerEntry(l, 'No', -d.cgst));
-    }
-    if (Math.abs(d.sgst) > 0.001) {
-      const l = acc?.sgstLedger?.trim()
-        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', Math.round(d.sgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
-        || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
-      if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
-      entries.push(ledgerEntry(l, 'No', -d.sgst));
-    }
-  } else if (Math.abs(d.igst) > 0.001) {
+  //    Emit based on computed amounts — not inv.tax_type — so null tax_type invoices
+  //    are handled correctly. CGST/SGST and IGST are mutually exclusive per sale.
+  if (Math.abs(d.cgst) > 0.001) {
+    const l = acc?.cgstLedger?.trim()
+      || findOutputTaxLedger(input.dutiesTaxes, 'CGST', Math.round(d.cgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+      || findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
+    if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
+    entries.push(ledgerEntry(l, 'No', -d.cgst));
+  }
+  if (Math.abs(d.sgst) > 0.001) {
+    const l = acc?.sgstLedger?.trim()
+      || findOutputTaxLedger(input.dutiesTaxes, 'SGST', Math.round(d.sgst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
+      || findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
+    if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
+    entries.push(ledgerEntry(l, 'No', -d.sgst));
+  }
+  if (Math.abs(d.igst) > 0.001) {
     const l = acc?.igstLedger?.trim()
       || findOutputTaxLedger(input.dutiesTaxes, 'IGST', Math.round(d.igst / Math.max(d.net_goods_taxable + d.taxable_charges_total, 1) * 100))
       || findOutputTaxLedger(input.dutiesTaxes, 'IGST', 0);
@@ -421,9 +421,9 @@ function buildSalesAllInventoryEntry(
     `\n          <GODOWNNAME>Main Location</GODOWNNAME>` +
     `\n          <BATCHNAME>Primary Batch</BATCHNAME>` +
     `\n          <DESTINATIONGODOWNNAME>Main Location</DESTINATIONGODOWNNAME>` +
-    `\n          <INDENTNO> Not Applicable</INDENTNO>` +
-    `\n          <ORDERNO> Not Applicable</ORDERNO>` +
-    `\n          <TRACKINGNUMBER> Not Applicable</TRACKINGNUMBER>` +
+    `\n          <INDENTNO> Not Applicable</INDENTNO>` +
+    `\n          <ORDERNO> Not Applicable</ORDERNO>` +
+    `\n          <TRACKINGNUMBER> Not Applicable</TRACKINGNUMBER>` +
     `\n          <DYNAMICCSTISCLEARED>No</DYNAMICCSTISCLEARED>` +
     `\n          <AMOUNT>${fmt2(posAmt)}</AMOUNT>` +
     `\n          <ACTUALQTY> ${fmt2(item.qty)} ${esc(uom)}</ACTUALQTY>` +
@@ -762,41 +762,45 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
     billRefName: inv.invoice_number,
   }));
 
-  // 2. Output tax ledgers — CREDIT, ISDEEMEDPOSITIVE=No
+  // 2. Output tax ledgers — CREDIT, ISDEEMEDPOSITIVE=No.
+  // Emit based on computed amounts, not inv.tax_type. When inv.tax_type is null
+  // buildFullTaxSummary still computes CGST/SGST from line-item gst_percent, so
+  // d.cgst/d.sgst can be > 0 even with null tax_type, causing a debit/credit mismatch
+  // if we gated on inv.tax_type === 'cgst_sgst'. Using amounts directly is safe because
+  // CGST/SGST and IGST are mutually exclusive on a single sale.
   const taxBase = d.net_goods_taxable + d.taxable_charges_total;
   const roundHalf = (r: number) => Math.round(r * 2) / 2;
-  if (inv.tax_type === 'cgst_sgst') {
-    if (d.cgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
-      const l = ((acc?.cgstLedger as string | undefined)?.trim()) ||
-        findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ||
-        findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
-      if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
-      ledgerEntries.push(invSalesLedgerEntry({
-        ledgerName: l,
-        isdeemedpositive: 'No',
-        isPartyledger: 'No',
-        islastdeemedpositive: 'No',
-        amount: d.cgst,
-        rateOfInvoiceTax: rate || undefined,
-      }));
-    }
-    if (d.sgst > 0) {
-      const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
-      const l = ((acc?.sgstLedger as string | undefined)?.trim()) ||
-        findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ||
-        findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
-      if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
-      ledgerEntries.push(invSalesLedgerEntry({
-        ledgerName: l,
-        isdeemedpositive: 'No',
-        isPartyledger: 'No',
-        islastdeemedpositive: 'No',
-        amount: d.sgst,
-        rateOfInvoiceTax: rate || undefined,
-      }));
-    }
-  } else if (d.igst > 0) {
+  if (d.cgst > 0) {
+    const rate = taxBase > 0 ? roundHalf((d.cgst / taxBase) * 100) : 0;
+    const l = ((acc?.cgstLedger as string | undefined)?.trim()) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'CGST', rate) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'CGST', 0);
+    if (!l) return { xml: null, skip: 'No CGST ledger configured', warnings };
+    ledgerEntries.push(invSalesLedgerEntry({
+      ledgerName: l,
+      isdeemedpositive: 'No',
+      isPartyledger: 'No',
+      islastdeemedpositive: 'No',
+      amount: d.cgst,
+      rateOfInvoiceTax: rate || undefined,
+    }));
+  }
+  if (d.sgst > 0) {
+    const rate = taxBase > 0 ? roundHalf((d.sgst / taxBase) * 100) : 0;
+    const l = ((acc?.sgstLedger as string | undefined)?.trim()) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'SGST', rate) ||
+      findOutputTaxLedger(input.dutiesTaxes, 'SGST', 0);
+    if (!l) return { xml: null, skip: 'No SGST ledger configured', warnings };
+    ledgerEntries.push(invSalesLedgerEntry({
+      ledgerName: l,
+      isdeemedpositive: 'No',
+      isPartyledger: 'No',
+      islastdeemedpositive: 'No',
+      amount: d.sgst,
+      rateOfInvoiceTax: rate || undefined,
+    }));
+  }
+  if (d.igst > 0) {
     const rate = taxBase > 0 ? roundHalf((d.igst / taxBase) * 100) : 0;
     const l = ((acc?.igstLedger as string | undefined)?.trim()) ||
       findOutputTaxLedger(input.dutiesTaxes, 'IGST', rate) ||
