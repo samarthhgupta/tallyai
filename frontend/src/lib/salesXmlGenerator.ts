@@ -747,13 +747,18 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
 
   const ledgerEntries: string[] = [];
 
-  // 1. Customer (debtor) — DEBIT, positive total, ISDEEMEDPOSITIVE=Yes
+  // 1. Customer (debtor) — DEBIT.
+  // In Tally inventory-mode LEDGERENTRIES.LIST the sign convention is:
+  //   NEGATIVE amount = DEBIT (money flows out / receivable from customer)
+  //   POSITIVE amount = CREDIT (money flows in / payable to supplier)
+  // This is the OPPOSITE of ALLLEDGERENTRIES.LIST used in accounting-only mode.
+  // Mirror of purchase: party (creditor) uses +d.total (CREDIT); sales: customer uses -d.total (DEBIT).
   ledgerEntries.push(invSalesLedgerEntry({
     ledgerName: partyLedger,
     isdeemedpositive: 'Yes',
     isPartyledger: 'Yes',
     islastdeemedpositive: 'Yes',
-    amount: d.total,
+    amount: -d.total,
     billRefName: inv.invoice_number,
   }));
 
@@ -837,14 +842,14 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
       roundOffCredit = d.round_off;
       ledgerEntries.push(invSalesIncomeLedgerEntry(roLedger, d.round_off));
     } else {
-      // Round-off expense for seller → DEBIT
+      // Round-off expense for seller → DEBIT (negative amount in LEDGERENTRIES.LIST)
       roundOffDebit = Math.abs(d.round_off);
       ledgerEntries.push(invSalesLedgerEntry({
         ledgerName: roLedger,
         isdeemedpositive: 'Yes',
         isPartyledger: 'No',
         islastdeemedpositive: 'Yes',
-        amount: roundOffDebit,
+        amount: -roundOffDebit,
       }));
     }
   }
@@ -860,13 +865,14 @@ function buildSalesInventoryVoucher(inv: StoredInvoice, input: SalesXmlGenerator
       ledgerEntries.push(invSalesIncomeLedgerEntry(salesLedger, netSalesLedgerAdj));
     } else {
       // Excess credit (e.g. bill discount absorbed into total) — debit sales ledger to balance
+      // Negative amount = DEBIT in LEDGERENTRIES.LIST convention.
       warnings.push(`Balance gap ₹${fmt2(Math.abs(netSalesLedgerAdj))} in "${inv.invoice_number}" - debited to sales ledger`);
       ledgerEntries.push(invSalesLedgerEntry({
         ledgerName: salesLedger,
         isdeemedpositive: 'Yes',
         isPartyledger: 'No',
         islastdeemedpositive: 'Yes',
-        amount: Math.abs(netSalesLedgerAdj),
+        amount: -Math.abs(netSalesLedgerAdj),
       }));
     }
   }
