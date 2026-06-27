@@ -1650,15 +1650,16 @@ export default function SalesXmlPage() {
   // ── Build XML input ──
   const buildXmlInput = async () => {
     if (!company) throw new Error('No company');
-    const fresh = await getCompany(company.id);
-    const [customers, dutiesTaxes, stockItems, expenseLedgers] = await Promise.all([
+    const [fresh, freshInvoices, customers, dutiesTaxes, stockItems, expenseLedgers] = await Promise.all([
+      getCompany(company.id),
+      getSalesRegister(company.id, { financialYear: selectedFY || undefined }),
       loadCustomers(company.id),
       loadDutiesTaxes(company.id),
       loadStockItems(company.id),
       loadExpenseLedgers(company.id),
     ]);
     return {
-      invoices,
+      invoices: freshInvoices,
       customers,
       dutiesTaxes,
       stockItems,
